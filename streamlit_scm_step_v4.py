@@ -9,15 +9,12 @@ from io import BytesIO
 
 st.set_page_config(page_title="SCM Step Dashboard v4", layout="wide")
 
-st.title("📦 센터×SKU 재고 흐름 (계단식) 대시보드 — v4 (In-Transit 통합 + WIP)")
+st.title("📦 SCM 글로벌 대시보드 — v4 ")
 
 st.markdown("""
-- **엑셀 업로드**: `SCM_통합`(이동 로그) + `sample_snapshot`(재고 스냅샷) + *(선택)* `입고예정내역`(생산/WIP)이 들어있는 파일을 올리세요.
+- **데이터 기준**: `SCM_통합`(이동 로그) + `sample_snapshot`(재고 스냅샷) + `입고예정내역`(생산/WIP)
 - 기준 수량: **qty_ea**
-- SKU 코드는 **resource_code** 와 1:1 매칭
-- 출발창고 감소: **onboard_date**(H열 의미: 재고 배정/출발일)  
-- 도착창고 증가: **inbound_date** 우선, 없으면 **arrival_date(ETA)** → `event_date`
-- 이동중: **In-Transit** *(SEA/AIR/OTHER를 그래프에서는 하나로 통합)* (파란 점선)
+- 이동중: **In-Transit** *(해상/항공)을 그래프에서는 하나로 통합)* (파란 점선)
 - 생산중: **WIP** 가상 라인 (빨간 실선), 완료일에 **태광KR** 실재고에 합산
 """)
 
