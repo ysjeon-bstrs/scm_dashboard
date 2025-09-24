@@ -654,15 +654,13 @@ pivot = (
 pivot["총합"] = pivot.sum(axis=1)
 
 # 4) UX: 필터/정렬 옵션
-c1, c2, c3, c4 = st.columns([1.2, 1, 1, 1])
+c1, c2, c3 = st.columns([1.2, 1, 1])
 with c1:
     q = st.text_input("SKU 필터(포함 검색)", "")
 with c2:
     hide_zero = st.checkbox("총합=0 숨기기", value=True)
 with c3:
     sort_by = st.selectbox("정렬 기준", ["총합"] + list(pivot.columns.drop("총합")), index=0)
-with c4:
-    topn = st.number_input("표시 개수(Top-N)", min_value=1, max_value=5000, value=500, step=50)
 
 # 5) 필터 적용
 view = pivot.copy()
@@ -671,8 +669,8 @@ if q.strip():
 if hide_zero:
     view = view[view["총합"] > 0]
 
-# 6) 정렬(내림차순) + Top-N
-view = view.sort_values(by=sort_by, ascending=False).head(int(topn))
+# 6) 정렬(내림차순)  
+view = view.sort_values(by=sort_by, ascending=False)
 
 # 7) 보여주기
 st.dataframe(
