@@ -535,25 +535,26 @@ else:
 # -------------------- Upcoming Arrivals --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 
-# 집계 윈도우: 선택 기간 + 전망(horizon)
+today = pd.Timestamp.today().normalize()
 window_end = end_dt + pd.Timedelta(days=horizon)
+start_cut = today  # 과거 ETA 제외 (D-0 포함)
 
-# (A) Transport arrivals for non-태광 centers
+# (A) 운송(비 WIP) - 태광 제외 센터
 arr_transport = moves[
     (moves["event_date"].notna()) &
-    (moves["event_date"] >= start_dt) & (moves["event_date"] <= window_end) &
+    (moves["event_date"] >= start_cut) & (moves["event_date"] <= window_end) &
     (moves["carrier_mode"].astype(str).str.upper() != "WIP") &
     (moves["to_center"].astype(str).isin([c for c in centers_sel if c != "태광KR"])) &
     (moves["resource_code"].astype(str).isin(skus_sel))
 ].copy()
 arr_transport["lot"] = ""  # 일반 이동건은 lot 비움
 
-# (B) WIP arrivals for 태광KR (only if 태광KR is selected)
+# (B) WIP - 태광KR 선택 시
 arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
     arr_wip = moves[
         (moves["event_date"].notna()) &
-        (moves["event_date"] >= start_dt) & (moves["event_date"] <= window_end) &
+        (moves["event_date"] >= start_cut) & (moves["event_date"] <= window_end) &
         (moves["carrier_mode"].astype(str).str.upper() == "WIP") &
         (moves["to_center"].astype(str) == "태광KR") &
         (moves["resource_code"].astype(str).isin(skus_sel))
@@ -561,13 +562,14 @@ if "태광KR" in centers_sel:
 
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 if upcoming.empty:
-    st.caption("도착 예정 없음 (선택한 기간/센터/SKU 조건)")
+    st.caption("도착 예정 없음 (오늘 이후)")
 else:
     upcoming["days_to_arrival"] = (upcoming["event_date"] - today).dt.days
     upcoming = upcoming.sort_values(["event_date","to_center","resource_code"])
-    show_cols = ["event_date","days_to_arrival","to_center","resource_code","qty_ea","carrier_mode","onboard_date","lot"]
-    existing_cols = [c for c in show_cols if c in upcoming.columns]
-    st.dataframe(upcoming[existing_cols].head(1000), use_container_width=True, height=300)
+    cols = ["event_date","days_to_arrival","to_center","resource_code","qty_ea","carrier_mode","onboard_date","lot"]
+    cols = [c for c in cols if c in upcoming.columns]
+    st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
+
 
 # -------------------- Simulation --------------------
 st.subheader("출고 가능 시뮬레이션")
