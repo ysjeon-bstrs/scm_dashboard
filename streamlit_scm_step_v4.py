@@ -541,22 +541,16 @@ for i, tr in enumerate(fig.data):
         fig.data[i].legendgroup = "WIP"
         fig.data[i].legendrank = 30
 
-    st.plotly_chart(
+    # 차트 키 (필터 조합으로 유니크하게)
+chart_key = f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|w{int(show_wip)}"
+
+st.plotly_chart(
     fig,
     use_container_width=True,
     config={"displaylogo": False},
-    key=chart_key,   # ← 고유 키
+    key=chart_key,  # ← 고유 키
 )
 
-
-chart_key = (
-    "stepchart_"
-     "_".join(centers_sel)
-     "_" + "_".join(skus_sel)
-     "_" + start_dt.strftime("%Y%m%d")
-     "_" + end_dt.strftime("%Y%m%d")
-     f"_h{horizon}_wip{int(show_wip)}"
-)
 
 # -------------------- Upcoming Arrivals --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
