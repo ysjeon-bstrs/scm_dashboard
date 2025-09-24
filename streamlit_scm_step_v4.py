@@ -381,16 +381,34 @@ max_date = snap_long["snapshot_date"].max()
 st.sidebar.header("필터")
 centers_sel = st.sidebar.multiselect("센터 선택", centers, default=(["태광KR"] if "태광KR" in centers else centers[:1]))
 skus_sel = st.sidebar.multiselect("SKU 선택", skus, default=([s for s in ["BA00022","BA00021"] if s in skus] or skus[:2]))
-date_range = st.sidebar.slider("기간",
-    min_value=min(min_date.to_pydatetime(), (pd.Timestamp.today().normalize() - timedelta(days=60)).to_pydatetime()),
-    max_value=max(max_date.to_pydatetime(), (pd.Timestamp.today().normalize() + timedelta(days=60)).to_pydatetime()),
-    value=((pd.Timestamp.today().normalize() - timedelta(days=20)).to_pydatetime(), (pd.Timestamp.today().normalize() + timedelta(days=20)).to_pydatetime()),
-    format="YYYY-MM-DD")
-horizon = st.sidebar.number_input("미래 전망 일수", min_value=0, max_value=60, value=20)
-show_wip   = st.sidebar.checkbox("WIP 표시", value=True)
 
-start_dt = pd.to_datetime(date_range[0]).normalize()
-end_dt = pd.to_datetime(date_range[1]).normalize()
+# 전망 일수 (기간 자동 설정의 기준)
+horizon = st.sidebar.number_input("미래 전망 일수", min_value=0, max_value=60, value=20)
+
+# 기간 모드
+today = pd.Timestamp.today().normalize()
+range_mode = st.sidebar.radio("기간 설정", ["자동(오늘±전망)", "수동(직접 지정)"], index=0)
+
+if range_mode.startswith("자동"):
+    start_dt = (today - pd.Timedelta(days=int(horizon))).normalize()
+    end_dt   = (today + pd.Timedelta(days=int(horizon))).normalize()
+    st.sidebar.markdown(f"**기간:** {start_dt:%Y-%m-%d} → {end_dt:%Y-%m-%d}")
+else:
+    date_range = st.sidebar.slider(
+        "기간",
+        min_value=min(min_date.to_pydatetime(), (today - timedelta(days=60)).to_pydatetime()),
+        max_value=max(max_date.to_pydatetime(), (today + timedelta(days=60)).to_pydatetime()),
+        value=((today - timedelta(days=20)).to_pydatetime(), (today + timedelta(days=20)).to_pydatetime()),
+        format="YYYY-MM-DD",
+    )
+    start_dt = pd.to_datetime(date_range[0]).normalize()
+    end_dt   = pd.to_datetime(date_range[1]).normalize()
+
+show_wip = st.sidebar.checkbox("WIP 표시", value=True)
+
+# 빌드용 전망일: 기간 끝이 최신 스냅샷보다 뒤일 때만 그 차이만큼 예측 필요
+_latest_snap = snap_long["snapshot_date"].max()
+proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 # -------------------- KPIs --------------------
 st.subheader("요약 KPI")
@@ -451,16 +469,13 @@ st.divider()
 # -------------------- Step Chart (Plotly) --------------------
 st.subheader("계단식 재고 흐름")
 timeline = build_timeline(snap_long, moves, centers_sel, skus_sel,
-                          start_dt, end_dt, horizon_days=horizon)
+                          start_dt, end_dt, horizon_days=proj_days_for_build)
 if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
     # 기간 + 전망 범위 슬라이스
-    vis_df = timeline[
-        (timeline["date"] >= start_dt) &
-        (timeline["date"] <= (end_dt + pd.Timedelta(days=horizon)))
-    ].copy()
-
+    vis_df = timeline[(timeline["date"] >= start_dt) &
+                  (timeline["date"] <= end_dt)].copy()
     # In-Transit은 항상 통합
     vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*", "In-Transit", regex=True)
 
@@ -551,14 +566,13 @@ st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, ke
 # -------------------- Upcoming Arrivals --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 
-today = pd.Timestamp.today().normalize()
-window_end = end_dt + pd.Timedelta(days=horizon)
-start_cut = today  # 과거 ETA 제외 (D-0 포함)
+window_start = start_dt
+window_end   = end_dt
 
 # (A) 운송(비 WIP) - 태광 제외 센터
 arr_transport = moves[
     (moves["event_date"].notna()) &
-    (moves["event_date"] >= start_cut) & (moves["event_date"] <= window_end) &
+    (moves["event_date"] >= window_start) & (moves["event_date"] <= window_end) &
     (moves["carrier_mode"].astype(str).str.upper() != "WIP") &
     (moves["to_center"].astype(str).isin([c for c in centers_sel if c != "태광KR"])) &
     (moves["resource_code"].astype(str).isin(skus_sel))
@@ -570,7 +584,7 @@ arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
     arr_wip = moves[
         (moves["event_date"].notna()) &
-        (moves["event_date"] >= start_cut) & (moves["event_date"] <= window_end) &
+        (moves["event_date"] >= window_start) & (moves["event_date"] <= window_end) &
         (moves["carrier_mode"].astype(str).str.upper() == "WIP") &
         (moves["to_center"].astype(str) == "태광KR") &
         (moves["resource_code"].astype(str).isin(skus_sel))
@@ -578,8 +592,10 @@ if "태광KR" in centers_sel:
 
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 if upcoming.empty:
-    st.caption("도착 예정 없음 (오늘 이후)")
+    st.caption("도착 예정 없음 (선택 기간)")
 else:
+    # days_to_arrival는 참고용(오늘 기준) – 유지
+    today = pd.Timestamp.today().normalize()
     upcoming["days_to_arrival"] = (upcoming["event_date"] - today).dt.days
     upcoming = upcoming.sort_values(["event_date","to_center","resource_code"])
     cols = ["event_date","days_to_arrival","to_center","resource_code","qty_ea","carrier_mode","onboard_date","lot"]
