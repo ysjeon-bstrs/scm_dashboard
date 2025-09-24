@@ -632,3 +632,61 @@ else:
         st.success("출고 가능")
     else:
         st.error("출고 불가")
+
+# ==================== 선택 센터 현재 재고 (전체 SKU) ====================
+st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
+
+# 1) 최신 스냅샷에서 선택 센터만 추출
+cur = snap_long[
+    (snap_long["snapshot_date"] == latest_dt) &
+    (snap_long["center"].isin(centers_sel))
+].copy()
+
+# 2) SKU×센터 피벗 (빈 값은 0)
+pivot = (
+    cur.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
+       .pivot(index="resource_code", columns="center", values="stock_qty")
+       .fillna(0)
+       .astype(int)
+)
+
+# 3) 총합 컬럼 추가
+pivot["총합"] = pivot.sum(axis=1)
+
+# 4) UX: 필터/정렬 옵션
+c1, c2, c3, c4 = st.columns([1.2, 1, 1, 1])
+with c1:
+    q = st.text_input("SKU 필터(포함 검색)", "")
+with c2:
+    hide_zero = st.checkbox("총합=0 숨기기", value=True)
+with c3:
+    sort_by = st.selectbox("정렬 기준", ["총합"] + list(pivot.columns.drop("총합")), index=0)
+with c4:
+    topn = st.number_input("표시 개수(Top-N)", min_value=1, max_value=5000, value=500, step=50)
+
+# 5) 필터 적용
+view = pivot.copy()
+if q.strip():
+    view = view[view.index.str.contains(q.strip(), case=False, regex=False)]
+if hide_zero:
+    view = view[view["총합"] > 0]
+
+# 6) 정렬(내림차순) + Top-N
+view = view.sort_values(by=sort_by, ascending=False).head(int(topn))
+
+# 7) 보여주기
+st.dataframe(
+    view.reset_index().rename(columns={"resource_code": "SKU"}),
+    use_container_width=True, height=380
+)
+
+# 8) CSV 다운로드
+csv_bytes = view.reset_index().rename(columns={"resource_code": "SKU"}).to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    "현재 표 CSV 다운로드",
+    data=csv_bytes,
+    file_name=f"centers_{'-'.join(centers_sel)}_snapshot_{latest_dt_str}.csv",
+    mime="text/csv"
+)
+
+st.caption("※ 이 표는 **선택된 센터 전체 SKU**의 최신 스냅샷 재고입니다. 상단 ‘SKU 선택’과 무관하게 모든 SKU가 포함됩니다.")
