@@ -9,7 +9,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
 
-st.title("📦 센터×SKU 재고 흐름 (계단식) 대시보드 — v4")
+st.title("📦 글로벌 대시보드 — v4")
 
 st.caption("현재 재고는 항상 **스냅샷 기준**입니다. In-Transit / WIP 라인은 예측용 가상 라인으로, 스냅샷 수치에는 반영되지 않습니다.")
 
