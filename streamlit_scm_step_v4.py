@@ -493,42 +493,53 @@ else:
         margin=dict(l=20, r=20, t=60, b=20)
     )
 
-    # ---- 스타일: 실제 센터 굵게(3px), IT/WIP 점선 2px 0.8 ----
-    COLOR_WIP = "#e11d48"   # red-ish
-    COLOR_IT  = "#2563eb"   # blue
-    CENTER_PALETTE = ["#111827", "#374151", "#065f46", "#0e7490", "#1e40af", "#7c3aed", "#b45309"]  # neutral-ish bolds
+    # ---- 스타일: 실제 센터 얇게(2px, 0.9), IT/WIP 점선 2px 0.8 ----
+COLOR_WIP = "#e11d48"   # 빨강 (WIP)
+COLOR_IT  = "#2563eb"   # 파랑 (In-Transit)
 
-    # 센터 라인 먼저 설정
-    center_colors = {}
-    ci = 0
-    for i, tr in enumerate(fig.data):
-        name = (tr.name or "")
-        if ("In-Transit" in name) or (" WIP" in name):
-            continue
-        fig.data[i].update(line=dict(width=3.0), opacity=1.0)  # bold centers
-        center = name.split(" @ ")[-1] if " @ " in name else ""
-        if center not in center_colors:
-            center_colors[center] = CENTER_PALETTE[ci % len(CENTER_PALETTE)]
-            ci += 1
-        fig.data[i].update(line=dict(color=center_colors[center]))
-        fig.data[i].legendgroup = "Center"
-        fig.data[i].legendrank = 10  # top
+# 파랑/빨강과 겹치지 않는 '센터' 전용 팔레트
+CENTER_PALETTE = [
+    "#111827",  # almost black (neutral)
+    "#475569",  # slate
+    "#0f766e",  # teal
+    "#d97706",  # amber
+    "#7c3aed",  # violet
+    "#16a34a",  # green
+    "#a855f7",  # purple
+    "#f59e0b",  # orange/amber
+]
 
-    # In-Transit: 파랑 점선, 2px, 0.8
-    for i, tr in enumerate(fig.data):
-        name = (tr.name or "")
-        if "In-Transit" in name:
-            fig.data[i].update(line=dict(color=COLOR_IT, dash="dot", width=2.0), opacity=0.8)
-            fig.data[i].legendgroup = "In-Transit"
-            fig.data[i].legendrank = 20
+# 센터 라인: 얇고(2px) 약간 투명(0.9)
+center_colors = {}
+ci = 0
+for i, tr in enumerate(fig.data):
+    name = (tr.name or "")
+    if ("In-Transit" in name) or (" WIP" in name):
+        continue
+    fig.data[i].update(line=dict(width=2.0), opacity=0.9)
+    center = name.split(" @ ")[-1] if " @ " in name else ""
+    if center not in center_colors:
+        center_colors[center] = CENTER_PALETTE[ci % len(CENTER_PALETTE)]
+        ci += 1
+    fig.data[i].update(line=dict(color=center_colors[center]))
+    fig.data[i].legendgroup = "Center"
+    fig.data[i].legendrank = 10  # 상단
 
-    # WIP: 빨강 점선, 2px, 0.8
-    for i, tr in enumerate(fig.data):
-        name = (tr.name or "")
-        if name.endswith(" @ WIP") or " WIP" in name:
-            fig.data[i].update(line=dict(color=COLOR_WIP, dash="dot", width=2.0), opacity=0.8)
-            fig.data[i].legendgroup = "WIP"
-            fig.data[i].legendrank = 30
+# In-Transit: 파랑 점선 2px, 0.8
+for i, tr in enumerate(fig.data):
+    name = (tr.name or "")
+    if "In-Transit" in name:
+        fig.data[i].update(line=dict(color=COLOR_IT, dash="dot", width=2.0), opacity=0.8)
+        fig.data[i].legendgroup = "In-Transit"
+        fig.data[i].legendrank = 20
+
+# WIP: 빨강 점선 2px, 0.8
+for i, tr in enumerate(fig.data):
+    name = (tr.name or "")
+    if name.endswith(" @ WIP") or " WIP" in name:
+        fig.data[i].update(line=dict(color=COLOR_WIP, dash="dot", width=2.0), opacity=0.8)
+        fig.data[i].legendgroup = "WIP"
+        fig.data[i].legendrank = 30
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
