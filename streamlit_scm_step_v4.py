@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta
 from io import BytesIO
 
-st.set_page_config(page_title="센터×SKU 재고 흐름 (계단식) 대시보드 — v4", layout="wide")
+st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
 
 st.title("📦 센터×SKU 재고 흐름 (계단식) 대시보드 — v4")
 
