@@ -493,63 +493,59 @@ else:
         margin=dict(l=20, r=20, t=60, b=20)
     )
 
-    # ---- 스타일: 실제 센터 얇게(2px, 0.9), IT/WIP 점선 2px 0.8 ----
-COLOR_WIP = "#e11d48"   # 빨강 (WIP)
-COLOR_IT  = "#2563eb"   # 파랑 (In-Transit)
-
-# 파랑/빨강과 겹치지 않는 '센터' 전용 팔레트
-CENTER_PALETTE = [
-    "#111827",  # almost black (neutral)
-    "#475569",  # slate
-    "#0f766e",  # teal
-    "#d97706",  # amber
-    "#7c3aed",  # violet
-    "#16a34a",  # green
-    "#a855f7",  # purple
-    "#f59e0b",  # orange/amber
+  # ===== 색상: SKU 기준으로 고정, 상태는 선 타입으로 구분 =====
+PALETTE = [
+    # Tableau 20 + Set3 (충분히 다채롭게)
+    "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
+    "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
+    "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
+    "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
+    "#8DD3C7","#FFFFB3","#BEBADA","#FB8072","#80B1D3",
+    "#FDB462","#B3DE69","#FCCDE5","#D9D9D9","#BC80BD",
+    "#CCEBC5","#FFED6F"
 ]
 
-# 센터 라인: 얇고(2px) 약간 투명(0.9)
-center_colors = {}
-ci = 0
+# 1) SKU → 색상 매핑
+sku_colors, ci = {}, 0
+for tr in fig.data:
+    name = tr.name or ""
+    if " @ " in name:
+        sku = name.split(" @ ")[0]
+        if sku not in sku_colors:
+            sku_colors[sku] = PALETTE[ci % len(PALETTE)]
+            ci += 1
+
+# 2) 상태별 스타일: 센터=실선 / In-Transit=점선 / WIP=점선
 for i, tr in enumerate(fig.data):
-    name = (tr.name or "")
-    if ("In-Transit" in name) or (" WIP" in name):
+    name = tr.name or ""
+    if " @ " not in name:
         continue
-    fig.data[i].update(line=dict(width=2.0), opacity=0.9)
-    center = name.split(" @ ")[-1] if " @ " in name else ""
-    if center not in center_colors:
-        center_colors[center] = CENTER_PALETTE[ci % len(CENTER_PALETTE)]
-        ci += 1
-    fig.data[i].update(line=dict(color=center_colors[center]))
-    fig.data[i].legendgroup = "Center"
-    fig.data[i].legendrank = 10  # 상단
+    sku, kind = name.split(" @ ", 1)
+    color = sku_colors.get(sku, PALETTE[0])
 
-# In-Transit: 파랑 점선 2px, 0.8
-for i, tr in enumerate(fig.data):
-    name = (tr.name or "")
-    if "In-Transit" in name:
-        fig.data[i].update(line=dict(color=COLOR_IT, dash="dot", width=2.0), opacity=0.8)
-        fig.data[i].legendgroup = "In-Transit"
+    if kind == "In-Transit":
+        fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.8)
+        fig.data[i].legendgroup = f"{sku} (In-Transit)"
         fig.data[i].legendrank = 20
-
-# WIP: 빨강 점선 2px, 0.8
-for i, tr in enumerate(fig.data):
-    name = (tr.name or "")
-    if name.endswith(" @ WIP") or " WIP" in name:
-        fig.data[i].update(line=dict(color=COLOR_WIP, dash="dot", width=2.0), opacity=0.8)
-        fig.data[i].legendgroup = "WIP"
+    elif kind == "WIP":
+        fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.8)
+        fig.data[i].legendgroup = f"{sku} (WIP)"
         fig.data[i].legendrank = 30
+    else:
+        # 실제 센터 라인 (실선)
+        fig.data[i].update(line=dict(color=color, dash="solid", width=2.0), opacity=0.9)
+        fig.data[i].legendgroup = f"{sku} (Center)"
+        fig.data[i].legendrank = 10
 
-    # 차트 키 (필터 조합으로 유니크하게)
-chart_key = f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|w{int(show_wip)}"
-
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={"displaylogo": False},
-    key=chart_key,  # ← 고유 키
+# 고유 키(중복 ID 방지)
+chart_key = (
+    f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
+    f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|w{int(show_wip)}"
 )
+
+st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+
+
 
 
 # -------------------- Upcoming Arrivals --------------------
