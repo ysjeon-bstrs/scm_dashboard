@@ -524,8 +524,6 @@ st.sidebar.header("필터")
 centers_sel = st.sidebar.multiselect("센터 선택", centers, default=(["태광KR"] if "태광KR" in centers else centers[:1]))
 skus_sel = st.sidebar.multiselect("SKU 선택", skus, default=([s for s in ["BA00022","BA00021"] if s in skus] or skus[:2]))
 
-# 전망 일수 (기간 자동 설정의 기준)
-horizon = st.sidebar.number_input("미래 전망 일수", min_value=0, max_value=60, value=20)
 
 # === 기간 제어: 오늘 기준 ±6주(=42일) 한정 ===
 today = pd.Timestamp.today().normalize()
@@ -789,10 +787,14 @@ else:
             fig.data[i].legendgroup = f"{sku} (센터)"
             fig.data[i].legendrank = 10
 
+
     chart_key = (
         f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
-        f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|prod{int(show_prod)}|tran{int(show_transit)}"
+        f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}"
+        f"|h{int(st.session_state.horizon_days)}"
+        f"|prod{int(show_prod)}|tran{int(show_transit)}"
     )
+
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
 
