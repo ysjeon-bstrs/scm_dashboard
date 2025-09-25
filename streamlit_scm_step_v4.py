@@ -11,7 +11,7 @@ st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
 
 st.title("📦 SCM 재고 흐름 대시보드 — v4")
 
-st.caption("현재 재고는 항상 **스냅샷 기준**입니다. In-Transit / WIP 라인은 예측용 가상 라인으로, 스냅샷 수치에는 반영되지 않습니다.")
+st.caption("현재 재고는 항상 **스냅샷 기준(snap_정제)**입니다. 이동중 / 생산중 라인은 예측용 가상 라인입니다.")
 
 # -------------------- Helpers --------------------
 def _coalesce_columns(df, candidates, parse_date=False):
@@ -33,49 +33,52 @@ def _coalesce_columns(df, candidates, parse_date=False):
 
 @st.cache_data(ttl=300)
 def load_from_excel(file):
-    # Streamlit UploadedFile 지원
     data = file.read() if hasattr(file, "read") else file
     bio = BytesIO(data) if isinstance(data, (bytes, bytearray)) else file
 
     xl = pd.ExcelFile(bio, engine="openpyxl")
-    need = {"SCM_통합": None, "sample_snapshot": None}
+    # 필수: 이동데이터 시트(이름 유지), 정제 스냅샷 시트(여러 후보명 지원), 입고예정(선택)
+    need = {"SCM_통합": None}
     for s in xl.sheet_names:
-        if s in need:
-            need[s] = s
-    if need["SCM_통합"] is None or need["sample_snapshot"] is None:
-        st.error("엑셀에 'SCM_통합'과 'sample_snapshot' 시트가 필요합니다.")
+        if s == "SCM_통합":
+            need["SCM_통합"] = s
+
+    # 정제 스냅샷 후보명
+    refined_name = next((s for s in xl.sheet_names if s in ["snap_정제","snap_refined","snap_refine","snap_ref"]), None)
+    if refined_name is None:
+        st.error("엑셀에 정제 스냅샷 시트가 필요합니다. (시트명: 'snap_정제' 또는 'snap_refined')")
         st.stop()
 
     df_move = pd.read_excel(bio, sheet_name=need["SCM_통합"], engine="openpyxl")
     bio.seek(0)
-    df_snap = pd.read_excel(bio, sheet_name=need["sample_snapshot"], engine="openpyxl")
+    df_ref = pd.read_excel(bio, sheet_name=refined_name, engine="openpyxl")
     bio.seek(0)
-    # WIP 시트는 있을 수도/없을 수도
+
     wip_df = None
     if "입고예정내역" in xl.sheet_names:
         wip_df = pd.read_excel(bio, sheet_name="입고예정내역", engine="openpyxl")
-    return df_move, df_snap, wip_df
+    return df_move, df_ref, wip_df
 
-def normalize_snapshot(df_snap):
-    df = df_snap.copy()
-    df.columns = [str(c).strip() for c in df.columns]
-    rename_map = {}
-    for c in df.columns:
-        cs = str(c)
-        if ("스냅샷" in cs and "일자" in cs) or cs.lower() in ["snapshot_date","date"]:
-            rename_map[c] = "snapshot_date"
-        elif cs.strip() in ["창고명","center"]:
-            rename_map[c] = "center"
-    df = df.rename(columns=rename_map)
-    if "snapshot_date" not in df.columns or "center" not in df.columns:
-        st.error("sample_snapshot 시트에 '스냅샷 일자'와 '창고명'이 필요합니다.")
+def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
+    """정제 스냅샷 시트 → 필요한 타입 보정"""
+    df = df_ref.copy()
+    cols = {c.strip(): c for c in df.columns}
+    req = ["date","center","resource_code","stock_qty"]
+    miss = [c for c in req if c not in cols]
+    if miss:
+        st.error(f"'snap_정제' 시트에 누락된 컬럼: {miss}")
         st.stop()
-    id_cols = ["snapshot_date", "center"]
-    sku_cols = [c for c in df.columns if c not in id_cols and "스냅샷" not in str(c)]
-    longy = df.melt(id_vars=id_cols, value_vars=sku_cols, var_name="resource_code", value_name="stock_qty")
-    longy["snapshot_date"] = pd.to_datetime(longy["snapshot_date"], errors="coerce")
-    longy["stock_qty"] = pd.to_numeric(longy["stock_qty"], errors="coerce").fillna(0).astype(int)
-    return longy.dropna(subset=["snapshot_date","center","resource_code"])
+    # 이름 정규화
+    df = df.rename(columns={cols["date"]:"date",
+                            cols["center"]:"center",
+                            cols["resource_code"]:"resource_code",
+                            cols["stock_qty"]:"stock_qty"})
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df["center"] = df["center"].astype(str)
+    df["resource_code"] = df["resource_code"].astype(str)
+    df["stock_qty"] = pd.to_numeric(df["stock_qty"], errors="coerce").fillna(0).astype(int)
+    return df.dropna(subset=["date","center","resource_code"])
+
 
 def normalize_moves(df):
     df = df.copy()
@@ -434,9 +437,10 @@ tab1, tab2 = st.tabs(["엑셀 업로드", "CSV 수동 업로드"])
 with tab1:
     xfile = st.file_uploader("엑셀 업로드 (.xlsx)", type=["xlsx"], key="excel")
     if xfile is not None:
-        df_move, df_snap, df_incoming = load_from_excel(xfile)
+        df_move, df_ref, df_incoming = load_from_excel(xfile)
         moves_raw = normalize_moves(df_move)
-        snap_long = normalize_snapshot(df_snap)
+        snap_long = normalize_refined_snapshot(df_ref)
+
 
         # WIP 불러오기 및 병합
         try:
@@ -448,31 +452,42 @@ with tab1:
             st.warning(f"WIP 불러오기 실패: {e}")
 
 with tab2:
-    cs_snap = st.file_uploader("sample_snapshot.csv 업로드", type=["csv"], key="snapcsv")
+    cs_snap = st.file_uploader("정제 스냅샷 CSV 업로드 (snap_정제: date,center,resource_code,stock_qty)", type=["csv"], key="snapcsv")
     cs_move = st.file_uploader("SCM_통합.csv 업로드", type=["csv"], key="movecsv")
     if cs_snap is not None and cs_move is not None:
-        snap_raw = pd.read_csv(cs_snap)
+        df_ref = pd.read_csv(cs_snap)
         move_raw = pd.read_csv(cs_move)
+
+        # 이동 데이터 정규화
         moves = normalize_moves(move_raw)
-        if "resource_code" in [c.lower() for c in snap_raw.columns]:
-            sr = snap_raw.copy()
-            cn = {}
-            for c in sr.columns:
-                cl = c.lower()
-                if cl in ["date","snapshot_date","스냅샷 일자"]:
-                    cn[c] = "snapshot_date"
-                elif cl in ["center","창고명"]:
-                    cn[c] = "center"
-                elif cl == "resource_code":
-                    cn[c] = "resource_code"
-                elif cl in ["stock_qty","qty","quantity"]:
-                    cn[c] = "stock_qty"
-            sr = sr.rename(columns=cn)
-            sr["snapshot_date"] = pd.to_datetime(sr["snapshot_date"], errors="coerce")
-            sr["stock_qty"] = pd.to_numeric(sr["stock_qty"], errors="coerce").fillna(0).astype(int)
-            snap_long = sr[["snapshot_date","center","resource_code","stock_qty"]].dropna()
-        else:
-            snap_long = normalize_snapshot(snap_raw)
+
+        # 정제 스냅샷 정규화 (date/center/resource_code/stock_qty로 통일)
+        snap_cols = {c.strip().lower(): c for c in df_ref.columns}
+
+        # 유연 매핑
+        col_date = snap_cols.get("date") or snap_cols.get("snapshot_date") or snap_cols.get("스냅샷 일자")
+        col_center = snap_cols.get("center") or snap_cols.get("창고명")
+        col_sku = snap_cols.get("resource_code") or snap_cols.get("sku") or snap_cols.get("상품코드")
+        col_qty = (snap_cols.get("stock_qty") or snap_cols.get("qty") or
+                   snap_cols.get("quantity") or snap_cols.get("수량"))
+
+        if not all([col_date, col_center, col_sku, col_qty]):
+            st.error("정제 스냅샷 CSV에 'date, center, resource_code, stock_qty' 컬럼(또는 동의어)이 필요합니다.")
+            st.stop()
+
+        sr = df_ref.rename(columns={
+            col_date: "date",
+            col_center: "center",
+            col_sku: "resource_code",
+            col_qty: "stock_qty",
+        }).copy()
+
+        sr["date"] = pd.to_datetime(sr["date"], errors="coerce").dt.normalize()
+        sr["center"] = sr["center"].astype(str)
+        sr["resource_code"] = sr["resource_code"].astype(str)
+        sr["stock_qty"] = pd.to_numeric(sr["stock_qty"], errors="coerce").fillna(0).astype(int)
+
+        snap_long = sr[["date","center","resource_code","stock_qty"]].dropna()
 
 if "snap_long" not in locals():
     st.info("엑셀 또는 CSV를 업로드하면 필터/차트가 나타납니다.")
@@ -481,8 +496,8 @@ if "snap_long" not in locals():
 # -------------------- Filters --------------------
 centers = sorted(snap_long["center"].dropna().astype(str).unique().tolist())
 skus = sorted(snap_long["resource_code"].dropna().astype(str).unique().tolist())
-min_date = snap_long["snapshot_date"].min()
-max_date = snap_long["snapshot_date"].max()
+min_date = snap_long["date"].min()
+max_date = snap_long["date"].max()
 
 st.sidebar.header("필터")
 centers_sel = st.sidebar.multiselect("센터 선택", centers, default=(["태광KR"] if "태광KR" in centers else centers[:1]))
@@ -513,7 +528,7 @@ else:
 show_wip = st.sidebar.checkbox("WIP 표시", value=True)
 
 # 빌드용 전망일: 기간 끝이 최신 스냅샷보다 뒤일 때만 그 차이만큼 예측 필요
-_latest_snap = snap_long["snapshot_date"].max()
+_latest_snap = snap_long["date"].max()
 proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 st.sidebar.header("표시 옵션")
@@ -543,11 +558,11 @@ show_transit = st.sidebar.checkbox("이동중 표시", value=True)
 st.subheader("요약 KPI")
 
 # 스냅샷 기준 최신일
-latest_dt = snap_long["snapshot_date"].max()
+latest_dt = snap_long["date"].max()
 latest_dt_str = pd.to_datetime(latest_dt).strftime("%Y-%m-%d")
 
 # SKU별 현재 재고(선택 센터 기준, 최신 스냅샷)
-latest_rows = snap_long[(snap_long["snapshot_date"] == latest_dt) & (snap_long["center"].isin(centers_sel))]
+latest_rows = snap_long[(snap_long["date"] == latest_dt) & (snap_long["center"].isin(centers_sel))]
 sku_totals = {sku: int(latest_rows[latest_rows["resource_code"]==sku]["stock_qty"].sum()) for sku in skus_sel}
 
 # In-Transit (WIP 제외, 입/출고 모두 포함)
