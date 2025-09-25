@@ -229,19 +229,22 @@ def apply_consumption_with_events(timeline: pd.DataFrame,
                                   start_dt: pd.Timestamp, end_dt: pd.Timestamp,
                                   lookback_days: int = 28,
                                   events: list[dict] = None) -> pd.DataFrame:
-    """
-    build_timeline 결과(timeline)에 소진/이벤트 가중치를 적용.
-    events 예: [{"start":"2025-10-13","end":"2025-10-14","uplift":0.30}, ...]
-    """
     out = timeline.copy()
     if out.empty:
         return out
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
 
-    latest_snap = pd.to_datetime(snap_long["snapshot_date"]).max().normalize()
+    # >>> 컬럼명 자동 감지 (date / snapshot_date 모두 지원)
+    snap_cols = {c.lower(): c for c in snap_long.columns}
+    date_col = snap_cols.get("date") or snap_cols.get("snapshot_date")
+    if date_col is None:
+        raise KeyError("snap_long에는 'date' 또는 'snapshot_date' 컬럼이 필요합니다.")
+
+    latest_snap = pd.to_datetime(snap_long[date_col]).max().normalize()
     cons_start = max(latest_snap + pd.Timedelta(days=1), start_dt)
     if cons_start > end_dt:
         return out
+
 
     # 날짜별 이벤트 계수
     idx = pd.date_range(cons_start, end_dt, freq="D")
@@ -785,7 +788,7 @@ st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 S
 
 # 1) 최신 스냅샷에서 선택 센터만 추출
 cur = snap_long[
-    (snap_long["snapshot_date"] == latest_dt) &
+    (snap_long["date"] == latest_dt) &
     (snap_long["center"].isin(centers_sel))
 ].copy()
 
