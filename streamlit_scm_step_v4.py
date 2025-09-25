@@ -223,32 +223,20 @@ def estimate_daily_consumption(snap_long: pd.DataFrame,
         rates[(ct, sku)] = daily_out
     return rates
 
-def apply_consumption_with_events(timeline: pd.DataFrame,
-                                  snap_long: pd.DataFrame,
-                                  centers_sel, skus_sel,
-                                  start_dt: pd.Timestamp, end_dt: pd.Timestamp,
-                                  lookback_days: int = 28,
-                                  events: list[dict] = None) -> pd.DataFrame:
+def apply_consumption_with_events(
+    timeline: pd.DataFrame,
+    snap_long: pd.DataFrame,
+    centers_sel, skus_sel,
+    start_dt: pd.Timestamp, end_dt: pd.Timestamp,
+    lookback_days: int = 28,
+    events: list[dict] | None = None
+) -> pd.DataFrame:
     out = timeline.copy()
     if out.empty:
         return out
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
 
-    # ... (중략: 이벤트/소진 적용 로직)
-
-    out = pd.concat(chunks, ignore_index=True)
-
-    # ✅ 여기서 소수점 → 정수 반올림
-    out["stock_qty"] = (
-        pd.to_numeric(out["stock_qty"], errors="coerce")
-        .round()
-        .clip(lower=0)
-        .astype(int)
-    )
-    return out
-
-
-    # >>> 컬럼명 자동 감지 (date / snapshot_date 모두 지원)
+    # 날짜 컬럼 자동 감지 (date / snapshot_date 모두 지원)
     snap_cols = {c.lower(): c for c in snap_long.columns}
     date_col = snap_cols.get("date") or snap_cols.get("snapshot_date")
     if date_col is None:
@@ -259,8 +247,7 @@ def apply_consumption_with_events(timeline: pd.DataFrame,
     if cons_start > end_dt:
         return out
 
-
-    # 날짜별 이벤트 계수
+    # 이벤트 계수 (없으면 1.0)
     idx = pd.date_range(cons_start, end_dt, freq="D")
     uplift = pd.Series(1.0, index=idx)
     if events:
@@ -274,37 +261,50 @@ def apply_consumption_with_events(timeline: pd.DataFrame,
                 if s <= t:
                     uplift.loc[s:t] = uplift.loc[s:t] * (1.0 + u)
 
-    # 일일 소진량 추정
-    rates = estimate_daily_consumption(snap_long, centers_sel, skus_sel, latest_snap, lookback_days)
+    # 일일 소진량 추정 (보강 버전: 회귀 vs 감소분 평균의 max)
+    rates = estimate_daily_consumption(snap_long, centers_sel, skus_sel, latest_snap, int(lookback_days))
 
-    chunks = []
+    chunks: list[pd.DataFrame] = []  # ← 반드시 루프 밖에서 초기화
     for (ct, sku), g in out.groupby(["center","resource_code"]):
-        # 가상 라인 제외(실제 센터 라인만 소진 반영)
+        # 가상 라인은 소진 미적용
         if ct in ("In-Transit", "WIP"):
-            chunks.append(g); 
+            chunks.append(g)
             continue
 
-        rate = rates.get((ct, sku), 0.0)
+        rate = float(rates.get((ct, sku), 0.0))
         if rate <= 0:
-            chunks.append(g); 
+            chunks.append(g)
             continue
 
         g = g.sort_values("date").copy()
         mask = g["date"] >= cons_start
         if not mask.any():
-            chunks.append(g); 
+            chunks.append(g)
             continue
 
         daily = g.loc[mask, "date"].map(uplift).fillna(1.0).values * rate
         stk = g.loc[mask, "stock_qty"].astype(float).values
-        # 누적 차감 (하한 0)
+        # 누적 차감(하한 0)
         for i in range(len(stk)):
             dec = daily[i]
             stk[i:] = np.maximum(0.0, stk[i:] - dec)
         g.loc[mask, "stock_qty"] = stk
         chunks.append(g)
 
-    return pd.concat(chunks, ignore_index=True)
+    # 그룹이 없거나 전부 제외되었다면 원본 반환
+    if not chunks:
+        return out
+
+    out = pd.concat(chunks, ignore_index=True)
+    # 소수 정리(표시/일관성)
+    out["stock_qty"] = (
+        pd.to_numeric(out["stock_qty"], errors="coerce")
+        .round()
+        .clip(lower=0)
+        .astype(int)
+    )
+    return out
+
 
 
 
