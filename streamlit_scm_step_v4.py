@@ -182,6 +182,112 @@ def merge_wip_as_moves(moves_df, wip_df):
     })
     return pd.concat([moves_df, wip_moves], ignore_index=True)
 
+# ===== 소비(소진) 추세 + 이벤트 가중치 =====
+import numpy as np
+import pandas as pd
+
+def estimate_daily_consumption(snap_long: pd.DataFrame,
+                               centers_sel, skus_sel,
+                               asof_dt: pd.Timestamp,
+                               lookback_days: int = 28) -> dict:
+    """
+    최근 lookback_days 동안 스냅샷으로 SKU×센터별 일일 소진량(개/일)을 추정.
+    감소 추세만 소진으로 간주(증가면 0). 반환: {(center, sku): rate}
+    """
+    snap = snap_long.rename(columns={"snapshot_date":"date"}).copy()
+    snap["date"] = pd.to_datetime(snap["date"], errors="coerce").dt.normalize()
+    start = (asof_dt - pd.Timedelta(days=lookback_days-1)).normalize()
+
+    hist = snap[(snap["date"] >= start) & (snap["date"] <= asof_dt) &
+                (snap["center"].isin(centers_sel)) &
+                (snap["resource_code"].isin(skus_sel))]
+
+    rates = {}
+    if hist.empty: 
+        return rates
+
+    for (ct, sku), g in hist.groupby(["center","resource_code"]):
+        ts = (g.sort_values("date")
+                .set_index("date")["stock_qty"]
+                .asfreq("D").ffill())
+        # 관측 최소 보장
+        if ts.dropna().shape[0] < max(7, lookback_days//2):
+            continue
+        x = np.arange(len(ts), dtype=float)
+        y = ts.values.astype(float)
+        a = np.polyfit(x, y, 1)[0]       # 1차 회귀 기울기
+        daily_out = max(0.0, -a)         # 감소분만 소진으로 간주
+        rates[(ct, sku)] = daily_out
+    return rates
+
+def apply_consumption_with_events(timeline: pd.DataFrame,
+                                  snap_long: pd.DataFrame,
+                                  centers_sel, skus_sel,
+                                  start_dt: pd.Timestamp, end_dt: pd.Timestamp,
+                                  lookback_days: int = 28,
+                                  events: list[dict] = None) -> pd.DataFrame:
+    """
+    build_timeline 결과(timeline)에 소진/이벤트 가중치를 적용.
+    events 예: [{"start":"2025-10-13","end":"2025-10-14","uplift":0.30}, ...]
+    """
+    out = timeline.copy()
+    if out.empty:
+        return out
+    out["date"] = pd.to_datetime(out["date"]).dt.normalize()
+
+    latest_snap = pd.to_datetime(snap_long["snapshot_date"]).max().normalize()
+    cons_start = max(latest_snap + pd.Timedelta(days=1), start_dt)
+    if cons_start > end_dt:
+        return out
+
+    # 날짜별 이벤트 계수
+    idx = pd.date_range(cons_start, end_dt, freq="D")
+    uplift = pd.Series(1.0, index=idx)
+    if events:
+        for e in events:
+            s = pd.to_datetime(e.get("start"), errors="coerce")
+            t = pd.to_datetime(e.get("end"), errors="coerce")
+            u = float(e.get("uplift", 0.0))
+            if pd.notna(s) and pd.notna(t):
+                s = s.normalize(); t = t.normalize()
+                s = max(s, idx[0]); t = min(t, idx[-1])
+                if s <= t:
+                    uplift.loc[s:t] = uplift.loc[s:t] * (1.0 + u)
+
+    # 일일 소진량 추정
+    rates = estimate_daily_consumption(snap_long, centers_sel, skus_sel, latest_snap, lookback_days)
+
+    chunks = []
+    for (ct, sku), g in out.groupby(["center","resource_code"]):
+        # 가상 라인 제외(실제 센터 라인만 소진 반영)
+        if ct in ("In-Transit", "WIP"):
+            chunks.append(g); 
+            continue
+
+        rate = rates.get((ct, sku), 0.0)
+        if rate <= 0:
+            chunks.append(g); 
+            continue
+
+        g = g.sort_values("date").copy()
+        mask = g["date"] >= cons_start
+        if not mask.any():
+            chunks.append(g); 
+            continue
+
+        daily = g.loc[mask, "date"].map(uplift).fillna(1.0).values * rate
+        stk = g.loc[mask, "stock_qty"].astype(float).values
+        # 누적 차감 (하한 0)
+        for i in range(len(stk)):
+            dec = daily[i]
+            stk[i:] = np.maximum(0.0, stk[i:] - dec)
+        g.loc[mask, "stock_qty"] = stk
+        chunks.append(g)
+
+    return pd.concat(chunks, ignore_index=True)
+
+
+
 def build_timeline(snap_long, moves, centers_sel, skus_sel,
                    start_dt, end_dt, horizon_days=0):
     """
@@ -410,6 +516,29 @@ show_wip = st.sidebar.checkbox("WIP 표시", value=True)
 _latest_snap = snap_long["snapshot_date"].max()
 proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
+st.sidebar.header("표시 옵션")
+# 소진 추세 사용/기간
+use_cons_forecast = st.sidebar.checkbox("4주 추세 기반 소진 예측 적용", value=True)
+lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
+
+# 이벤트 편집(간단 입력)
+with st.sidebar.expander("이벤트/프로모션 가중치 (+%)"):
+    ev_rows = st.number_input("이벤트 개수", min_value=0, max_value=10, value=0)
+    events = []
+    for i in range(ev_rows):
+        c1, c2, c3 = st.sidebar.columns(3)
+        s = c1.date_input(f"시작일 #{i+1}")
+        t = c2.date_input(f"종료일 #{i+1}")
+        u = c3.number_input(f"가중치% #{i+1}", min_value=-100.0, max_value=300.0, value=30.0, step=5.0)
+        events.append({"start": pd.Timestamp(s).strftime("%Y-%m-%d"),
+                       "end": pd.Timestamp(t).strftime("%Y-%m-%d"),
+                       "uplift": u/100.0})
+
+# ‘생산중(WIP)’, ‘이동중(In-Transit)’ 표시 토글 (기본 ON)
+show_prod = st.sidebar.checkbox("생산중(미완료 생산) 표시", value=True)
+show_transit = st.sidebar.checkbox("이동중 표시", value=True)
+
+
 # -------------------- KPIs --------------------
 st.subheader("요약 KPI")
 
@@ -461,8 +590,8 @@ for group in _chunk(skus_sel, 4):
 
 # 통합 KPI
 k_it, k_wip = st.columns(2)
-k_it.metric("이동 중 재고 (In-Transit)", f"{in_transit_total:,}")
-k_wip.metric("현재 WIP(미완료 생산)", f"{wip_today:,}")
+k_it.metric("이동 중 재고", f"{in_transit_total:,}")
+k_wip.metric("생산중(미완료)", f"{wip_today:,}")
 
 st.divider()
 
@@ -470,30 +599,40 @@ st.divider()
 st.subheader("계단식 재고 흐름")
 timeline = build_timeline(snap_long, moves, centers_sel, skus_sel,
                           start_dt, end_dt, horizon_days=proj_days_for_build)
+
+# (A) 소진 추세 + 이벤트 가중치 적용
+if use_cons_forecast and not timeline.empty:
+    timeline = apply_consumption_with_events(
+        timeline, snap_long, centers_sel, skus_sel,
+        start_dt, end_dt,
+        lookback_days=int(lookback_days),
+        events=events
+    )
+
 if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
-    # 기간 + 전망 범위 슬라이스
-    vis_df = timeline[(timeline["date"] >= start_dt) &
-                  (timeline["date"] <= end_dt)].copy()
-    # In-Transit은 항상 통합
-    vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*", "In-Transit", regex=True)
+    vis_df = timeline[(timeline["date"] >= start_dt) & (timeline["date"] <= end_dt)].copy()
 
-    # WIP 표시 옵션
-    if not show_wip:
-        vis_df = vis_df[vis_df["center"] != "WIP"]
+    # (B) 센터 표시 명칭 한글화 + 토글
+    # In-Transit → 이동중 (정규화 후 치환)
+    vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*$", "이동중", regex=True)
+    # WIP → 생산중
+    vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
 
-    # 라벨 재생성 (반드시 마지막에)
+    if not show_prod:
+        vis_df = vis_df[vis_df["center"] != "생산중"]
+    if not show_transit:
+        vis_df = vis_df[vis_df["center"] != "이동중"]
+
+    # 라벨
     vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
 
-    # 그리기
+    # (C) 그리기
     fig = px.line(
-        vis_df,
-        x="date",
-        y="stock_qty",
-        color="label",
+        vis_df, x="date", y="stock_qty", color="label",
         line_shape="hv",
-        title="선택한 SKU × 센터(및 In-Transit/WIP) 계단식 재고 흐름",
+        title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
         render_mode="svg"
     )
     fig.update_traces(
@@ -504,62 +643,55 @@ else:
         hovermode="x unified",
         xaxis_title="Date",
         yaxis_title="Inventory (qty_ea)",
-        legend_title_text="SKU @ Center / In-Transit(파랑 점선) / WIP(빨강 점선)",
+        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
         margin=dict(l=20, r=20, t=60, b=20)
     )
 
-  # ===== 색상: SKU 기준으로 고정, 상태는 선 타입으로 구분 =====
-PALETTE = [
-    # Tableau 20 + Set3 (충분히 다채롭게)
-    "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
-    "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
-    "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
-    "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
-    "#8DD3C7","#FFFFB3","#BEBADA","#FB8072","#80B1D3",
-    "#FDB462","#B3DE69","#FCCDE5","#D9D9D9","#BC80BD",
-    "#CCEBC5","#FFED6F"
-]
+    # (D) 색상/선 스타일 (한국어 라벨 기준)
+    PALETTE = [
+        "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
+        "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
+        "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
+        "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
+        "#8DD3C7","#FFFFB3","#BEBADA","#FB8072","#80B1D3",
+        "#FDB462","#B3DE69","#FCCDE5","#D9D9D9","#BC80BD",
+        "#CCEBC5","#FFED6F"
+    ]
+    # SKU → 고정 색
+    sku_colors, ci = {}, 0
+    for tr in fig.data:
+        name = tr.name or ""
+        if " @ " in name:
+            sku = name.split(" @ ")[0]
+            if sku not in sku_colors:
+                sku_colors[sku] = PALETTE[ci % len(PALETTE)]
+                ci += 1
 
-# 1) SKU → 색상 매핑
-sku_colors, ci = {}, 0
-for tr in fig.data:
-    name = tr.name or ""
-    if " @ " in name:
-        sku = name.split(" @ ")[0]
-        if sku not in sku_colors:
-            sku_colors[sku] = PALETTE[ci % len(PALETTE)]
-            ci += 1
+    for i, tr in enumerate(fig.data):
+        name = tr.name or ""
+        if " @ " not in name:
+            continue
+        sku, kind = name.split(" @ ", 1)
+        color = sku_colors.get(sku, PALETTE[0])
 
-# 2) 상태별 스타일: 센터=실선 / In-Transit=점선 / WIP=점선
-for i, tr in enumerate(fig.data):
-    name = tr.name or ""
-    if " @ " not in name:
-        continue
-    sku, kind = name.split(" @ ", 1)
-    color = sku_colors.get(sku, PALETTE[0])
+        if kind == "이동중":
+            fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
+            fig.data[i].legendgroup = f"{sku} (이동중)"
+            fig.data[i].legendrank = 20
+        elif kind == "생산중":
+            fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
+            fig.data[i].legendgroup = f"{sku} (생산중)"
+            fig.data[i].legendrank = 30
+        else:
+            fig.data[i].update(line=dict(color=color, dash="solid", width=2.2), opacity=0.95)
+            fig.data[i].legendgroup = f"{sku} (센터)"
+            fig.data[i].legendrank = 10
 
-    if kind == "In-Transit":
-        fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.8)
-        fig.data[i].legendgroup = f"{sku} (In-Transit)"
-        fig.data[i].legendrank = 20
-    elif kind == "WIP":
-        fig.data[i].update(line=dict(color=color, dash="dot", width=2.0), opacity=0.8)
-        fig.data[i].legendgroup = f"{sku} (WIP)"
-        fig.data[i].legendrank = 30
-    else:
-        # 실제 센터 라인 (실선)
-        fig.data[i].update(line=dict(color=color, dash="solid", width=2.0), opacity=0.9)
-        fig.data[i].legendgroup = f"{sku} (Center)"
-        fig.data[i].legendrank = 10
-
-# 고유 키(중복 ID 방지)
-chart_key = (
-    f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
-    f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|w{int(show_wip)}"
-)
-
-st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
-
+    chart_key = (
+        f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
+        f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{horizon}|prod{int(show_prod)}|tran{int(show_transit)}"
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
 
 
