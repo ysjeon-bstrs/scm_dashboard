@@ -527,29 +527,46 @@ skus_sel = st.sidebar.multiselect("SKU 선택", skus, default=([s for s in ["BA0
 # 전망 일수 (기간 자동 설정의 기준)
 horizon = st.sidebar.number_input("미래 전망 일수", min_value=0, max_value=60, value=20)
 
-# 기간 모드
+# === 기간 제어 (단순화): 숫자 ↔ 슬라이더 연동 ===
 today = pd.Timestamp.today().normalize()
-range_mode = st.sidebar.radio("기간 설정", ["자동(오늘±전망)", "수동(직접 지정)"], index=0)
 
-if range_mode.startswith("자동"):
-    start_dt = (today - pd.Timedelta(days=int(horizon))).normalize()
-    end_dt   = (today + pd.Timedelta(days=int(horizon))).normalize()
-    st.sidebar.markdown(f"**기간:** {start_dt:%Y-%m-%d} → {end_dt:%Y-%m-%d}")
-else:
-    date_range = st.sidebar.slider(
-        "기간",
-        min_value=min(min_date.to_pydatetime(), (today - timedelta(days=60)).to_pydatetime()),
-        max_value=max(max_date.to_pydatetime(), (today + timedelta(days=60)).to_pydatetime()),
-        value=((today - timedelta(days=20)).to_pydatetime(), (today + timedelta(days=20)).to_pydatetime()),
-        format="YYYY-MM-DD",
-    )
-    start_dt = pd.to_datetime(date_range[0]).normalize()
-    end_dt   = pd.to_datetime(date_range[1]).normalize()
+def _init_range():
+    if "date_range" not in st.session_state:
+        st.session_state.date_range = (today - pd.Timedelta(days=20), today + pd.Timedelta(days=20))
+    if "horizon_days" not in st.session_state:
+        st.session_state.horizon_days = 20
 
+def _apply_horizon_to_range():
+    h = int(st.session_state.horizon_days)
+    st.session_state.date_range = (today - pd.Timedelta(days=h), today + pd.Timedelta(days=h))
 
-# 빌드용 전망일: 기간 끝이 최신 스냅샷보다 뒤일 때만 그 차이만큼 예측 필요
+_init_range()
+
+# 1) 미래 전망 일수(숫자 입력) → 엔터/변경 시 기간 자동 동기화
+st.sidebar.subheader("기간 설정")
+st.sidebar.number_input(
+    "미래 전망 일수",
+    min_value=0, max_value=90, step=1,
+    key="horizon_days", on_change=_apply_horizon_to_range
+)
+
+# 2) 기간 슬라이더(드래그 시 차트만 반영; 숫자는 유지)
+date_range = st.sidebar.slider(
+    "기간",
+    min_value=(today - pd.Timedelta(days=120)).to_pydatetime(),
+    max_value=(today + pd.Timedelta(days=120)).to_pydatetime(),
+    value=tuple(d.to_pydatetime() for d in st.session_state.date_range),
+    format="YYYY-MM-DD"
+)
+
+# 내부 사용 기간 (슬라이더 결과를 우선 반영)
+start_dt = pd.Timestamp(date_range[0]).normalize()
+end_dt   = pd.Timestamp(date_range[1]).normalize()
+
+# 최신 스냅샷 대비 전망일수 계산(빌드용)
 _latest_snap = snap_long["date"].max()
 proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
+
 
 st.sidebar.header("표시 옵션")
 
@@ -673,12 +690,12 @@ else:
         title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
         render_mode="svg"
     )
-    fig.update_layout(
-        hovermode="x unified",
-        xaxis_title="Date",
-        yaxis_title="Inventory (qty_ea)",
-        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
-        margin=dict(l=20, r=20, t=60, b=20)
+   fig.update_layout(
+    hovermode="x unified",
+    xaxis_title="Date",
+    yaxis_title="Inventory (qty_ea)",
+    legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
+    margin=dict(l=20, r=20, t=60, b=20)
     )
 
     # === 오늘 기준선 표시 ===
@@ -686,10 +703,11 @@ else:
     if start_dt <= today <= end_dt:
         fig.add_vline(x=today, line_width=2, line_dash="dot", line_color="#888")
         fig.add_annotation(
-            x=today, y=1.02, xref="x", yref="paper",
+            x=today, y=1.05, xref="x", yref="paper",
             text="오늘", showarrow=False, font=dict(size=12, color="#555"),
             align="center", yanchor="bottom"
-    )
+    )   
+
 
     
     # Y축 눈금 정수로
