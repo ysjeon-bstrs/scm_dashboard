@@ -83,14 +83,17 @@ def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
 def normalize_moves(df):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
-    resource_code = _coalesce_columns(df, [["resource_code","상품코드","RESOURCE_CODE"]])
-    qty_ea       = _coalesce_columns(df, [["qty_ea","QTY_EA","수량(EA)"]])
-    carrier_mode = _coalesce_columns(df, [["carrier_mode","운송방법","carrier mode"]])
-    from_center  = _coalesce_columns(df, [["from_center","출발창고"]])
-    to_center    = _coalesce_columns(df, [["to_center","도착창고"]])
-    onboard_date = _coalesce_columns(df, [["onboard_date","배정일","출발일","H"]], parse_date=True)  # H열 의미
-    arrival_date = _coalesce_columns(df, [["arrival_date","도착일","eta_date","ETA"]], parse_date=True)
-    inbound_date = _coalesce_columns(df, [["inbound_date","입고일"]], parse_date=True)
+
+    resource_code = _coalesce_columns(df, [["resource_code","상품코드","RESOURCE_CODE","sku","SKU"]])
+    qty_ea       = _coalesce_columns(df, [
+        ["qty_ea","QTY_EA","수량(EA)","qty","QTY","quantity","Quantity","수량","EA","ea"]
+    ])
+    carrier_mode = _coalesce_columns(df, [["carrier_mode","운송방법","carrier mode","운송수단"]])
+    from_center  = _coalesce_columns(df, [["from_center","출발창고","from center"]])
+    to_center    = _coalesce_columns(df, [["to_center","도착창고","to center"]])
+    onboard_date = _coalesce_columns(df, [["onboard_date","배정일","출발일","H","onboard","depart_date"]], parse_date=True)
+    arrival_date = _coalesce_columns(df, [["arrival_date","도착일","eta_date","ETA","arrival"]], parse_date=True)
+    inbound_date = _coalesce_columns(df, [["inbound_date","입고일","입고완료일"]], parse_date=True)
     real_depart  = _coalesce_columns(df, [["실제 선적일","real_departure","AI"]], parse_date=True)
 
     out = pd.DataFrame({
@@ -106,6 +109,7 @@ def normalize_moves(df):
     })
     out["event_date"] = out["inbound_date"].where(out["inbound_date"].notna(), out["arrival_date"])
     return out
+
 
 def _parse_po_date(po_str):
     """
@@ -650,6 +654,10 @@ else:
     # WIP → 생산중
     vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
 
+    # ✅ 태광KR 미선택 시 '생산중' 라인 숨김
+    if "태광KR" not in centers_sel:
+        vis_df = vis_df[vis_df["center"] != "생산중"]
+    
     if not show_prod:
         vis_df = vis_df[vis_df["center"] != "생산중"]
     if not show_transit:
@@ -729,10 +737,11 @@ else:
 # -------------------- Upcoming Arrivals --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 
-window_start = start_dt
+today = pd.Timestamp.today().normalize()
+window_start = max(start_dt, today)   # ✅ 오늘 이후만
 window_end   = end_dt
 
-# (A) 운송(비 WIP) - 태광 제외 센터
+# (A) 운송(비 WIP)
 arr_transport = moves[
     (moves["event_date"].notna()) &
     (moves["event_date"] >= window_start) & (moves["event_date"] <= window_end) &
@@ -740,7 +749,6 @@ arr_transport = moves[
     (moves["to_center"].astype(str).isin([c for c in centers_sel if c != "태광KR"])) &
     (moves["resource_code"].astype(str).isin(skus_sel))
 ].copy()
-arr_transport["lot"] = ""  # 일반 이동건은 lot 비움
 
 # (B) WIP - 태광KR 선택 시
 arr_wip = pd.DataFrame()
@@ -754,11 +762,11 @@ if "태광KR" in centers_sel:
     ].copy()
 
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
+
 if upcoming.empty:
-    st.caption("도착 예정 없음 (선택 기간)")
+    st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
 else:
-    # days_to_arrival는 참고용(오늘 기준) – 유지
-    today = pd.Timestamp.today().normalize()
+    # ✅ days_to_arrival는 항상 0 이상
     upcoming["days_to_arrival"] = (upcoming["event_date"] - today).dt.days
     upcoming = upcoming.sort_values(["event_date","to_center","resource_code"])
     cols = ["event_date","days_to_arrival","to_center","resource_code","qty_ea","carrier_mode","onboard_date","lot"]
