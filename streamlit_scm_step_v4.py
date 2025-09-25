@@ -11,7 +11,8 @@ st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
 
 st.title("📦 SCM 재고 흐름 대시보드 — v4")
 
-st.caption("현재 재고는 항상 **스냅샷 기준(snap_정제)**입니다. 이동중 / 생산중 라인은 예측용 가상 라인입니다.")
+st.caption("현재 재고는 항상 **스냅샷 기준(snap_정제)**입니다. 이동중 / 생산중 라인은 예측용 가상 라인입니다. 
+‘생산중(미완료)’ 그래프는 **태광KR 센터 선택 시에만** 표시됩니다.")
 
 # -------------------- Helpers --------------------
 def _coalesce_columns(df, candidates, parse_date=False):
@@ -553,23 +554,23 @@ proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 st.sidebar.header("표시 옵션")
 
-# 소진 추세 적용
-use_cons_forecast = st.sidebar.checkbox("4주 추세 기반 소진 예측 적용", value=True)
+# 표시 토글 (순서/문구 정리)
+show_prod = st.sidebar.checkbox("생산중(미완료) 표시", value=True)
+show_transit = st.sidebar.checkbox("이동중 표시", value=True)
+
+# 추세 기반 재고 예측
+use_cons_forecast = st.sidebar.checkbox("추세 기반 재고 예측", value=True)
 lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
 
-# 이벤트/프로모션: 단일 기간 + 가중치
-with st.sidebar.expander("이벤트/프로모션 가중치 (+%)", expanded=False):
-    enable_event = st.checkbox("이벤트 가중치 적용", value=False)
-    s = st.date_input("시작일")
-    t = st.date_input("종료일")
-    u = st.number_input("가중치(%)", min_value=-100.0, max_value=300.0, value=30.0, step=5.0)
-    events = [{"start": pd.Timestamp(s).strftime("%Y-%m-%d"),
-               "end":   pd.Timestamp(t).strftime("%Y-%m-%d"),
-               "uplift": (u/100.0)}] if enable_event else []
-
-# ‘생산중(WIP)’, ‘이동중(In-Transit)’ 토글 (기본 ON)
-show_prod = st.sidebar.checkbox("생산중(미완료 생산) 표시", value=True)
-show_transit = st.sidebar.checkbox("이동중 표시", value=True)
+# 프로모션 가중치 (단일)
+with st.sidebar.expander("프로모션 가중치(+%)", expanded=False):
+    enable_event = st.checkbox("가중치 적용", value=False)
+    ev_start = st.date_input("시작일")
+    ev_end   = st.date_input("종료일")
+    ev_pct   = st.number_input("가중치(%)", min_value=-100.0, max_value=300.0, value=30.0, step=5.0)
+events = [{"start": pd.Timestamp(ev_start).strftime("%Y-%m-%d"),
+           "end":   pd.Timestamp(ev_end).strftime("%Y-%m-%d"),
+           "uplift": ev_pct/100.0}] if enable_event else []
 
 
 
@@ -680,6 +681,18 @@ else:
         legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
         margin=dict(l=20, r=20, t=60, b=20)
     )
+
+    # === 오늘 기준선 표시 ===
+    today = pd.Timestamp.today().normalize()
+    if start_dt <= today <= end_dt:
+        fig.add_vline(x=today, line_width=2, line_dash="dot", line_color="#888")
+        fig.add_annotation(
+            x=today, y=1.02, xref="x", yref="paper",
+            text="오늘", showarrow=False, font=dict(size=12, color="#555"),
+            align="center", yanchor="bottom"
+    )
+
+    
     # Y축 눈금 정수로
     fig.update_yaxes(tickformat=",.0f")
     # 호버도 정수 천단위
