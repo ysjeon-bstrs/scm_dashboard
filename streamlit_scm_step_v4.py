@@ -234,6 +234,20 @@ def apply_consumption_with_events(timeline: pd.DataFrame,
         return out
     out["date"] = pd.to_datetime(out["date"]).dt.normalize()
 
+    # ... (중략: 이벤트/소진 적용 로직)
+
+    out = pd.concat(chunks, ignore_index=True)
+
+    # ✅ 여기서 소수점 → 정수 반올림
+    out["stock_qty"] = (
+        pd.to_numeric(out["stock_qty"], errors="coerce")
+        .round()
+        .clip(lower=0)
+        .astype(int)
+    )
+    return out
+
+
     # >>> 컬럼명 자동 감지 (date / snapshot_date 모두 지원)
     snap_cols = {c.lower(): c for c in snap_long.columns}
     date_col = snap_cols.get("date") or snap_cols.get("snapshot_date")
@@ -528,33 +542,31 @@ else:
     start_dt = pd.to_datetime(date_range[0]).normalize()
     end_dt   = pd.to_datetime(date_range[1]).normalize()
 
-show_wip = st.sidebar.checkbox("WIP 표시", value=True)
 
 # 빌드용 전망일: 기간 끝이 최신 스냅샷보다 뒤일 때만 그 차이만큼 예측 필요
 _latest_snap = snap_long["date"].max()
 proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 st.sidebar.header("표시 옵션")
-# 소진 추세 사용/기간
+
+# 소진 추세 적용
 use_cons_forecast = st.sidebar.checkbox("4주 추세 기반 소진 예측 적용", value=True)
 lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
 
-# 이벤트 편집(간단 입력)
-with st.sidebar.expander("이벤트/프로모션 가중치 (+%)"):
-    ev_rows = st.number_input("이벤트 개수", min_value=0, max_value=10, value=0)
-    events = []
-    for i in range(ev_rows):
-        c1, c2, c3 = st.sidebar.columns(3)
-        s = c1.date_input(f"시작일 #{i+1}")
-        t = c2.date_input(f"종료일 #{i+1}")
-        u = c3.number_input(f"가중치% #{i+1}", min_value=-100.0, max_value=300.0, value=30.0, step=5.0)
-        events.append({"start": pd.Timestamp(s).strftime("%Y-%m-%d"),
-                       "end": pd.Timestamp(t).strftime("%Y-%m-%d"),
-                       "uplift": u/100.0})
+# 이벤트/프로모션: 단일 기간 + 가중치
+with st.sidebar.expander("이벤트/프로모션 가중치 (+%)", expanded=False):
+    enable_event = st.checkbox("이벤트 가중치 적용", value=False)
+    s = st.date_input("시작일")
+    t = st.date_input("종료일")
+    u = st.number_input("가중치(%)", min_value=-100.0, max_value=300.0, value=30.0, step=5.0)
+    events = [{"start": pd.Timestamp(s).strftime("%Y-%m-%d"),
+               "end":   pd.Timestamp(t).strftime("%Y-%m-%d"),
+               "uplift": (u/100.0)}] if enable_event else []
 
-# ‘생산중(WIP)’, ‘이동중(In-Transit)’ 표시 토글 (기본 ON)
+# ‘생산중(WIP)’, ‘이동중(In-Transit)’ 토글 (기본 ON)
 show_prod = st.sidebar.checkbox("생산중(미완료 생산) 표시", value=True)
 show_transit = st.sidebar.checkbox("이동중 표시", value=True)
+
 
 
 # -------------------- KPIs --------------------
@@ -653,10 +665,6 @@ else:
         title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
         render_mode="svg"
     )
-    fig.update_traces(
-        mode="lines",
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>"
-    )
     fig.update_layout(
         hovermode="x unified",
         xaxis_title="Date",
@@ -664,6 +672,11 @@ else:
         legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
         margin=dict(l=20, r=20, t=60, b=20)
     )
+    # Y축 눈금 정수로
+    fig.update_yaxes(tickformat=",.0f")
+    # 호버도 정수 천단위
+    fig.update_traces(hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>")
+
 
     # (D) 색상/선 스타일 (한국어 라벨 기준)
     PALETTE = [
