@@ -690,23 +690,34 @@ else:
         title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
         render_mode="svg"
     )
-   fig.update_layout(
-    hovermode="x unified",
-    xaxis_title="Date",
-    yaxis_title="Inventory (qty_ea)",
-    legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
-    margin=dict(l=20, r=20, t=60, b=20)
+    fig.update_layout(
+        hovermode="x unified",
+        xaxis_title="Date",
+        yaxis_title="Inventory (qty_ea)",
+        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
+        margin=dict(l=20, r=20, t=60, b=20)
     )
 
     # === 오늘 기준선 표시 ===
     today = pd.Timestamp.today().normalize()
     if start_dt <= today <= end_dt:
-        fig.add_vline(x=today, line_width=2, line_dash="dot", line_color="#888")
+        fig.add_vline(
+            x=today,
+            line_width=2,
+            line_dash="dot",
+            line_color="#888",
+        )
         fig.add_annotation(
-            x=today, y=1.05, xref="x", yref="paper",
-            text="오늘", showarrow=False, font=dict(size=12, color="#555"),
-            align="center", yanchor="bottom"
-    )   
+            x=today,
+            y=1.02,
+            xref="x",
+            yref="paper",
+            text="오늘",
+            showarrow=False,
+            font=dict(size=12, color="#555"),
+            align="center",
+            yanchor="bottom",
+        )
 
 
     
