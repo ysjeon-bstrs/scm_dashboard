@@ -527,45 +527,67 @@ skus_sel = st.sidebar.multiselect("SKU 선택", skus, default=([s for s in ["BA0
 # 전망 일수 (기간 자동 설정의 기준)
 horizon = st.sidebar.number_input("미래 전망 일수", min_value=0, max_value=60, value=20)
 
-# === 기간 제어 (단순화): 숫자 ↔ 슬라이더 연동 ===
+# === 기간 제어: 오늘 기준 ±6주(=42일) 한정 ===
 today = pd.Timestamp.today().normalize()
+WEEKS_WINDOW = 6
+WINDOW_DAYS = WEEKS_WINDOW * 7
+
+# 스냅샷 범위와 교차(스냅샷이 더 짧아도 안전)
+snap_min = pd.to_datetime(snap_long["date"]).min().normalize()
+snap_max = pd.to_datetime(snap_long["date"]).max().normalize()
+
+bound_min = max(today - pd.Timedelta(days=WINDOW_DAYS), snap_min)
+bound_max = min(today + pd.Timedelta(days=WINDOW_DAYS), snap_max + pd.Timedelta(days=60))  # +60은 약간의 전망 여지
 
 def _init_range():
     if "date_range" not in st.session_state:
-        st.session_state.date_range = (today - pd.Timedelta(days=20), today + pd.Timedelta(days=20))
+        st.session_state.date_range = (max(today - pd.Timedelta(days=20), bound_min),
+                                       min(today + pd.Timedelta(days=20), bound_max))
     if "horizon_days" not in st.session_state:
         st.session_state.horizon_days = 20
 
 def _apply_horizon_to_range():
     h = int(st.session_state.horizon_days)
-    st.session_state.date_range = (today - pd.Timedelta(days=h), today + pd.Timedelta(days=h))
+    h = max(0, min(h, WINDOW_DAYS))   # ← 입력 최대를 42일로 클램프
+    st.session_state.horizon_days = h
+    start = max(today - pd.Timedelta(days=h), bound_min)
+    end   = min(today + pd.Timedelta(days=h), bound_max)
+    st.session_state.date_range = (start, end)
+
+def _clamp_range(r):
+    s, e = pd.Timestamp(r[0]).normalize(), pd.Timestamp(r[1]).normalize()
+    s = max(min(s, bound_max), bound_min)
+    e = max(min(e, bound_max), bound_min)
+    if e < s:
+        e = s
+    return (s, e)
 
 _init_range()
 
-# 1) 미래 전망 일수(숫자 입력) → 엔터/변경 시 기간 자동 동기화
 st.sidebar.subheader("기간 설정")
 st.sidebar.number_input(
     "미래 전망 일수",
-    min_value=0, max_value=90, step=1,
+    min_value=0, max_value=WINDOW_DAYS, step=1,
     key="horizon_days", on_change=_apply_horizon_to_range
 )
 
-# 2) 기간 슬라이더(드래그 시 차트만 반영; 숫자는 유지)
+# 슬라이더: 범위를 ±6주 경계로 제한
 date_range = st.sidebar.slider(
     "기간",
-    min_value=(today - pd.Timedelta(days=120)).to_pydatetime(),
-    max_value=(today + pd.Timedelta(days=120)).to_pydatetime(),
-    value=tuple(d.to_pydatetime() for d in st.session_state.date_range),
+    min_value=bound_min.to_pydatetime(),
+    max_value=bound_max.to_pydatetime(),
+    value=tuple(d.to_pydatetime() for d in _clamp_range(st.session_state.date_range)),
     format="YYYY-MM-DD"
 )
 
-# 내부 사용 기간 (슬라이더 결과를 우선 반영)
+# 내부 사용 기간(슬라이더 우선)
 start_dt = pd.Timestamp(date_range[0]).normalize()
 end_dt   = pd.Timestamp(date_range[1]).normalize()
 
-# 최신 스냅샷 대비 전망일수 계산(빌드용)
+# 전망일(빌드용): 최신 스냅샷 이후만 계산
 _latest_snap = snap_long["date"].max()
 proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
+
 
 
 st.sidebar.header("표시 옵션")
