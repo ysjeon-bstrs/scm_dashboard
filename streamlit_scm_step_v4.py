@@ -11,8 +11,7 @@ st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
 
 st.title("📦 SCM 재고 흐름 대시보드 — v4")
 
-st.caption("현재 재고는 항상 **스냅샷 기준(snap_정제)**입니다. 이동중 / 생산중 라인은 예측용 가상 라인입니다. 
-‘생산중(미완료)’ 그래프는 **태광KR 센터 선택 시에만** 표시됩니다.")
+st.caption("현재 재고는 항상 **스냅샷 기준(snap_정제)**입니다. 이동중 / 생산중 라인은 예측용 가상 라인입니다. ‘생산중(미완료)’ 그래프는 **태광KR 센터 선택 시에만** 표시됩니다.")
 
 # -------------------- Helpers --------------------
 def _coalesce_columns(df, candidates, parse_date=False):
