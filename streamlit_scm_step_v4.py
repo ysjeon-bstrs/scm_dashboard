@@ -9,11 +9,10 @@ from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 import json
 import requests
-import os
+from urllib.parse import quote
 
-# === Google Drive API 로더 ===
+# === Google Sheets API 로더 ===
 GSHEET_ID = "1RYjKW2UDJ2kWJLAqQH26eqx2-r9Xb0_qE_hfwu9WIj8"
-CREDENTIALS_FILE = r"C:\Users\BST-Desktop-051\Downloads\PY\python-spreadsheet-409212-3df25e0dc166.json"
 
 # 센터별 원본 컬럼 매핑
 CENTER_COL = {
@@ -26,70 +25,56 @@ CENTER_COL = {
     "AcrossBUS": "acrossb_available_stock",
 }
 
-def get_google_credentials():
-    """Google Drive API 인증 정보 로드"""
-    try:
-        if not os.path.exists(CREDENTIALS_FILE):
-            st.warning(f"Google Sheets 인증 파일이 없습니다: {CREDENTIALS_FILE}")
-            return None
-            
-        with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        st.error(f"Google 인증 파일 로드 실패: {e}")
-        return None
-
 def get_access_token():
-    """Google Drive API 액세스 토큰 획득"""
+    """
+    Streamlit Cloud: st.secrets["gcp_service_account"] 로 서비스계정 JSON을 읽어
+    Google OAuth2 액세스 토큰 발급
+    """
     try:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
-        
-        if not os.path.exists(CREDENTIALS_FILE):
-            st.warning("Google Sheets 인증 파일이 없어서 Google Sheets 기능을 사용할 수 없습니다.")
-            return None
-            
-        credentials = service_account.Credentials.from_service_account_file(
-            CREDENTIALS_FILE,
-            scopes=['https://www.googleapis.com/auth/drive.readonly']
+
+        # secrets.toml 에 gcp_service_account 블록 그대로 넣기
+        sa_info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=['https://www.googleapis.com/auth/drive.readonly',
+                    'https://www.googleapis.com/auth/spreadsheets.readonly']
         )
-        
-        # 토큰 새로고침
-        credentials.refresh(Request())
-        return credentials.token
-        
-    except ImportError:
-        st.error("google-auth 라이브러리가 설치되지 않았습니다. 'pip install google-auth'를 실행해주세요.")
+        creds.refresh(Request())
+        return creds.token
+    except KeyError:
+        st.error("Streamlit Secrets에 'gcp_service_account'가 없습니다.")
         return None
     except Exception as e:
         st.error(f"인증 처리 실패: {e}")
         return None
 
 def gs_csv(sheet_name: str) -> pd.DataFrame:
-    """Google Drive API를 사용하여 시트 데이터 로드"""
-    access_token = get_access_token()
-    if not access_token:
+    """
+    Google Sheets API로 시트 로드.
+    - valueRenderOption=UNFORMATTED_VALUE : 숫자/날짜를 원시값으로
+    - dateTimeRenderOption=FORMATTED_STRING : 날짜는 문자열(파싱은 우리가)
+    """
+    token = get_access_token()
+    if not token:
         return pd.DataFrame()
-    
     try:
-        # Google Sheets API를 사용하여 시트 데이터 가져오기
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{GSHEET_ID}/values/{sheet_name}"
-        headers = {'Authorization': f'Bearer {access_token}'}
-        
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            values = data.get('values', [])
-            
-            if not values:
-                return pd.DataFrame()
-            
-            # 첫 번째 행을 컬럼명으로 사용
-            df = pd.DataFrame(values[1:], columns=values[0])
-            return df
-        else:
-            st.error(f"시트 데이터 로드 실패: {response.text}")
+        url = (
+            f"https://sheets.googleapis.com/v4/spreadsheets/{GSHEET_ID}"
+            f"/values/{quote(sheet_name)}"
+            f"?valueRenderOption=UNFORMATTED_VALUE"
+            f"&dateTimeRenderOption=FORMATTED_STRING"
+            f"&majorDimension=ROWS"
+        )
+        r = requests.get(url, headers={'Authorization': f'Bearer {token}'})
+        r.raise_for_status()
+        data = r.json()
+        vals = data.get("values", [])
+        if not vals:
             return pd.DataFrame()
+        df = pd.DataFrame(vals[1:], columns=vals[0])  # 1행을 헤더로
+        return df
     except Exception as e:
         st.error(f"시트 로드 중 오류: {e}")
         return pd.DataFrame()
