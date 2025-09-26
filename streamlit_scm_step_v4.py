@@ -28,6 +28,11 @@ CENTER_COL = {
 def get_google_credentials():
     """Google Drive API 인증 정보 로드"""
     try:
+        import os
+        if not os.path.exists(CREDENTIALS_FILE):
+            st.warning(f"Google Sheets 인증 파일이 없습니다: {CREDENTIALS_FILE}")
+            return None
+            
         with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
@@ -40,6 +45,10 @@ def get_access_token():
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
         
+        if not os.path.exists(CREDENTIALS_FILE):
+            st.warning("Google Sheets 인증 파일이 없어서 Google Sheets 기능을 사용할 수 없습니다.")
+            return None
+            
         credentials = service_account.Credentials.from_service_account_file(
             CREDENTIALS_FILE,
             scopes=['https://www.googleapis.com/auth/drive.readonly']
