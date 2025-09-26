@@ -36,6 +36,11 @@ def get_access_token():
 
         # secrets.toml 에 gcp_service_account 블록 그대로 넣기
         sa_info = st.secrets["gcp_service_account"]
+        
+        # private_key의 \n을 실제 줄바꿈으로 변환
+        if 'private_key' in sa_info:
+            sa_info['private_key'] = sa_info['private_key'].replace('\\n', '\n')
+        
         creds = service_account.Credentials.from_service_account_info(
             sa_info,
             scopes=['https://www.googleapis.com/auth/drive.readonly',
