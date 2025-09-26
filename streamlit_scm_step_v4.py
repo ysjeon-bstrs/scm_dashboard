@@ -9,6 +9,7 @@ from io import BytesIO
 from typing import Dict, List, Optional, Tuple
 import json
 import requests
+import os
 
 # === Google Drive API 로더 ===
 GSHEET_ID = "1RYjKW2UDJ2kWJLAqQH26eqx2-r9Xb0_qE_hfwu9WIj8"
@@ -28,7 +29,6 @@ CENTER_COL = {
 def get_google_credentials():
     """Google Drive API 인증 정보 로드"""
     try:
-        import os
         if not os.path.exists(CREDENTIALS_FILE):
             st.warning(f"Google Sheets 인증 파일이 없습니다: {CREDENTIALS_FILE}")
             return None
@@ -283,18 +283,57 @@ def load_from_excel(file):
 
 def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
     """정제 스냅샷 시트 → 필요한 타입 보정"""
-    # 컬럼명 매핑 (복사 없이)
-    cols = {c.strip(): c for c in df_ref.columns}
-    req = ["date","center","resource_code","stock_qty"]
-    miss = [c for c in req if c not in cols]
-    if miss:
-        st.error(f"'snap_정제' 시트에 누락된 컬럼: {miss}")
+    # 컬럼명 매핑 (대소문자 무시, 공백 제거)
+    cols = {c.strip().lower(): c for c in df_ref.columns}
+    
+    # 유연한 컬럼명 매핑
+    date_col = None
+    center_col = None
+    resource_col = None
+    stock_col = None
+    
+    # date 컬럼 찾기
+    for key in ["date", "날짜", "snapshot_date", "스냅샷일"]:
+        if key in cols:
+            date_col = cols[key]
+            break
+    
+    # center 컬럼 찾기
+    for key in ["center", "센터", "창고", "warehouse"]:
+        if key in cols:
+            center_col = cols[key]
+            break
+    
+    # resource_code 컬럼 찾기
+    for key in ["resource_code", "sku", "상품코드", "product_code"]:
+        if key in cols:
+            resource_col = cols[key]
+            break
+    
+    # stock_qty 컬럼 찾기
+    for key in ["stock_qty", "qty", "수량", "재고", "quantity"]:
+        if key in cols:
+            stock_col = cols[key]
+            break
+    
+    # 누락된 컬럼 확인
+    missing = []
+    if not date_col: missing.append("date")
+    if not center_col: missing.append("center")
+    if not resource_col: missing.append("resource_code")
+    if not stock_col: missing.append("stock_qty")
+    
+    if missing:
+        st.error(f"'snap_정제' 시트에 누락된 컬럼: {missing}")
+        st.write("실제 컬럼명:", list(df_ref.columns))
+        st.write("컬럼명 매핑:", cols)
         st.stop()
+    
     # 이름 정규화 및 데이터 타입 변환 (한 번에 처리)
-    result = df_ref.rename(columns={cols["date"]:"date",
-                                   cols["center"]:"center",
-                                   cols["resource_code"]:"resource_code",
-                                   cols["stock_qty"]:"stock_qty"})
+    result = df_ref.rename(columns={date_col:"date",
+                                   center_col:"center",
+                                   resource_col:"resource_code",
+                                   stock_col:"stock_qty"})
     
     # 벡터화된 연산으로 성능 향상
     result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
