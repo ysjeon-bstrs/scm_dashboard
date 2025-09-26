@@ -26,60 +26,56 @@ CENTER_COL = {
 }
 
 def get_access_token():
-    """
-    Streamlit Cloud: st.secrets["gcp_service_account"] 로 서비스계정 JSON을 읽어
-    Google OAuth2 액세스 토큰 발급
-    """
+    """Google Sheets API 액세스 토큰 획득"""
     try:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
+        
+        sa_info = dict(st.secrets["gcp_service_account"])  # secrets.toml의 블록
+        # ★ 핵심: \n → 실제 줄바꿈으로 복원
+        if isinstance(sa_info.get("private_key"), str):
+            sa_info["private_key"] = sa_info["private_key"].replace("\\n", "\n")
 
-        # secrets.toml 에 gcp_service_account 블록 그대로 넣기
-        sa_info = dict(st.secrets["gcp_service_account"])
-        
-        # private_key의 \n을 실제 줄바꿈으로 변환
-        if 'private_key' in sa_info:
-            sa_info['private_key'] = sa_info['private_key'].replace('\\n', '\n')
-        
         creds = service_account.Credentials.from_service_account_info(
             sa_info,
-            scopes=['https://www.googleapis.com/auth/drive.readonly',
-                    'https://www.googleapis.com/auth/spreadsheets.readonly']
+            scopes=[
+                "https://www.googleapis.com/auth/drive.readonly",
+                "https://www.googleapis.com/auth/spreadsheets.readonly",
+            ],
         )
         creds.refresh(Request())
         return creds.token
     except KeyError:
-        st.error("Streamlit Secrets에 'gcp_service_account'가 없습니다.")
-        return None
+        st.error("Streamlit Secrets에 [gcp_service_account]가 없습니다.")
     except Exception as e:
         st.error(f"인증 처리 실패: {e}")
-        return None
+    return None
 
 def gs_csv(sheet_name: str) -> pd.DataFrame:
-    """
-    Google Sheets API로 시트 로드.
-    - valueRenderOption=UNFORMATTED_VALUE : 숫자/날짜를 원시값으로
-    - dateTimeRenderOption=FORMATTED_STRING : 날짜는 문자열(파싱은 우리가)
-    """
-    token = get_access_token()
-    if not token:
+    """Google Sheets API를 사용하여 시트 데이터 로드"""
+    access_token = get_access_token()
+    if not access_token:
         return pd.DataFrame()
+    
     try:
-        url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{GSHEET_ID}"
-            f"/values/{quote(sheet_name)}"
-            f"?valueRenderOption=UNFORMATTED_VALUE"
-            f"&dateTimeRenderOption=FORMATTED_STRING"
-            f"&majorDimension=ROWS"
-        )
-        r = requests.get(url, headers={'Authorization': f'Bearer {token}'})
-        r.raise_for_status()
-        data = r.json()
-        vals = data.get("values", [])
-        if not vals:
+        # Google Sheets API를 사용하여 시트 데이터 가져오기
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{GSHEET_ID}/values/{quote(sheet_name)}"
+        headers = {'Authorization': f'Bearer {access_token}'}
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            values = data.get('values', [])
+            
+            if not values:
+                return pd.DataFrame()
+            
+            # 첫 번째 행을 컬럼명으로 사용
+            df = pd.DataFrame(values[1:], columns=values[0])
+            return df
+        else:
+            st.error(f"시트 데이터 로드 실패: {response.text}")
             return pd.DataFrame()
-        df = pd.DataFrame(vals[1:], columns=vals[0])  # 1행을 헤더로
-        return df
     except Exception as e:
         st.error(f"시트 로드 중 오류: {e}")
         return pd.DataFrame()
