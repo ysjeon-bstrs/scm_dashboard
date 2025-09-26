@@ -35,7 +35,7 @@ def get_access_token():
         from google.auth.transport.requests import Request
 
         # secrets.toml 에 gcp_service_account 블록 그대로 넣기
-        sa_info = st.secrets["gcp_service_account"]
+        sa_info = dict(st.secrets["gcp_service_account"])
         
         # private_key의 \n을 실제 줄바꿈으로 변환
         if 'private_key' in sa_info:
