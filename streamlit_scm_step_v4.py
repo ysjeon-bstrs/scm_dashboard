@@ -595,7 +595,7 @@ def pivot_inventory_cost_from_raw(snap_raw: pd.DataFrame,
     return base
 
 # ==================== Tabs for inputs ====================
-tab1, tab2, tab3 = st.tabs(["엑셀 업로드", "CSV 수동 업로드", "Google Sheets(공개)"])
+tab1, tab2 = st.tabs(["엑셀 업로드", "Google Sheets"])
 
 with tab1:
     xfile = st.file_uploader("엑셀 업로드 (.xlsx)", type=["xlsx"], key="excel")
@@ -616,45 +616,31 @@ with tab1:
             st.warning(f"WIP 불러오기 실패: {e}")
 
 with tab2:
-    cs_snap = st.file_uploader("정제 스냅샷 CSV 업로드 (snap_정제: date,center,resource_code,stock_qty)", type=["csv"], key="snapcsv")
-    cs_move = st.file_uploader("SCM_통합.csv 업로드", type=["csv"], key="movecsv")
-    if cs_snap is not None and cs_move is not None:
-        st.session_state["_data_source"] = "csv"
-        st.session_state["_snapshot_raw_cache"] = None  # CSV 모드에서는 따로 제공하지 않음
-
-        df_ref = pd.read_csv(cs_snap)
-        move_raw = pd.read_csv(cs_move)
-
-        moves = normalize_moves(move_raw)
-        sr = df_ref.rename(columns={
-            {c.strip().lower(): c for c in df_ref.columns}.get("date","date"): "date",
-            {c.strip().lower(): c for c in df_ref.columns}.get("center","center"): "center",
-            {c.strip().lower(): c for c in df_ref.columns}.get("resource_code","resource_code"): "resource_code",
-            {c.strip().lower(): c for c in df_ref.columns}.get("stock_qty","stock_qty"): "stock_qty",
-        }).copy()
-
-        sr["date"] = pd.to_datetime(sr["date"], errors="coerce").dt.normalize()
-        sr["center"] = sr["center"].astype(str)
-        sr["resource_code"] = sr["resource_code"].astype(str)
-        sr["stock_qty"] = pd.to_numeric(sr["stock_qty"], errors="coerce").fillna(0).astype(int)
-        snap_long = sr[["date","center","resource_code","stock_qty"]].dropna()
-
-with tab3:
     st.info("이 탭은 공개(Anyone with the link)로 설정된 시트를 gviz로 읽습니다. 회사 계정 문서면 빈 표가 나올 수 있습니다.")
     if st.button("Google Sheets에서 데이터 로드", type="primary"):
-        df_move, df_ref, df_incoming = load_from_gsheet_public()
-        st.session_state["_data_source"] = "gsheet"
-        st.session_state["_snapshot_raw_cache"] = None  # 필요 시 load_snapshot_raw()가 gviz로 읽음
-
-        moves_raw = normalize_moves(df_move)
-        snap_long = normalize_refined_snapshot(df_ref)
         try:
-            wip_df = load_wip_from_incoming(df_incoming)
-            moves = merge_wip_as_moves(moves_raw, wip_df)
-            st.success(f"Google Sheets 로드 완료! WIP {len(wip_df)}건 반영" if wip_df is not None and not wip_df.empty else "Google Sheets 로드 완료! WIP 없음")
+            df_move, df_ref, df_incoming = load_from_gsheet_public()
+            
+            # 데이터가 비어있는지 확인
+            if df_move.empty or df_ref.empty:
+                st.error("❌ Google Sheets에서 데이터를 불러올 수 없습니다. 시트가 공개(Anyone with the link)로 설정되어 있는지 확인해주세요.")
+                st.stop()
+            
+            st.session_state["_data_source"] = "gsheet"
+            st.session_state["_snapshot_raw_cache"] = None  # 필요 시 load_snapshot_raw()가 gviz로 읽음
+
+            moves_raw = normalize_moves(df_move)
+            snap_long = normalize_refined_snapshot(df_ref)
+            try:
+                wip_df = load_wip_from_incoming(df_incoming)
+                moves = merge_wip_as_moves(moves_raw, wip_df)
+                st.success(f"✅ Google Sheets 로드 완료! WIP {len(wip_df)}건 반영" if wip_df is not None and not wip_df.empty else "✅ Google Sheets 로드 완료! WIP 없음")
+            except Exception as e:
+                moves = moves_raw
+                st.warning(f"⚠️ WIP 불러오기 실패: {e}")
         except Exception as e:
-            moves = moves_raw
-            st.warning(f"WIP 불러오기 실패: {e}")
+            st.error(f"❌ Google Sheets 데이터 로드 중 오류가 발생했습니다: {e}")
+            st.info("💡 해결 방법:\n- 시트가 공개(Anyone with the link)로 설정되어 있는지 확인\n- 시트명이 정확한지 확인 (SCM_통합, snap_정제)\n- 인터넷 연결 상태 확인")
 
 # 초기 자동 로드(없을 때만): 공개 gsheet 시도 → 실패하면 안내
 if "snap_long" not in locals():
@@ -972,7 +958,11 @@ pivot["총합"] = pivot.sum(axis=1)
 
 col1, col2 = st.columns([2,1])
 with col1:
-    q = st.text_input("SKU 필터(포함 검색)", "", key="sku_filter_text")
+    q = st.text_input(
+        "SKU 필터(포함 검색) — 검색 시 해당 SKU의 센터별 제조번호(LOT) 확인",
+        "",
+        key="sku_filter_text"
+    )
 with col2:
     sort_by = st.selectbox("정렬 기준", ["총합"] + list(pivot.columns.drop("총합")), index=0)
 
