@@ -1019,11 +1019,11 @@ window_start = start_dt
 window_end   = end_dt
 
 # 1) 운송(비 WIP) — 아직 입고완료되지 않은 건만
-arr_transport = moves_typed[
-    (moves_typed["carrier_mode"] != "WIP") &
-    (moves_typed["to_center"].isin(centers_sel)) &
-    (moves_typed["resource_code"].isin(skus_sel)) &
-    (moves_typed["inbound_date"].isna())                    # ✅ 입고완료 제외
+arr_transport = mv[
+    (mv["carrier_mode"] != "WIP") &
+    (mv["to_center"].isin(centers_sel)) &
+    (mv["resource_code"].isin(skus_sel)) &
+    (mv["inbound_date"].isna())                    # ✅ 입고완료 제외
 ].copy()
 
 # 도착(예정)일: arrival_date(= ETA/도착일) 우선, 없으면 onboard_date 보조
@@ -1037,13 +1037,13 @@ arr_transport = arr_transport[
 # 2) WIP — 태광KR일 때만, wip_ready(event_date) 기준
 arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
-    arr_wip = moves_typed[
-        (moves_typed["carrier_mode"] == "WIP") &
-        (moves_typed["to_center"] == "태광KR") &
-        (moves_typed["resource_code"].isin(skus_sel)) &
-        (moves_typed["event_date"].notna()) &
-        (moves_typed["event_date"] >= window_start) &
-        (moves_typed["event_date"] <= window_end)
+    arr_wip = mv[
+        (mv["carrier_mode"] == "WIP") &
+        (mv["to_center"] == "태광KR") &
+        (mv["resource_code"].isin(skus_sel)) &
+        (mv["event_date"].notna()) &
+        (mv["event_date"] >= window_start) &
+        (mv["event_date"] <= window_end)
     ].copy()
     arr_wip["display_date"] = arr_wip["event_date"]
 
