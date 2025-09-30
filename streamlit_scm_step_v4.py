@@ -1051,8 +1051,8 @@ if "태광KR" in centers_sel:
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 
 # 품명 붙이기 (있을 때만)
-if name_map:
-    upcoming["resource_name"] = upcoming["resource_code"].map(name_map).fillna("")
+if _name_map:
+    upcoming["resource_name"] = upcoming["resource_code"].map(_name_map).fillna("")
 
 if upcoming.empty:
     st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
@@ -1098,8 +1098,8 @@ if hide_zero:
 view = view.sort_values(by=sort_by, ascending=False)
 
 base_df = view.reset_index().rename(columns={"resource_code":"SKU"})
-if name_map:
-    base_df.insert(1, "품명", base_df["SKU"].map(name_map).fillna(""))
+if _name_map:
+    base_df.insert(1, "품명", base_df["SKU"].map(_name_map).fillna(""))
 
 if show_cost:
     snap_raw_df = load_snapshot_raw()
