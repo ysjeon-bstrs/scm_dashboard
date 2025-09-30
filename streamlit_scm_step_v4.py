@@ -72,81 +72,61 @@ def _coalesce_columns(df: pd.DataFrame, candidates: List, parse_date: bool = Fal
 # -------------------- Google Sheets (API authentication) loader --------------------
 @st.cache_data(ttl=300)
 def load_from_gsheet_api():
-    """
-    Google Sheets API를 사용하여 인증된 방식으로 데이터를 가져옵니다.
-    Streamlit Cloud secrets에서 인증 정보를 읽습니다.
-    """
+    import json
+    from google.oauth2.service_account import Credentials
+    import gspread
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+
+    # -- secrets 3형식 지원 --
     try:
-        # Streamlit secrets에서 인증 정보 로드
-        import json
-        
-        # 인증 범위 설정
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
-            "https://www.googleapis.com/auth/drive.readonly"
-        ]
-        
-        # Streamlit secrets에서 credentials 정보 가져오기
-        try:
-            # secrets에서 credentials 가져오기
-            creds = st.secrets["google_sheets"]["credentials"]
-            
-            # AttrDict를 일반 딕셔너리로 변환
-            if hasattr(creds, 'to_dict'):
-                credentials_info = creds.to_dict()
-            elif isinstance(creds, dict):
-                credentials_info = dict(creds)
-            else:
-                # 문자열인 경우 JSON 파싱
-                credentials_info = json.loads(str(creds))
-            
-            credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
-        except Exception as e:
-            # Streamlit Cloud에서는 secrets 설정이 필요합니다
-            st.error(f"Google Sheets API 인증 실패: {e}")
-            st.error("Streamlit Cloud에서는 secrets에 Google Sheets API 키를 설정해주세요.")
-            st.error("secrets 형식: [google_sheets] credentials = {JSON 딕셔너리}")
-            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        
-        gc = gspread.authorize(credentials)
-        
-        # 스프레드시트 열기
-        spreadsheet = gc.open_by_key(GSHEET_ID)
-        
-        # 각 시트에서 데이터 가져오기
-        df_move = pd.DataFrame()
-        df_ref = pd.DataFrame()
-        df_incoming = pd.DataFrame()
-        
-        # SCM_통합 시트
-        try:
-            worksheet = spreadsheet.worksheet("SCM_통합")
-            data = worksheet.get_all_records()
-            df_move = pd.DataFrame(data)
-        except Exception as e:
-            st.warning(f"SCM_통합 시트를 읽을 수 없습니다: {e}")
-        
-        # snap_정제 시트
-        try:
-            worksheet = spreadsheet.worksheet("snap_정제")
-            data = worksheet.get_all_records()
-            df_ref = pd.DataFrame(data)
-        except Exception as e:
-            st.warning(f"snap_정제 시트를 읽을 수 없습니다: {e}")
-        
-        # 입고예정내역 시트
-        try:
-            worksheet = spreadsheet.worksheet("입고예정내역")
-            data = worksheet.get_all_records()
-            df_incoming = pd.DataFrame(data)
-        except Exception as e:
-            st.warning(f"입고예정내역 시트를 읽을 수 없습니다: {e}")
-        
-        return df_move, df_ref, df_incoming
-        
+        gs = st.secrets["google_sheets"]
     except Exception as e:
-        st.error(f"Google Sheets API 연결 실패: {e}")
+        st.error("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    creds_obj = gs.get("credentials", None)
+    creds_json = gs.get("credentials_json", None)
+
+    if creds_obj is not None:
+        # 중첩/인라인 테이블
+        if isinstance(creds_obj, dict):
+            credentials_info = dict(creds_obj)
+        else:
+            # Streamlit Secrets 객체 → dict
+            credentials_info = {k: creds_obj[k] for k in creds_obj.keys()}
+    elif creds_json:
+        # 멀티라인 JSON 문자열
+        credentials_info = json.loads(str(creds_json))
+    else:
+        st.error("Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # 개행 복구(인라인 테이블 대비)
+    if "private_key" in credentials_info:
+        credentials_info["private_key"] = credentials_info["private_key"].replace("\\n", "\n").strip()
+
+    try:
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
+        gc = gspread.authorize(credentials)
+        ss = gc.open_by_key(GSHEET_ID)
+    except Exception as e:
+        st.error(f"Google Sheets API 인증 실패: {e}")
+        st.error("secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # 시트 읽기
+    def _read(name):
+        try:
+            return pd.DataFrame(ss.worksheet(name).get_all_records())
+        except Exception as e:
+            st.warning(f"{name} 시트를 읽을 수 없습니다: {e}")
+            return pd.DataFrame()
+
+    return _read("SCM_통합"), _read("snap_정제"), _read("입고예정내역")
 
 # -------------------- Loaders --------------------
 @st.cache_data(ttl=300)
