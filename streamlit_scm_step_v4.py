@@ -88,13 +88,17 @@ def load_from_gsheet_api():
         
         # Streamlit secrets에서 credentials 정보 가져오기
         try:
-            # secrets에서 직접 딕셔너리로 접근 시도
-            if isinstance(st.secrets["google_sheets"]["credentials"], dict):
-                credentials_info = st.secrets["google_sheets"]["credentials"]
+            # secrets에서 credentials 가져오기
+            creds = st.secrets["google_sheets"]["credentials"]
+            
+            # AttrDict를 일반 딕셔너리로 변환
+            if hasattr(creds, 'to_dict'):
+                credentials_info = creds.to_dict()
+            elif isinstance(creds, dict):
+                credentials_info = dict(creds)
             else:
                 # 문자열인 경우 JSON 파싱
-                credentials_str = st.secrets["google_sheets"]["credentials"]
-                credentials_info = json.loads(credentials_str)
+                credentials_info = json.loads(str(creds))
             
             credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
         except Exception as e:
