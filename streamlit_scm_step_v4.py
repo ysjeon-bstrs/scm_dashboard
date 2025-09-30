@@ -88,14 +88,15 @@ def load_from_gsheet_api():
         
         # Streamlit secrets에서 credentials 정보 가져오기
         try:
-            # secrets에서 직접 딕셔너리로 가져오기 (JSON 파싱 불필요)
-            credentials_info = st.secrets["google_sheets"]["credentials"]
+            # secrets에서 JSON 문자열을 가져와서 파싱
+            credentials_str = st.secrets["google_sheets"]["credentials"]
+            credentials_info = json.loads(credentials_str)
             credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
         except Exception as e:
             # Streamlit Cloud에서는 secrets 설정이 필요합니다
             st.error(f"Google Sheets API 인증 실패: {e}")
             st.error("Streamlit Cloud에서는 secrets에 Google Sheets API 키를 설정해주세요.")
-            st.error("secrets 형식: [google_sheets] credentials = {JSON 내용}")
+            st.error("secrets 형식: [google_sheets] credentials = '''{JSON 내용}'''")
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
         gc = gspread.authorize(credentials)
