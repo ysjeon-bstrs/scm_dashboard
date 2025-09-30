@@ -952,76 +952,52 @@ else:
                  f"prod{int(show_prod)}|tran{int(show_transit)}")
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
-# -------------------- Upcoming Arrivals --------------------
+# -------------------- Upcoming Arrivals (fixed) --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 window_start = start_dt
 window_end   = end_dt
 
-arr_transport_conditions = [
-    (moves_typed["carrier_mode"] != "WIP"),
-    (moves_typed["to_center"].isin(centers_sel)),
-    (moves_typed["resource_code"].isin(skus_sel))
+# 1) 운송(비 WIP) — 아직 입고완료되지 않은 건만
+arr_transport = moves_typed[
+    (moves_typed["carrier_mode"] != "WIP") &
+    (moves_typed["to_center"].isin(centers_sel)) &
+    (moves_typed["resource_code"].isin(skus_sel)) &
+    (moves_typed["inbound_date"].isna())                    # ✅ 입고완료 제외
+].copy()
+
+# 도착(예정)일: arrival_date(= ETA/도착일) 우선, 없으면 onboard_date 보조
+arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
+arr_transport = arr_transport[arr_transport["display_date"].notna()]
+arr_transport = arr_transport[
+    (arr_transport["display_date"] >= window_start) &
+    (arr_transport["display_date"] <= window_end)
 ]
 
-# 날짜 조건 (event_date → arrival_date → eta_date)
-date_conditions = [
-    (moves_typed["event_date"].notna()) & (moves_typed["event_date"] >= window_start) & (moves_typed["event_date"] <= window_end)
-]
-if "arrival_date" in moves_typed.columns:
-    date_conditions.append(
-        (moves_typed["event_date"].isna()) & (moves_typed["arrival_date"].notna()) &
-        (moves_typed["arrival_date"] >= window_start) & (moves_typed["arrival_date"] <= window_end)
-    )
-if "eta_date" in moves_typed.columns:
-    arrival_isna = moves_typed["arrival_date"].isna() if "arrival_date" in moves_typed.columns else True
-    date_conditions.append(
-        (moves_typed["event_date"].isna()) & arrival_isna & (moves_typed["eta_date"].notna()) &
-        (moves_typed["eta_date"] >= window_start) & (moves_typed["eta_date"] <= window_end)
-    )
-
-date_condition = date_conditions[0]
-for cond in date_conditions[1:]:
-    date_condition = date_condition | cond
-arr_transport_conditions.append(date_condition)
-
-arr_transport = moves_typed[arr_transport_conditions[0]]
-for cond in arr_transport_conditions[1:]:
-    arr_transport = arr_transport[cond]
-
+# 2) WIP — 태광KR일 때만, wip_ready(event_date) 기준
 arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
     arr_wip = moves_typed[
-        (moves_typed["event_date"].notna()) &
-        (moves_typed["event_date"] >= window_start) & (moves_typed["event_date"] <= window_end) &
         (moves_typed["carrier_mode"] == "WIP") &
         (moves_typed["to_center"] == "태광KR") &
-        (moves_typed["resource_code"].isin(skus_sel))
-    ]
+        (moves_typed["resource_code"].isin(skus_sel)) &
+        (moves_typed["event_date"].notna()) &
+        (moves_typed["event_date"] >= window_start) &
+        (moves_typed["event_date"] <= window_end)
+    ].copy()
+    arr_wip["display_date"] = arr_wip["event_date"]
 
+# 3) 병합 + 표 렌더
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
-
-if not upcoming.empty:
-    st.info(f"📊 총 {len(upcoming)}건의 입고 예정 내역이 있습니다.")
-else:
-    st.info("📊 선택된 조건에 해당하는 입고 예정 내역이 없습니다.")
-
 if upcoming.empty:
     st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
 else:
-    display_date = upcoming["event_date"]
-    if "arrival_date" in upcoming.columns:
-        display_date = display_date.fillna(upcoming["arrival_date"])
-    if "eta_date" in upcoming.columns:
-        display_date = display_date.fillna(upcoming["eta_date"])
-    upcoming["display_date"] = pd.to_datetime(display_date)
-    upcoming["days_to_arrival"] = (upcoming["display_date"] - today).dt.days
+    upcoming["days_to_arrival"] = (upcoming["display_date"].dt.normalize() - today).dt.days
     upcoming = upcoming.sort_values(["display_date","to_center","resource_code","qty_ea"],
-                                    ascending=[True,True,True,False])
-    cols = ["display_date","days_to_arrival","to_center","resource_code","qty_ea","carrier_mode","onboard_date","lot"]
+                                    ascending=[True, True, True, False])
+    cols = ["display_date","days_to_arrival","to_center","resource_code","qty_ea",
+            "carrier_mode","onboard_date","lot"]
     cols = [c for c in cols if c in upcoming.columns]
     st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
-    
-    # ✅ 안내 문구 추가
     st.caption("※ days_to_arrival가 음수(–)로 보이면: 화물은 '도착'했으나 인바운드(입고완료) 등록 전 상태입니다.")
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
