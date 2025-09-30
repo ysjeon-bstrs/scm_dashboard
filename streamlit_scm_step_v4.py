@@ -91,9 +91,10 @@ def load_from_gsheet_api():
             credentials_info = json.loads(st.secrets["google_sheets"]["credentials"])
             credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
         except Exception as e:
-            # secrets가 없으면 로컬 파일 시도 (개발 환경용)
-            credentials_file = "python-spreadsheet-409212-3df25e0dc166.json"
-            credentials = Credentials.from_service_account_file(credentials_file, scopes=scopes)
+            # Streamlit Cloud에서는 secrets 설정이 필요합니다
+            st.error(f"Google Sheets API 인증 실패: {e}")
+            st.error("Streamlit Cloud에서는 secrets에 Google Sheets API 키를 설정해주세요.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
         gc = gspread.authorize(credentials)
         
