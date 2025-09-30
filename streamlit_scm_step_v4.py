@@ -446,15 +446,20 @@ def apply_consumption_with_events(
     out["stock_qty"] = out["stock_qty"].round().clip(lower=0).astype(int)
     return out
 
+
 # -------------------- Timeline --------------------
 def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame, 
                    centers_sel: List[str], skus_sel: List[str],
                    start_dt: pd.Timestamp, end_dt: pd.Timestamp, 
-                   horizon_days: int = 0, today: Optional[pd.Timestamp] = None) -> pd.DataFrame:
+                   horizon_days: int = 0, today: Optional[pd.Timestamp] = None,
+                   lag_days: int = 7) -> pd.DataFrame:
     if today is None:
         today = pd.Timestamp.today().normalize()
     horizon_end = end_dt + pd.Timedelta(days=horizon_days)
     full_dates = pd.date_range(start_dt, horizon_end, freq="D")
+
+    # 이동건 복사
+    mv_all = moves.copy()
 
     base = snap_long[
         snap_long["center"].isin(centers_sel) &
@@ -482,8 +487,9 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
         ts = ts.sort_values("date")
         ts["stock_qty"] = ts["stock_qty"].ffill()
 
-        mv = moves[moves["resource_code"] == sku].copy()
+        mv = mv_all[mv_all["resource_code"] == sku].copy()
 
+        # 출고(-) 이벤트
         eff_minus = (
             mv[(mv["from_center"].astype(str) == str(ct)) &
                (mv["onboard_date"].notna()) &
@@ -493,14 +499,39 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
         )
         eff_minus["delta"] *= -1
 
-        # 입고(+) 이벤트 (inbound_date만 인정 - arrival은 미반영)
-        eff_plus = (
-            mv[(mv["to_center"].astype(str) == str(ct)) &
-               (mv["inbound_date"].notna()) &
-               (mv["inbound_date"] > last_dt)]
-            .groupby("inbound_date", as_index=False)["qty_ea"].sum()
-            .rename(columns={"inbound_date":"date","qty_ea":"delta"})
-        )
+        # 입고(+) 이벤트 (예측 입고일 계산)
+        mv_center = mv[(mv["to_center"].astype(str) == str(ct))].copy()
+        if not mv_center.empty:
+            # 예측 입고일 계산 (이동중 종료일과 동일한 로직)
+            pred_inbound = pd.Series(pd.NaT, index=mv_center.index, dtype="datetime64[ns]")
+            
+            # 1) inbound가 있으면 그 날 입고
+            mask_inb = mv_center["inbound_date"].notna()
+            pred_inbound.loc[mask_inb] = mv_center.loc[mask_inb, "inbound_date"]
+            
+            # 2) inbound 없고 arrival 있는 경우
+            mask_arr = (~mask_inb) & mv_center["arrival_date"].notna()
+            if mask_arr.any():
+                # 2-1) arrival이 과거면: arrival + N일에 입고(가정)
+                past_arr = mask_arr & (mv_center["arrival_date"] <= today)
+                pred_inbound.loc[past_arr] = (
+                    mv_center.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+                )
+                
+                # 2-2) arrival이 미래면: arrival에 입고
+                fut_arr = mask_arr & (mv_center["arrival_date"] > today)
+                pred_inbound.loc[fut_arr] = mv_center.loc[fut_arr, "arrival_date"]
+            
+            mv_center["pred_inbound_date"] = pred_inbound
+            
+            eff_plus = (
+                mv_center[(mv_center["pred_inbound_date"].notna()) &
+                          (mv_center["pred_inbound_date"] > last_dt)]
+                .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
+                .rename(columns={"pred_inbound_date":"date","qty_ea":"delta"})
+            )
+        else:
+            eff_plus = pd.DataFrame(columns=["date","delta"])
 
         # 벡터화된 처리: 날짜별 증감(Delta) 시리즈로 변경
         eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
@@ -540,7 +571,7 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
             lines[-1] = ts  # 갱신
 
     # 2) In-Transit & WIP 가상 라인
-    moves_str = moves.copy()
+    moves_str = mv_all.copy()
     moves_str["from_center"] = moves_str["from_center"].astype(str)
     moves_str["to_center"] = moves_str["to_center"].astype(str)
     moves_str["carrier_mode"] = moves_str["carrier_mode"].astype(str).str.upper()
@@ -553,38 +584,45 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
     ]
 
     for sku, g in mv_sel.groupby("resource_code"):
-        # --- Non-WIP In-Transit (벡터화 + carry-over) ----
+        # --- Non-WIP In-Transit (벡터화) ----
         g_nonwip = g[g["carrier_mode"] != "WIP"]
         if not g_nonwip.empty:
             g_selected = g_nonwip[g_nonwip["to_center"].isin(centers_sel)]
             if not g_selected.empty:
                 idx = pd.date_range(start_dt, horizon_end, freq="D")
-                today_norm = pd.Timestamp.today().normalize()
+                today_norm = (today or pd.Timestamp.today()).normalize()
 
-                # 유효 종료일: inbound > 미래 arrival > (기타) 오늘+1
+                # 종료일 계산: inbound(있으면) / arrival(미래면) / 그 외 today+1
                 end_eff = pd.Series(pd.NaT, index=g_selected.index, dtype="datetime64[ns]")
+
+                # 1) inbound가 있으면 그 날 종료
                 mask_inb = g_selected["inbound_date"].notna()
                 end_eff.loc[mask_inb] = g_selected.loc[mask_inb, "inbound_date"]
 
-                mask_arr_future = (~mask_inb) & g_selected["arrival_date"].notna() & (g_selected["arrival_date"] > today_norm)
-                end_eff.loc[mask_arr_future] = g_selected.loc[mask_arr_future, "arrival_date"]
+                # 2) inbound 없고 arrival 있는 경우
+                mask_arr = (~mask_inb) & g_selected["arrival_date"].notna()
+                if mask_arr.any():
+                    # 2-1) arrival이 과거면: arrival + N일에 종료(가정)
+                    past_arr = mask_arr & (g_selected["arrival_date"] <= today_norm)
+                    end_eff.loc[past_arr] = (
+                        g_selected.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+                    )
 
+                    # 2-2) arrival이 미래면: arrival에 종료
+                    fut_arr = mask_arr & (g_selected["arrival_date"] > today_norm)
+                    end_eff.loc[fut_arr] = g_selected.loc[fut_arr, "arrival_date"]
+
+                # 3) 그래도 비어있으면: today+1 (화면상 오늘까지만 이동중으로 보이도록)
                 end_eff = end_eff.fillna(min(today_norm + pd.Timedelta(days=1), idx[-1] + pd.Timedelta(days=1)))
 
-                # ① 기간 시작 이전에 출발했고, 시작 시점에도 아직 이동중(= 종료>시작)인 물량 → 초기잔
-                carry_mask = (
-                    g_selected["onboard_date"].notna() &
-                    (g_selected["onboard_date"] < idx[0]) &
-                    (end_eff > idx[0])
-                )
-                carry = int(g_selected.loc[carry_mask, "qty_ea"].sum())
+                # starts/ends 델타 만들어 누적합
+                g_selected_with_end = g_selected.copy()
+                g_selected_with_end["end_date"] = end_eff
 
-                # ② 시작일 이후의 출발 이벤트만 델타로 (이전 출발분은 carry로 처리했으므로 중복 방지)
-                starts = (g_selected[g_selected["onboard_date"] >= idx[0]]
+                starts = (g_selected_with_end
+                          .dropna(subset=["onboard_date"])
                           .groupby("onboard_date")["qty_ea"].sum())
-
-                # ③ 모든 종료 이벤트(마이너스)
-                ends = (g_selected.assign(end_date=end_eff)
+                ends = (g_selected_with_end
                         .groupby("end_date")["qty_ea"].sum() * -1)
 
                 delta = (starts.rename_axis("date").to_frame("delta")
@@ -592,6 +630,14 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
                            .sort_index())
 
                 s = delta.reindex(idx, fill_value=0).cumsum().clip(lower=0)
+
+                # carry(기간 시작 이전 출발해 아직 안 끝난 건) 처리
+                carry_mask = (
+                    g_selected["onboard_date"].notna() &
+                    (g_selected["onboard_date"] < idx[0]) &
+                    (end_eff > idx[0])
+                )
+                carry = int(g_selected.loc[carry_mask, "qty_ea"].sum())
                 if carry:
                     s = (s + carry).clip(lower=0)
 
@@ -850,6 +896,11 @@ show_transit = st.sidebar.checkbox("이동중 표시", value=True)
 use_cons_forecast = st.sidebar.checkbox("추세 기반 재고 예측", value=True)
 lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
 
+# 입고 반영 가정 옵션
+st.sidebar.subheader("입고 반영 가정")
+lag_days = st.sidebar.number_input("입고 반영 리드타임(일) – inbound 미기록 시 arrival+N", 
+                                   min_value=0, max_value=21, value=7, step=1)
+
 with st.sidebar.expander("프로모션 가중치(+%)", expanded=False):
     enable_event = st.checkbox("가중치 적용", value=False)
     ev_start = st.date_input("시작일")
@@ -894,14 +945,40 @@ def _kpi_breakdown_per_sku(snap_long, mv, centers_sel, skus_sel, today):
         (snap_long["resource_code"].astype(str).isin(skus_sel))
     ].groupby("resource_code", as_index=True)["stock_qty"].sum())
 
-    # 이동중: to_center가 선택 센터, 출발함(onboard<=today), 아직 입고 미등록(inbound NaT)
-    it = (mv[
-        (mv["carrier_mode"] != "WIP") &
-        (mv["to_center"].isin(centers_sel)) &
-        (mv["resource_code"].isin(skus_sel)) &
-        (mv["onboard_date"].notna()) &
-        (mv["onboard_date"] <= today) &
-        (mv["inbound_date"].isna())
+    # 이동중: 예측 종료일 기준으로 오늘 이후까지 이동중인 건만
+    mv_kpi = mv.copy()
+    if not mv_kpi.empty:
+        # 예측 종료일 계산
+        pred_end = pd.Series(pd.NaT, index=mv_kpi.index, dtype="datetime64[ns]")
+        
+        # 1) inbound가 있으면 그 날 종료
+        mask_inb = mv_kpi["inbound_date"].notna()
+        pred_end.loc[mask_inb] = mv_kpi.loc[mask_inb, "inbound_date"]
+        
+        # 2) inbound 없고 arrival 있는 경우
+        mask_arr = (~mask_inb) & mv_kpi["arrival_date"].notna()
+        if mask_arr.any():
+            # 2-1) arrival이 과거면: arrival + N일에 종료(가정)
+            past_arr = mask_arr & (mv_kpi["arrival_date"] <= today)
+            pred_end.loc[past_arr] = (
+                mv_kpi.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+            )
+            
+            # 2-2) arrival이 미래면: arrival에 종료
+            fut_arr = mask_arr & (mv_kpi["arrival_date"] > today)
+            pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"]
+        
+        # 3) 그래도 비어있으면: today+1
+        pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
+        mv_kpi["pred_end_date"] = pred_end
+    
+    it = (mv_kpi[
+        (mv_kpi["carrier_mode"] != "WIP") &
+        (mv_kpi["to_center"].isin(centers_sel)) &
+        (mv_kpi["resource_code"].isin(skus_sel)) &
+        (mv_kpi["onboard_date"].notna()) &
+        (mv_kpi["onboard_date"] <= today) &
+        (today < mv_kpi["pred_end_date"])  # 오늘 이후까지 이동중인 건만
     ].groupby("resource_code", as_index=True)["qty_ea"].sum())
 
     # WIP: SKU×날짜별 (onboard +, event -) 누적합을 오늘까지 계산한 잔량
@@ -962,7 +1039,8 @@ st.divider()
 # -------------------- Step Chart --------------------
 st.subheader("계단식 재고 흐름")
 timeline = build_timeline(snap_long, moves, centers_sel, skus_sel,
-                          start_dt, end_dt, horizon_days=proj_days_for_build, today=today)
+                          start_dt, end_dt, horizon_days=proj_days_for_build, today=today,
+                          lag_days=int(lag_days))
 
 if use_cons_forecast and not timeline.empty:
     timeline = apply_consumption_with_events(
@@ -1072,6 +1150,36 @@ if "태광KR" in centers_sel:
 # 3) 병합 + 표 렌더
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 
+# 예상 입고일 추가
+mv_view = mv.copy()
+if not mv_view.empty:
+    # 예측 입고일 계산
+    pred_inbound = pd.Series(pd.NaT, index=mv_view.index, dtype="datetime64[ns]")
+    
+    # 1) inbound가 있으면 그 날 입고
+    mask_inb = mv_view["inbound_date"].notna()
+    pred_inbound.loc[mask_inb] = mv_view.loc[mask_inb, "inbound_date"]
+    
+    # 2) inbound 없고 arrival 있는 경우
+    mask_arr = (~mask_inb) & mv_view["arrival_date"].notna()
+    if mask_arr.any():
+        # 2-1) arrival이 과거면: arrival + N일에 입고(가정)
+        past_arr = mask_arr & (mv_view["arrival_date"] <= today)
+        pred_inbound.loc[past_arr] = (
+            mv_view.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+        )
+        
+        # 2-2) arrival이 미래면: arrival에 입고
+        fut_arr = mask_arr & (mv_view["arrival_date"] > today)
+        pred_inbound.loc[fut_arr] = mv_view.loc[fut_arr, "arrival_date"]
+    
+    mv_view["pred_inbound_date"] = pred_inbound
+
+upcoming = upcoming.merge(
+    mv_view[["resource_code","onboard_date","pred_inbound_date"]],
+    on=["resource_code","onboard_date"], how="left"
+)
+
 # 품명 붙이기 (있을 때만)
 if _name_map:
     upcoming["resource_name"] = upcoming["resource_code"].map(_name_map).fillna("")
@@ -1080,13 +1188,15 @@ if upcoming.empty:
     st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
 else:
     upcoming["days_to_arrival"] = (upcoming["display_date"].dt.normalize() - today).dt.days
+    upcoming["days_to_inbound"] = (upcoming["pred_inbound_date"].dt.normalize() - today).dt.days
     upcoming = upcoming.sort_values(["display_date","to_center","resource_code","qty_ea"],
                                     ascending=[True, True, True, False])
     cols = ["display_date","days_to_arrival","to_center","resource_code","resource_name","qty_ea",
-            "carrier_mode","onboard_date","lot"]
+            "carrier_mode","onboard_date","pred_inbound_date","days_to_inbound","lot"]
     cols = [c for c in cols if c in upcoming.columns]
     st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
     st.caption("※ days_to_arrival가 음수(–)로 보이면: 화물은 '도착'했으나 인바운드(입고완료) 등록 전 상태입니다.")
+    st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
 st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
