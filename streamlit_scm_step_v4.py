@@ -13,8 +13,8 @@ from google.oauth2.service_account import Credentials
 # =========================
 # Global configuration
 # =========================
-st.set_page_config(page_title="글로벌 대시보드 — v4 (clean)", layout="wide")
-st.title("📦 SCM 재고 흐름 대시보드 — v4 (clean)")
+st.set_page_config(page_title="글로벌 대시보드 — v4", layout="wide")
+st.title("📦 SCM 재고 흐름 대시보드 — v4")
 
 # 데이터 소스 상태(excel | csv | gsheet). UI의 입력 탭에서 세팅함
 if "_data_source" not in st.session_state:
@@ -74,10 +74,11 @@ def _coalesce_columns(df: pd.DataFrame, candidates: List, parse_date: bool = Fal
 def load_from_gsheet_api():
     """
     Google Sheets API를 사용하여 인증된 방식으로 데이터를 가져옵니다.
+    Streamlit Cloud secrets에서 인증 정보를 읽습니다.
     """
     try:
-        # 서비스 계정 키 파일 경로
-        credentials_file = "python-spreadsheet-409212-3df25e0dc166.json"
+        # Streamlit secrets에서 인증 정보 로드
+        import json
         
         # 인증 범위 설정
         scopes = [
@@ -85,8 +86,15 @@ def load_from_gsheet_api():
             "https://www.googleapis.com/auth/drive.readonly"
         ]
         
-        # 인증 정보 로드
-        credentials = Credentials.from_service_account_file(credentials_file, scopes=scopes)
+        # Streamlit secrets에서 credentials 정보 가져오기
+        try:
+            credentials_info = json.loads(st.secrets["google_sheets"]["credentials"])
+            credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
+        except Exception as e:
+            # secrets가 없으면 로컬 파일 시도 (개발 환경용)
+            credentials_file = "python-spreadsheet-409212-3df25e0dc166.json"
+            credentials = Credentials.from_service_account_file(credentials_file, scopes=scopes)
+        
         gc = gspread.authorize(credentials)
         
         # 스프레드시트 열기
