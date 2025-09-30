@@ -195,25 +195,39 @@ def load_snapshot_raw():
 
 # -------------------- Normalizers --------------------
 def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
-    cols = {c.strip().lower(): c for c in df_ref.columns}
-    date_col = next((cols[k] for k in ["date","날짜","snapshot_date","스냅샷일"] if k in cols), None)
-    center_col = next((cols[k] for k in ["center","센터","창고","warehouse"] if k in cols), None)
-    resource_col = next((cols[k] for k in ["resource_code","sku","상품코드","product_code"] if k in cols), None)
-    stock_col = next((cols[k] for k in ["stock_qty","qty","수량","재고","quantity"] if k in cols), None)
+    cols = {str(c).strip().lower(): c for c in df_ref.columns}
+
+    # 날짜/센터/코드/수량 기본 컬럼 탐색 (alias 확대)
+    date_col     = next((cols[k] for k in ["date","날짜","snapshot_date","스냅샷일"] if k in cols), None)
+    center_col   = next((cols[k] for k in ["center","센터","창고","warehouse"] if k in cols), None)
+    resource_col = next((cols[k] for k in ["resource_code","resource_cc","sku","상품코드","product_code"] if k in cols), None)
+    stock_col    = next((cols[k] for k in ["stock_qty","qty","수량","재고","quantity"] if k in cols), None)
+
+    # (신규) 품명 컬럼 탐색
+    name_col     = next((cols[k] for k in ["resource_name","품명","상품명","product_name"] if k in cols), None)
 
     missing = [n for n,v in {"date":date_col,"center":center_col,"resource_code":resource_col,"stock_qty":stock_col}.items() if not v]
     if missing:
         st.error(f"'snap_정제' 시트에 누락된 컬럼: {missing}")
         st.stop()
 
-    result = df_ref.rename(columns={date_col: "date",
-                                    center_col:"center",
-                                    resource_col:"resource_code",
-                                    stock_col:"stock_qty"}).copy()
+    result = df_ref.rename(columns={
+        date_col: "date",
+        center_col: "center",
+        resource_col: "resource_code",
+        stock_col: "stock_qty",
+        **({name_col: "resource_name"} if name_col else {})
+    }).copy()
+
     result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
     result["center"] = result["center"].astype(str)
     result["resource_code"] = result["resource_code"].astype(str)
     result["stock_qty"] = pd.to_numeric(result["stock_qty"], errors="coerce").fillna(0).astype(int)
+
+    if "resource_name" in result.columns:
+        # 문자열 정리 (NaN 방지)
+        result["resource_name"] = result["resource_name"].astype(str).str.strip().replace({"nan": "", "None": ""})
+
     return result.dropna(subset=["date","center","resource_code"])
 
 def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
@@ -861,6 +875,15 @@ if not wip_moves.empty:
 else:
     wip_today = 0
 
+# 품명 매핑 (있을 때만)
+name_map = {}
+if "resource_name" in snap_long.columns:
+    name_map = (snap_long[["resource_code","resource_name"]]
+                .dropna()
+                .drop_duplicates(subset=["resource_code"])
+                .set_index("resource_code")["resource_name"]
+                .to_dict())
+
 def _chunk(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i+n]
@@ -868,7 +891,11 @@ def _chunk(lst, n):
 for group in _chunk(skus_sel, 4):
     cols = st.columns(len(group))
     for i, sku in enumerate(group):
-        cols[i].metric(f"{sku} 현재 재고(스냅샷 {latest_dt_str})", f"{sku_totals.get(sku, 0):,}")
+        with cols[i]:
+            pname = name_map.get(sku, "")
+            if pname:
+                st.markdown(f"**{pname}**")  # ↑ 품명 한 줄 위에 굵게
+            st.metric(f"{sku} 현재 재고(스냅샷 {latest_dt_str})", f"{sku_totals.get(sku, 0):,}")
 
 k_it, k_wip = st.columns(2)
 k_it.metric("이동 중 재고", f"{in_transit_total:,}")
@@ -988,13 +1015,18 @@ if "태광KR" in centers_sel:
 
 # 3) 병합 + 표 렌더
 upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
+
+# 품명 붙이기 (있을 때만)
+if name_map:
+    upcoming["resource_name"] = upcoming["resource_code"].map(name_map).fillna("")
+
 if upcoming.empty:
     st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
 else:
     upcoming["days_to_arrival"] = (upcoming["display_date"].dt.normalize() - today).dt.days
     upcoming = upcoming.sort_values(["display_date","to_center","resource_code","qty_ea"],
                                     ascending=[True, True, True, False])
-    cols = ["display_date","days_to_arrival","to_center","resource_code","qty_ea",
+    cols = ["display_date","days_to_arrival","to_center","resource_code","resource_name","qty_ea",
             "carrier_mode","onboard_date","lot"]
     cols = [c for c in cols if c in upcoming.columns]
     st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
@@ -1011,7 +1043,7 @@ pivot["총합"] = pivot.sum(axis=1)
 col1, col2 = st.columns([2,1])
 with col1:
     q = st.text_input(
-        "SKU 필터(포함 검색) — 검색 시 해당 SKU의 센터별 제조번호(LOT) 확인",
+        "SKU 필터 — 품목번호 검색 시 해당 SKU의 센터별 제조번호(LOT) 확인",
         "",
         key="sku_filter_text"
     )
@@ -1031,28 +1063,28 @@ if hide_zero:
     view = view[view["총합"] > 0]
 view = view.sort_values(by=sort_by, ascending=False)
 
+base_df = view.reset_index().rename(columns={"resource_code":"SKU"})
+if name_map:
+    base_df.insert(1, "품명", base_df["SKU"].map(name_map).fillna(""))
+
 if show_cost:
     snap_raw_df = load_snapshot_raw()
     cost_pivot = pivot_inventory_cost_from_raw(snap_raw_df, latest_dt, centers_sel)
     if cost_pivot.empty:
         st.warning("재고자산 계산을 위한 'snapshot_raw' 데이터를 불러올 수 없어 수량만 표시합니다. (엑셀에 'snapshot_raw' 시트가 있으면 자동 사용됩니다)")
-        show_df = view.reset_index().rename(columns={"resource_code":"SKU"})
+        show_df = base_df
     else:
-        cost_cols = [c for c in cost_pivot.columns if c.endswith("_재고자산")]
-        cost_pivot["총 재고자산"] = cost_pivot[cost_cols].sum(axis=1).astype(int)
-        merged = (view.reset_index().rename(columns={"resource_code":"SKU"})
-                    .merge(cost_pivot.rename(columns={"resource_code":"SKU"}), on="SKU", how="left"))
+        merged = base_df.merge(cost_pivot.rename(columns={"resource_code":"SKU"}), on="SKU", how="left")
         cost_cols2 = [c for c in merged.columns if c.endswith("_재고자산")] + (["총 재고자산"] if "총 재고자산" in merged.columns else [])
         if cost_cols2:
             merged[cost_cols2] = merged[cost_cols2].fillna(0).astype(int)
             for col in cost_cols2:
-                merged[col] = merged[col].apply(lambda x: f"{x:,}원" if pd.notna(x) else "0원")
-        qty_center_cols = [c for c in merged.columns if c not in ["SKU","총합"] + cost_cols2]
-        ordered = ["SKU"] + qty_center_cols + (["총합"] if "총합" in merged.columns else []) + cost_cols2
-        merged = merged[ordered]
-        show_df = merged
+                merged[col] = merged[col].apply(lambda x: f"{x:,}원")
+        qty_center_cols = [c for c in merged.columns if c not in ["SKU","품명","총합"] + cost_cols2]
+        ordered = ["SKU"] + (["품명"] if "품명" in merged.columns else []) + qty_center_cols + (["총합"] if "총합" in merged.columns else []) + cost_cols2
+        show_df = merged[ordered]
 else:
-    show_df = view.reset_index().rename(columns={"resource_code":"SKU"})
+    show_df = base_df
 
 # 수량 포맷팅
 qty_cols = [c for c in show_df.columns if c not in ["SKU"] and not c.endswith("_재고자산") and c != "총 재고자산"]
