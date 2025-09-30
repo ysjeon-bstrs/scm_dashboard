@@ -837,69 +837,103 @@ events = [{"start": pd.Timestamp(ev_start).strftime("%Y-%m-%d"),
            "end":   pd.Timestamp(ev_end).strftime("%Y-%m-%d"),
            "uplift": ev_pct/100.0}] if enable_event else []
 
-# -------------------- KPIs --------------------
+# -------------------- KPIs (SKU별 분해) --------------------
 st.subheader("요약 KPI")
-latest_dt = snap_long["date"].max()
-latest_dt_str = pd.to_datetime(latest_dt).strftime("%Y-%m-%d")
 
-latest_rows = snap_long[(snap_long["date"] == latest_dt) & (snap_long["center"].isin(centers_sel))]
-sku_totals = {sku: int(latest_rows[latest_rows["resource_code"]==sku]["stock_qty"].sum()) for sku in skus_sel} if not latest_rows.empty else {sku:0 for sku in skus_sel}
+# 스냅샷 날짜 컬럼 이름 호환('date' 또는 'snapshot_date')
+_snap_date_col = "date" if "date" in snap_long.columns else "snapshot_date"
+_latest_dt = pd.to_datetime(snap_long[_snap_date_col]).max().normalize()
+_latest_dt_str = _latest_dt.strftime("%Y-%m-%d")
 
-today = pd.Timestamp.today().normalize()
-moves_typed = moves.copy()
-moves_typed["carrier_mode"] = moves_typed["carrier_mode"].astype(str).str.upper()
+# 품명 매핑(선택)
+_name_col = None
+for cand in ["resource_name", "상품명", "품명"]:
+    if cand in snap_long.columns:
+        _name_col = cand
+        break
+_name_map = {}
+if _name_col:
+    name_rows = (snap_long[snap_long[_snap_date_col] == _latest_dt]
+                    .dropna(subset=["resource_code"])[["resource_code", _name_col]]
+                    .drop_duplicates())
+    _name_map = dict(zip(name_rows["resource_code"].astype(str), name_rows[_name_col].astype(str)))
 
-# KPI 이동중 재고: 도착했지만 인바운드 미등록도 포함
-in_transit_mask = (
-    (moves_typed["carrier_mode"] != "WIP") &
-    (moves_typed["to_center"].isin(centers_sel)) &
-    (moves_typed["resource_code"].isin(skus_sel)) &
-    (moves_typed["onboard_date"].notna()) &
-    (moves_typed["onboard_date"] <= today) &
-    (moves_typed["inbound_date"].isna())   # arrival 여부와 무관
-)
-in_transit_total = int(moves_typed[in_transit_mask]["qty_ea"].sum())
+# moves 가공
+_today = pd.Timestamp.today().normalize()
+mv = moves.copy()
+mv["carrier_mode"] = mv["carrier_mode"].astype(str).str.upper()
+mv["resource_code"] = mv["resource_code"].astype(str)
 
+def _kpi_breakdown_per_sku(snap_long, mv, centers_sel, skus_sel, today):
+    # 현재 재고(최신 스냅샷, 선택 센터 합계)
+    cur = (snap_long[
+        (snap_long[_snap_date_col] == _latest_dt) &
+        (snap_long["center"].isin(centers_sel)) &
+        (snap_long["resource_code"].astype(str).isin(skus_sel))
+    ].groupby("resource_code", as_index=True)["stock_qty"].sum())
 
-wip_moves = moves_typed[
-    (moves_typed["carrier_mode"] == "WIP") &
-    (moves_typed["to_center"].isin(centers_sel)) &
-    (moves_typed["resource_code"].isin(skus_sel))
-]
-if not wip_moves.empty:
-    on = (wip_moves.dropna(subset=["onboard_date"]).groupby("onboard_date", as_index=True)["qty_ea"].sum())
-    ev = (wip_moves.dropna(subset=["event_date"]).groupby("event_date", as_index=True)["qty_ea"].sum() * -1)
-    wip_flow = pd.concat([on, ev]).groupby(level=0).sum().sort_index()
-    wip_cum = wip_flow[wip_flow.index <= today].cumsum()
-    wip_today = int(wip_cum.iloc[-1]) if not wip_cum.empty else 0
-else:
-    wip_today = 0
+    # 이동중: to_center가 선택 센터, 출발함(onboard<=today), 아직 입고 미등록(inbound NaT)
+    it = (mv[
+        (mv["carrier_mode"] != "WIP") &
+        (mv["to_center"].isin(centers_sel)) &
+        (mv["resource_code"].isin(skus_sel)) &
+        (mv["onboard_date"].notna()) &
+        (mv["onboard_date"] <= today) &
+        (mv["inbound_date"].isna())
+    ].groupby("resource_code", as_index=True)["qty_ea"].sum())
 
-# 품명 매핑 (있을 때만)
-name_map = {}
-if "resource_name" in snap_long.columns:
-    name_map = (snap_long[["resource_code","resource_name"]]
-                .dropna()
-                .drop_duplicates(subset=["resource_code"])
-                .set_index("resource_code")["resource_name"]
-                .to_dict())
+    # WIP: SKU×날짜별 (onboard +, event -) 누적합을 오늘까지 계산한 잔량
+    w = mv[
+        (mv["carrier_mode"] == "WIP") &
+        (mv["to_center"].isin(centers_sel)) &
+        (mv["resource_code"].isin(skus_sel))
+    ].copy()
+    if w.empty:
+        wip = pd.Series(0, index=pd.Index(skus_sel, name="resource_code"))
+    else:
+        add = (w.dropna(subset=["onboard_date"])
+                .set_index(["resource_code","onboard_date"])["qty_ea"])
+        rem = (w.dropna(subset=["event_date"])
+                .set_index(["resource_code","event_date"])["qty_ea"] * -1)
+        flow = pd.concat([add, rem]).groupby(level=[0,1]).sum()
+        flow = flow[flow.index.get_level_values(1) <= today]  # 오늘까지만
+        wip = (flow.groupby(level=0).cumsum()
+                    .groupby(level=0).last()
+                    .clip(lower=0))
 
-def _chunk(lst, n):
+    out = pd.DataFrame({
+        "current": cur,
+        "in_transit": it,
+        "wip": wip
+    }).reindex(skus_sel).fillna(0).astype(int)
+    return out
+
+kpi_df = _kpi_breakdown_per_sku(snap_long, mv, centers_sel, skus_sel, _today)
+
+# SKU별 KPI 카드 렌더링
+def _chunks(lst, n):  # 줄바꿈을 위해 2~4개씩 끊어서 출력
     for i in range(0, len(lst), n):
         yield lst[i:i+n]
 
-for group in _chunk(skus_sel, 4):
+for group in _chunks(skus_sel, 2):  # 한 줄에 2개씩 보기 좋게
     cols = st.columns(len(group))
     for i, sku in enumerate(group):
-        with cols[i]:
-            pname = name_map.get(sku, "")
-            if pname:
-                st.markdown(f"**{pname}**")  # ↑ 품명 한 줄 위에 굵게
-            st.metric(f"{sku} 현재 재고(스냅샷 {latest_dt_str})", f"{sku_totals.get(sku, 0):,}")
+        with cols[i].container(border=True):
+            name = _name_map.get(sku, "")
+            if name:
+                st.markdown(f"**{name}**  \n`{sku}`")
+            else:
+                st.markdown(f"`{sku}`")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("현재 재고", f"{kpi_df.loc[sku,'current']:,}")
+            c2.metric("이동중", f"{kpi_df.loc[sku,'in_transit']:,}")
+            c3.metric("생산중", f"{kpi_df.loc[sku,'wip']:,}")
 
-k_it, k_wip = st.columns(2)
-k_it.metric("이동 중 재고", f"{in_transit_total:,}")
-k_wip.metric("생산중(미완료)", f"{wip_today:,}")
+# (선택) 전체 합계도 같이 보고 싶으면 아래 4줄을 해제
+# total = kpi_df.sum()
+# t1, t2, t3 = st.columns(3)
+# t1.metric("선택 SKU 현재 재고 합계", f"{total['current']:,}")
+# t2.metric("선택 SKU 이동중 합계", f"{total['in_transit']:,}"); t3.metric("선택 SKU 생산중 합계", f"{total['wip']:,}")
 
 st.divider()
 
