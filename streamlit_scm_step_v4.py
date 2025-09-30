@@ -7,7 +7,8 @@ import re
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
+import gspread
+from google.oauth2.service_account import Credentials
 
 # =========================
 # Global configuration
@@ -67,18 +68,64 @@ def _coalesce_columns(df: pd.DataFrame, candidates: List, parse_date: bool = Fal
     out = sub.bfill(axis=1).iloc[:, 0]
     return out
 
-# -------------------- Google Sheets (public/gviz) loader --------------------
-def gs_csv_public(sheet_name: str) -> pd.DataFrame:
+
+# -------------------- Google Sheets (API authentication) loader --------------------
+@st.cache_data(ttl=300)
+def load_from_gsheet_api():
     """
-    인증 없이 공개 시트를 CSV로 읽는 방법.
-    회사 계정/비공개 문서에서는 동작하지 않습니다.
+    Google Sheets API를 사용하여 인증된 방식으로 데이터를 가져옵니다.
     """
     try:
-        url = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/gviz/tq?tqx=out:csv&sheet={quote(sheet_name)}"
-        return pd.read_csv(url)
-    except Exception:
-        # 공개가 아니면 빈 DF 반환 (에러 팝업 방지)
-        return pd.DataFrame()
+        # 서비스 계정 키 파일 경로
+        credentials_file = "python-spreadsheet-409212-3df25e0dc166.json"
+        
+        # 인증 범위 설정
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
+        
+        # 인증 정보 로드
+        credentials = Credentials.from_service_account_file(credentials_file, scopes=scopes)
+        gc = gspread.authorize(credentials)
+        
+        # 스프레드시트 열기
+        spreadsheet = gc.open_by_key(GSHEET_ID)
+        
+        # 각 시트에서 데이터 가져오기
+        df_move = pd.DataFrame()
+        df_ref = pd.DataFrame()
+        df_incoming = pd.DataFrame()
+        
+        # SCM_통합 시트
+        try:
+            worksheet = spreadsheet.worksheet("SCM_통합")
+            data = worksheet.get_all_records()
+            df_move = pd.DataFrame(data)
+        except Exception as e:
+            st.warning(f"SCM_통합 시트를 읽을 수 없습니다: {e}")
+        
+        # snap_정제 시트
+        try:
+            worksheet = spreadsheet.worksheet("snap_정제")
+            data = worksheet.get_all_records()
+            df_ref = pd.DataFrame(data)
+        except Exception as e:
+            st.warning(f"snap_정제 시트를 읽을 수 없습니다: {e}")
+        
+        # 입고예정내역 시트
+        try:
+            worksheet = spreadsheet.worksheet("입고예정내역")
+            data = worksheet.get_all_records()
+            df_incoming = pd.DataFrame(data)
+        except Exception as e:
+            st.warning(f"입고예정내역 시트를 읽을 수 없습니다: {e}")
+        
+        return df_move, df_ref, df_incoming
+        
+    except Exception as e:
+        st.error(f"Google Sheets API 연결 실패: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # -------------------- Loaders --------------------
 @st.cache_data(ttl=300)
@@ -119,19 +166,6 @@ def load_from_excel(file):
 
     return df_move, df_ref, df_incoming, snapshot_raw_df
 
-@st.cache_data(ttl=300)
-def load_from_gsheet_public():
-    """
-    공개된 시트만 가져옵니다. (회사 계정 문서면 빈 DF 반환)
-    """
-    df_move = gs_csv_public("SCM_통합")
-    df_ref  = gs_csv_public("snap_정제")
-    try:
-        df_incoming = gs_csv_public("입고예정내역")
-    except Exception:
-        df_incoming = pd.DataFrame()
-    # snapshot_raw는 비용 계산 시 on-demand로 다시 시도
-    return df_move, df_ref, df_incoming
 
 @st.cache_data(ttl=300)
 def load_snapshot_raw():
@@ -139,7 +173,6 @@ def load_snapshot_raw():
     재고자산 계산용 원본 스냅샷.
     - EXCEL/CSV를 사용 중이면 업로드 파일의 snapshot_raw(있을 때만) 사용
       (없으면 빈 DF, 에러 메시지 출력하지 않음)
-    - GSheet 모드면 공개(gviz)로 시도 → 실패 시 빈 DF
     - Apps Script 프록시(_fetch_sheet_via_webapp)가 있으면 그쪽을 우선 사용
     """
     # 1) 업로드 캐시가 있으면 최우선
@@ -156,13 +189,7 @@ def load_snapshot_raw():
         except Exception:
             pass
 
-    # 3) Google Sheets(공개) 모드에서만 gviz 시도
-    if st.session_state.get("_data_source") == "gsheet":
-        df = gs_csv_public("snapshot_raw")
-        if df is not None and not df.empty:
-            return df
-
-    # 4) 그 외에는 조용히 빈 DF
+    # 3) 그 외에는 조용히 빈 DF
     return pd.DataFrame()
 
 # -------------------- Normalizers --------------------
@@ -373,7 +400,11 @@ def apply_consumption_with_events(
         return out
 
     out = pd.concat(chunks, ignore_index=True)
-    out["stock_qty"] = pd.to_numeric(out["stock_qty"], errors="coerce").round().clip(lower=0).astype(int)
+    # 더 강력한 NaN 처리
+    out["stock_qty"] = pd.to_numeric(out["stock_qty"], errors="coerce")
+    out["stock_qty"] = out["stock_qty"].fillna(0)
+    out["stock_qty"] = out["stock_qty"].replace([np.inf, -np.inf], 0)
+    out["stock_qty"] = out["stock_qty"].round().clip(lower=0).astype(int)
     return out
 
 # -------------------- Timeline --------------------
@@ -423,19 +454,28 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
         )
         eff_minus["delta"] *= -1
 
+        # 입고(+) 이벤트 (inbound_date만 인정 - arrival은 미반영)
         eff_plus = (
             mv[(mv["to_center"].astype(str) == str(ct)) &
-               (mv["event_date"].notna()) &
-               (mv["event_date"] > last_dt)]
-            .groupby("event_date", as_index=False)["qty_ea"].sum()
-            .rename(columns={"event_date":"date","qty_ea":"delta"})
+               (mv["inbound_date"].notna()) &
+               (mv["inbound_date"] > last_dt)]
+            .groupby("inbound_date", as_index=False)["qty_ea"].sum()
+            .rename(columns={"inbound_date":"date","qty_ea":"delta"})
         )
 
-        eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True).sort_values("date")
-        for d, delta in zip(eff_all["date"], eff_all["delta"]):
-            ts.loc[ts["date"] >= d, "stock_qty"] = ts.loc[ts["date"] >= d, "stock_qty"] + delta
+        # 벡터화된 처리: 날짜별 증감(Delta) 시리즈로 변경
+        eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
+        if not eff_all.empty:
+            # 날짜별로 그룹화하여 합계 계산
+            delta_series = eff_all.groupby("date")["delta"].sum()
+            # 날짜 인덱스에 맞춰 reindex하고 누적합 계산
+            delta_series = delta_series.reindex(ts["date"], fill_value=0).fillna(0)
+            # 누적합 대신 직접 더하기 (더 안전)
+            for i, (date, delta) in enumerate(delta_series.items()):
+                if delta != 0:
+                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
 
-        ts["stock_qty"] = ts["stock_qty"].clip(lower=0)
+        ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
         lines.append(ts)
 
         # (보강) WIP 완료 물량을 해당 도착 센터 라인에 반영
@@ -450,9 +490,14 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
                 wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum()
                 .rename(columns={"event_date":"date","qty_ea":"delta"})
             )
-            for d, delta in zip(wip_add["date"], wip_add["delta"]):
-                ts.loc[ts["date"] >= d, "stock_qty"] = ts.loc[ts["date"] >= d, "stock_qty"] + delta
-            ts["stock_qty"] = ts["stock_qty"].clip(lower=0)
+            # 벡터화된 WIP 처리
+            wip_delta_series = wip_add.groupby("date")["delta"].sum()
+            wip_delta_series = wip_delta_series.reindex(ts["date"], fill_value=0).fillna(0)
+            # 누적합 대신 직접 더하기 (더 안전)
+            for date, delta in wip_delta_series.items():
+                if delta != 0:
+                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
+            ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
             lines[-1] = ts  # 갱신
 
     # 2) In-Transit & WIP 가상 라인
@@ -469,46 +514,60 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
     ]
 
     for sku, g in mv_sel.groupby("resource_code"):
-        # --- Non-WIP In-Transit (선택된 센터로 이동중인 재고만) ---
+        # --- Non-WIP In-Transit (벡터화 + carry-over) ----
         g_nonwip = g[g["carrier_mode"] != "WIP"]
         if not g_nonwip.empty:
             g_selected = g_nonwip[g_nonwip["to_center"].isin(centers_sel)]
             if not g_selected.empty:
-                # 도착일(event_date) 보강: arrival_date → eta_date → today
-                g_with_event = g_selected[g_selected["event_date"].notna()].copy()
-                g_without_event = g_selected[g_selected["event_date"].isna()].copy()
-                if not g_without_event.empty:
-                    if "arrival_date" in g_without_event.columns:
-                        g_without_event["event_date"] = g_without_event["arrival_date"]
-                    elif "eta_date" in g_without_event.columns:
-                        g_without_event["event_date"] = g_without_event["eta_date"]
-                    else:
-                        g_without_event["event_date"] = today
-                    g_without_event["event_date"] = pd.to_datetime(g_without_event["event_date"]).fillna(today)
-                    g_with_event = pd.concat([g_with_event, g_without_event], ignore_index=True)
+                idx = pd.date_range(start_dt, horizon_end, freq="D")
+                today_norm = pd.Timestamp.today().normalize()
 
-                s = pd.Series(0, index=pd.to_datetime(full_dates))
-                for _, row in g_selected.iterrows():
-                    onboard_dt = pd.to_datetime(row["onboard_date"]) if pd.notna(row["onboard_date"]) else None
-                    event_dt = pd.to_datetime(row.get("event_date", pd.NaT)) if pd.notna(row.get("event_date", pd.NaT)) else None
-                    qty = int(row["qty_ea"]) if pd.notna(row["qty_ea"]) else 0
-                    if onboard_dt is not None and qty > 0:
-                        if event_dt is not None:
-                            mask = (s.index >= onboard_dt) & (s.index < event_dt)
-                        else:
-                            end_dt2 = min(today, full_dates[-1])
-                            mask = (s.index >= onboard_dt) & (s.index <= end_dt2)
-                        s.loc[mask] = s.loc[mask] + qty
-                s = s[s > 0]
-                if not s.empty:
-                    vdf = pd.DataFrame({"date": s.index, "center": "In-Transit",
-                                        "resource_code": sku, "stock_qty": s.values})
-                    lines.append(vdf)
+                # 유효 종료일: inbound > 미래 arrival > (기타) 오늘+1
+                end_eff = pd.Series(pd.NaT, index=g_selected.index, dtype="datetime64[ns]")
+                mask_inb = g_selected["inbound_date"].notna()
+                end_eff.loc[mask_inb] = g_selected.loc[mask_inb, "inbound_date"]
+
+                mask_arr_future = (~mask_inb) & g_selected["arrival_date"].notna() & (g_selected["arrival_date"] > today_norm)
+                end_eff.loc[mask_arr_future] = g_selected.loc[mask_arr_future, "arrival_date"]
+
+                end_eff = end_eff.fillna(min(today_norm + pd.Timedelta(days=1), idx[-1] + pd.Timedelta(days=1)))
+
+                # ① 기간 시작 이전에 출발했고, 시작 시점에도 아직 이동중(= 종료>시작)인 물량 → 초기잔
+                carry_mask = (
+                    g_selected["onboard_date"].notna() &
+                    (g_selected["onboard_date"] < idx[0]) &
+                    (end_eff > idx[0])
+                )
+                carry = int(g_selected.loc[carry_mask, "qty_ea"].sum())
+
+                # ② 시작일 이후의 출발 이벤트만 델타로 (이전 출발분은 carry로 처리했으므로 중복 방지)
+                starts = (g_selected[g_selected["onboard_date"] >= idx[0]]
+                          .groupby("onboard_date")["qty_ea"].sum())
+
+                # ③ 모든 종료 이벤트(마이너스)
+                ends = (g_selected.assign(end_date=end_eff)
+                        .groupby("end_date")["qty_ea"].sum() * -1)
+
+                delta = (starts.rename_axis("date").to_frame("delta")
+                           .add(ends.rename_axis("date").to_frame("delta"), fill_value=0)["delta"]
+                           .sort_index())
+
+                s = delta.reindex(idx, fill_value=0).cumsum().clip(lower=0)
+                if carry:
+                    s = (s + carry).clip(lower=0)
+
+                if s.any():
+                    lines.append(pd.DataFrame({
+                        "date": s.index, "center": "In-Transit",
+                        "resource_code": sku, "stock_qty": s.values.astype(int)
+                    }))
 
         # --- WIP ---
         g_wip = g[g["carrier_mode"] == "WIP"]
         if not g_wip.empty:
+            # 벡터화된 WIP 처리
             s = pd.Series(0, index=pd.to_datetime(full_dates))
+            
             # onboard +, event - 의 누적 효과를 연속 값으로 변환
             add_onboard = (
                 g_wip[g_wip["onboard_date"].notna()]
@@ -522,15 +581,19 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
             )
             add_event["delta"] *= -1
             deltas = pd.concat([add_onboard, add_event], ignore_index=True)
+            
             if not deltas.empty:
-                for d, v in deltas.groupby("date")["delta"].sum().items():
-                    d = pd.to_datetime(d)
-                    if d < full_dates[0]:
-                        s.iloc[:] = s.iloc[:] + v
-                    else:
-                        s.loc[s.index >= d] = s.loc[s.index >= d] + v
+                # 날짜별로 그룹화하여 합계 계산
+                delta_series = deltas.groupby("date")["delta"].sum()
+                # 날짜 인덱스에 맞춰 reindex하고 직접 더하기
+                delta_series = delta_series.reindex(s.index, fill_value=0).fillna(0)
+                for date, delta in delta_series.items():
+                    if delta != 0:
+                        s.loc[s.index >= date] = s.loc[s.index >= date] + delta
+                
                 vdf = pd.DataFrame({"date": s.index, "center": "WIP",
-                                    "resource_code": sku, "stock_qty": s.values.clip(min=0)})
+                                    "resource_code": sku, "stock_qty": s.values})
+                vdf["stock_qty"] = vdf["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
                 lines.append(vdf)
 
     if not lines:
@@ -538,6 +601,13 @@ def build_timeline(snap_long: pd.DataFrame, moves: pd.DataFrame,
 
     out = pd.concat(lines, ignore_index=True)
     out = out[(out["date"] >= start_dt) & (out["date"] <= horizon_end)]
+    
+    # 최종 NaN 처리
+    out["stock_qty"] = pd.to_numeric(out["stock_qty"], errors="coerce")
+    out["stock_qty"] = out["stock_qty"].fillna(0)
+    out["stock_qty"] = out["stock_qty"].replace([np.inf, -np.inf], 0)
+    out["stock_qty"] = out["stock_qty"].clip(lower=0).astype(int)
+    
     return out
 
 # -------------------- 비용(재고자산) 피벗 --------------------
@@ -612,18 +682,20 @@ with tab1:
             st.warning(f"WIP 불러오기 실패: {e}")
 
 with tab2:
-    st.info("이 탭은 공개(Anyone with the link)로 설정된 시트를 gviz로 읽습니다. 회사 계정 문서면 빈 표가 나올 수 있습니다.")
+    st.info("Google Sheets API를 사용하여 데이터를 로드합니다.")
+    st.caption("서비스 계정 키 파일을 사용하여 인증합니다.")
+    
     if st.button("Google Sheets에서 데이터 로드", type="primary"):
         try:
-            df_move, df_ref, df_incoming = load_from_gsheet_public()
+            df_move, df_ref, df_incoming = load_from_gsheet_api()
             
             # 데이터가 비어있는지 확인
             if df_move.empty or df_ref.empty:
-                st.error("❌ Google Sheets에서 데이터를 불러올 수 없습니다. 시트가 공개(Anyone with the link)로 설정되어 있는지 확인해주세요.")
+                st.error("❌ Google Sheets API로 데이터를 불러올 수 없습니다. 서비스 계정 권한을 확인해주세요.")
                 st.stop()
             
             st.session_state["_data_source"] = "gsheet"
-            st.session_state["_snapshot_raw_cache"] = None  # 필요 시 load_snapshot_raw()가 gviz로 읽음
+            st.session_state["_snapshot_raw_cache"] = None
 
             moves_raw = normalize_moves(df_move)
             snap_long = normalize_refined_snapshot(df_ref)
@@ -636,24 +708,28 @@ with tab2:
                 st.warning(f"⚠️ WIP 불러오기 실패: {e}")
         except Exception as e:
             st.error(f"❌ Google Sheets 데이터 로드 중 오류가 발생했습니다: {e}")
-            st.info("💡 해결 방법:\n- 시트가 공개(Anyone with the link)로 설정되어 있는지 확인\n- 시트명이 정확한지 확인 (SCM_통합, snap_정제)\n- 인터넷 연결 상태 확인")
+            st.info("💡 해결 방법:\n- 서비스 계정 키 파일이 올바른지 확인\n- 스프레드시트에 서비스 계정 이메일이 공유되어 있는지 확인\n- 시트명이 정확한지 확인 (SCM_통합, snap_정제)")
 
-# 초기 자동 로드(없을 때만): 공개 gsheet 시도 → 실패하면 안내
+# 초기 자동 로드(없을 때만): Google Sheets API 시도 → 실패하면 안내
 if "snap_long" not in locals():
-    df_move, df_ref, df_incoming = load_from_gsheet_public()
-    if not df_move.empty and not df_ref.empty:
-        st.session_state["_data_source"] = "gsheet"
-        st.session_state["_snapshot_raw_cache"] = None
-        moves = normalize_moves(df_move)
-        snap_long = normalize_refined_snapshot(df_ref)
-        try:
-            wip_df = load_wip_from_incoming(df_incoming)
-            moves = merge_wip_as_moves(moves, wip_df)
-        except Exception:
-            pass
-        st.success("✅ 기본 공개 시트에서 데이터 로드됨 (필요 시 엑셀/CSV 탭 사용 가능)")
-    else:
-        st.info("엑셀, CSV 또는 Google Sheets에서 데이터를 로드하면 필터/차트가 나타납니다.")
+    try:
+        df_move, df_ref, df_incoming = load_from_gsheet_api()
+        if not df_move.empty and not df_ref.empty:
+            st.session_state["_data_source"] = "gsheet"
+            st.session_state["_snapshot_raw_cache"] = None
+            moves = normalize_moves(df_move)
+            snap_long = normalize_refined_snapshot(df_ref)
+            try:
+                wip_df = load_wip_from_incoming(df_incoming)
+                moves = merge_wip_as_moves(moves, wip_df)
+            except Exception:
+                pass
+            st.success("✅ Google Sheets에서 데이터 로드됨 (필요 시 엑셀 업로드 탭 사용 가능)")
+        else:
+            st.info("엑셀 업로드 또는 Google Sheets에서 데이터를 로드하면 필터/차트가 나타납니다.")
+            st.stop()
+    except Exception:
+        st.info("엑셀 업로드 또는 Google Sheets에서 데이터를 로드하면 필터/차트가 나타납니다.")
         st.stop()
 
 # -------------------- Filters --------------------
@@ -758,16 +834,17 @@ today = pd.Timestamp.today().normalize()
 moves_typed = moves.copy()
 moves_typed["carrier_mode"] = moves_typed["carrier_mode"].astype(str).str.upper()
 
+# KPI 이동중 재고: 도착했지만 인바운드 미등록도 포함
 in_transit_mask = (
-    (moves_typed["onboard_date"].notna()) &
-    (moves_typed["onboard_date"] <= today) &
-    (moves_typed["inbound_date"].isna()) &
-    ((moves_typed["arrival_date"].isna()) | (moves_typed["arrival_date"] > today)) &
+    (moves_typed["carrier_mode"] != "WIP") &
     (moves_typed["to_center"].isin(centers_sel)) &
     (moves_typed["resource_code"].isin(skus_sel)) &
-    (moves_typed["carrier_mode"] != "WIP")
+    (moves_typed["onboard_date"].notna()) &
+    (moves_typed["onboard_date"] <= today) &
+    (moves_typed["inbound_date"].isna())   # arrival 여부와 무관
 )
 in_transit_total = int(moves_typed[in_transit_mask]["qty_ea"].sum())
+
 
 wip_moves = moves_typed[
     (moves_typed["carrier_mode"] == "WIP") &
@@ -821,6 +898,8 @@ else:
         vis_df = vis_df[vis_df["center"] != "생산중"]
     if not show_transit:
         vis_df = vis_df[~vis_df["center"].str.startswith("이동중")]
+    
+    # 재고량이 0보다 큰 데이터만 표시
     vis_df = vis_df[vis_df["stock_qty"] > 0]
     vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
 
