@@ -126,7 +126,31 @@ def load_from_gsheet_api():
             st.warning(f"{name} 시트를 읽을 수 없습니다: {e}")
             return pd.DataFrame()
 
-    return _read("SCM_통합"), _read("snap_정제"), _read("입고예정내역")
+    # 기존 3개 시트
+    df_move = _read("SCM_통합")
+    df_ref = _read("snap_정제")
+    df_incoming = _read("입고예정내역")
+
+    # 🔹 snapshot_raw(선택)도 시도해서 읽고, 읽히면 세션 캐시에 저장
+    try:
+        df_snap_raw = _read("snapshot_raw")
+        if not df_snap_raw.empty:
+            # 메모 절감을 위해 최신 스냅샷만 보관 (옵션)
+            cols = {c.strip().lower(): c for c in df_snap_raw.columns}
+            col_date = cols.get("snapshot_date") or cols.get("date")
+            if col_date:
+                df_snap_raw[col_date] = pd.to_datetime(df_snap_raw[col_date], errors="coerce").dt.normalize()
+                latest = df_snap_raw[col_date].max()
+                if pd.notna(latest):
+                    df_snap_raw = df_snap_raw[df_snap_raw[col_date] == latest].copy()
+            st.session_state["_snapshot_raw_cache"] = df_snap_raw  # ✅ 캐시에 저장
+        else:
+            st.session_state["_snapshot_raw_cache"] = None
+    except Exception:
+        # 없거나 권한 없으면 조용히 패스 (로트 상세는 자동으로 미표시)
+        st.session_state["_snapshot_raw_cache"] = None
+
+    return df_move, df_ref, df_incoming
 
 # -------------------- Loaders --------------------
 @st.cache_data(ttl=300)
@@ -710,7 +734,6 @@ with tab2:
                 st.stop()
             
             st.session_state["_data_source"] = "gsheet"
-            st.session_state["_snapshot_raw_cache"] = None
 
             moves_raw = normalize_moves(df_move)
             snap_long = normalize_refined_snapshot(df_ref)
@@ -731,7 +754,6 @@ if "snap_long" not in locals():
         df_move, df_ref, df_incoming = load_from_gsheet_api()
         if not df_move.empty and not df_ref.empty:
             st.session_state["_data_source"] = "gsheet"
-            st.session_state["_snapshot_raw_cache"] = None
             moves = normalize_moves(df_move)
             snap_long = normalize_refined_snapshot(df_ref)
             try:
