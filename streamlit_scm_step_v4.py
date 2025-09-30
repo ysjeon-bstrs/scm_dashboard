@@ -199,8 +199,6 @@ def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
     onboard_date = _coalesce_columns(df, [["onboard_date","배정일","출발일","H","onboard","depart_date"]], parse_date=True)
     arrival_date = _coalesce_columns(df, [["arrival_date","도착일","eta_date","ETA","arrival"]], parse_date=True)
     inbound_date = _coalesce_columns(df, [["inbound_date","입고일","입고완료일"]], parse_date=True)
-    real_depart  = _coalesce_columns(df, [["실제 선적일","real_departure","AI"]], parse_date=True)
-
     out = pd.DataFrame({
         "resource_code": resource_code.astype(str).str.strip(),
         "qty_ea": pd.to_numeric(qty_ea.astype(str).str.replace(',',''), errors="coerce").fillna(0).astype(int),
@@ -210,7 +208,6 @@ def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
         "onboard_date": onboard_date,
         "arrival_date": arrival_date,
         "inbound_date": inbound_date,
-        "real_departure": real_depart,
     })
     out["event_date"] = out["inbound_date"].where(out["inbound_date"].notna(), out["arrival_date"])
     return out
@@ -269,7 +266,6 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
         "onboard_date": wip_df["wip_start"],
         "arrival_date": wip_df["wip_ready"],
         "inbound_date": pd.NaT,
-        "real_departure": pd.NaT,
         "event_date": wip_df["wip_ready"],
         "lot": wip_df.get("lot", "")
     })
