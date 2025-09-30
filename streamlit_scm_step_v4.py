@@ -843,7 +843,7 @@ st.subheader("요약 KPI")
 # 스냅샷 날짜 컬럼 이름 호환('date' 또는 'snapshot_date')
 _snap_date_col = "date" if "date" in snap_long.columns else "snapshot_date"
 _latest_dt = pd.to_datetime(snap_long[_snap_date_col]).max().normalize()
-__latest_dt_str = _latest_dt.strftime("%Y-%m-%d")
+_latest_dt_str = _latest_dt.strftime("%Y-%m-%d")
 
 # 품명 매핑(선택)
 _name_col = None
@@ -1067,7 +1067,7 @@ else:
     st.caption("※ days_to_arrival가 음수(–)로 보이면: 화물은 '도착'했으나 인바운드(입고완료) 등록 전 상태입니다.")
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
-st.subheader(f"선택 센터 현재 재고 (스냅샷 {__latest_dt_str} / 전체 SKU)")
+st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
 
 cur = snap_long[(snap_long["date"] == _latest_dt) & (snap_long["center"].isin(centers_sel))].copy()
 pivot = (cur.groupby(["resource_code","center"], as_index=False)["stock_qty"].sum()
@@ -1130,7 +1130,7 @@ st.dataframe(show_df, use_container_width=True, height=380)
 
 csv_bytes = show_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("현재 표 CSV 다운로드", data=csv_bytes,
-                   file_name=f"centers_{'-'.join(centers_sel)}_snapshot_{__latest_dt_str}.csv", mime="text/csv")
+                   file_name=f"centers_{'-'.join(centers_sel)}_snapshot_{_latest_dt_str}.csv", mime="text/csv")
 
 st.caption("※ 이 표는 **선택된 센터 전체 SKU**의 최신 스냅샷 재고입니다. 상단 'SKU 선택'과 무관하게 모든 SKU가 포함됩니다.")
 
@@ -1143,7 +1143,9 @@ if len(visible_skus) == 1:
     snap_raw_df = load_snapshot_raw()
     # lot 상세 테이블 만들기
     if snap_raw_df is None or snap_raw_df.empty:
-        st.markdown(f"### 로트 상세 (스냅샷 {_latest_dt_str} / **{', '.join(centers_sel)}** / **{lot_sku}**)")
+        # _latest_dt_str를 여기서 계산
+        latest_dt_str = pd.to_datetime(snap_long["date"]).max().strftime("%Y-%m-%d")
+        st.markdown(f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(centers_sel)}** / **{lot_sku}**)")
         st.caption("해당 조건의 로트 상세가 없습니다. (snapshot_raw 없음)")
     else:
         sr = snap_raw_df.copy()
@@ -1169,7 +1171,9 @@ if len(visible_skus) == 1:
                 out = out.drop_duplicates()
                 out["합계"] = out[used_centers].sum(axis=1)
                 out = out[out["합계"] > 0]
-                st.markdown(f"### 로트 상세 (스냅샷 {_latest_dt_str} / **{', '.join(centers_sel)}** / **{lot_sku}**)")
+                # _latest_dt_str를 여기서 계산
+                latest_dt_str = pd.to_datetime(snap_long["date"]).max().strftime("%Y-%m-%d")
+                st.markdown(f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(centers_sel)}** / **{lot_sku}**)")
                 if out.empty:
                     st.caption("해당 조건의 로트 상세가 없습니다.")
                 else:
