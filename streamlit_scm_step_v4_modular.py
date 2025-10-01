@@ -390,33 +390,6 @@ st.subheader("입고 예정 내역 (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
 
-arr_transport = mv[
-    (mv["carrier_mode"] != "WIP")
-    & (mv["to_center"].isin(centers_sel))
-    & (mv["resource_code"].isin(skus_sel))
-    & (mv["inbound_date"].isna())
-].copy()
-
-arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
-arr_transport = arr_transport[arr_transport["display_date"].notna()]
-arr_transport = arr_transport[
-    (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
-]
-
-arr_wip = pd.DataFrame()
-if "태광KR" in centers_sel:
-    arr_wip = mv[
-        (mv["carrier_mode"] == "WIP")
-        & (mv["to_center"] == "태광KR")
-        & (mv["resource_code"].isin(skus_sel))
-        & (mv["event_date"].notna())
-        & (mv["event_date"] >= window_start)
-        & (mv["event_date"] <= window_end)
-    ].copy()
-    arr_wip["display_date"] = arr_wip["event_date"]
-
-upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
-
 mv_view = mv.copy()
 if not mv_view.empty:
     pred_inbound = pd.Series(pd.NaT, index=mv_view.index, dtype="datetime64[ns]")
@@ -434,11 +407,32 @@ if not mv_view.empty:
 
     mv_view["pred_inbound_date"] = pred_inbound
 
-upcoming = upcoming.merge(
-    mv_view[["resource_code", "onboard_date", "pred_inbound_date"]],
-    on=["resource_code", "onboard_date"],
-    how="left",
-)
+arr_transport = mv_view[
+    (mv_view["carrier_mode"] != "WIP")
+    & (mv_view["to_center"].isin(centers_sel))
+    & (mv_view["resource_code"].isin(skus_sel))
+    & (mv_view["inbound_date"].isna())
+].copy()
+
+arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
+arr_transport = arr_transport[arr_transport["display_date"].notna()]
+arr_transport = arr_transport[
+    (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
+]
+
+arr_wip = pd.DataFrame()
+if "태광KR" in centers_sel:
+    arr_wip = mv_view[
+        (mv_view["carrier_mode"] == "WIP")
+        & (mv_view["to_center"] == "태광KR")
+        & (mv_view["resource_code"].isin(skus_sel))
+        & (mv_view["event_date"].notna())
+        & (mv_view["event_date"] >= window_start)
+        & (mv_view["event_date"] <= window_end)
+    ].copy()
+    arr_wip["display_date"] = arr_wip["event_date"]
+
+upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 
 if _name_map:
     upcoming["resource_name"] = upcoming["resource_code"].map(_name_map).fillna("")

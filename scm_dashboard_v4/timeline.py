@@ -2,10 +2,152 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
+
+
+DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
+
+
+def normalize_move_dates(moves: pd.DataFrame, columns: Iterable[str] = DATE_COLUMNS) -> pd.DataFrame:
+    """Return a copy of *moves* with the specified date columns normalised to midnight."""
+
+    out = moves.copy()
+    for col in columns:
+        if col in out.columns:
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.normalize()
+    return out
+
+
+def annotate_move_schedule(
+    moves: pd.DataFrame,
+    today: pd.Timestamp,
+    lag_days: int,
+    horizon_end: pd.Timestamp,
+    fallback_days: int = 1,
+) -> pd.DataFrame:
+    """Attach predicted inbound dates aligned with the centre inventory policy.
+
+    The policy is:
+    * Prefer the actual inbound completion date when available.
+    * Otherwise fall back to the arrival/ETA date. Past arrivals stay in transit
+      for ``lag_days`` after arrival to mirror receipt delays; future ETAs
+      convert on the ETA itself.
+    * Rows without any milestone drop on ``today + fallback_days`` (capped to
+      the chart horizon) so they do not block the forecast indefinitely.
+    """
+
+    today_norm = pd.to_datetime(today).normalize()
+    fallback_date = min(today_norm + pd.Timedelta(days=int(fallback_days)), horizon_end + pd.Timedelta(days=1))
+
+    out = moves.copy()
+    out["carrier_mode"] = out.get("carrier_mode", "").astype(str).str.upper()
+
+    pred = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+
+    has_inbound = out["inbound_date"].notna() if "inbound_date" in out else pd.Series(False, index=out.index)
+    pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
+
+    if "arrival_date" in out:
+        arrival_col = out["arrival_date"]
+    else:
+        arrival_col = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+
+    has_arrival = (~has_inbound) & arrival_col.notna()
+    if has_arrival.any():
+        arr_dates = arrival_col
+        # Past arrivals remain in transit until the lagged receipt date.
+        past_arrival = has_arrival & (arr_dates <= today_norm)
+        if past_arrival.any():
+            pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+        # Future ETAs release inventory on the ETA itself.
+        future_arrival = has_arrival & (arr_dates > today_norm)
+        if future_arrival.any():
+            pred.loc[future_arrival] = out.loc[future_arrival, "arrival_date"]
+
+    # Shipments without any milestone fall back to a policy date (default: today + 1 day).
+    pred = pred.fillna(fallback_date)
+    out["pred_inbound_date"] = pd.to_datetime(pred).dt.normalize()
+    out["pred_inbound_date"] = out["pred_inbound_date"].clip(upper=horizon_end + pd.Timedelta(days=1))
+    out["in_transit_end_date"] = out["pred_inbound_date"]
+
+    return out
+
+
+def compute_in_transit_series(
+    moves: pd.DataFrame,
+    centers_sel: Iterable[str],
+    skus_sel: Iterable[str],
+    start_dt: pd.Timestamp,
+    horizon_end: pd.Timestamp,
+    today: pd.Timestamp,
+    lag_days: int = 7,
+) -> pd.DataFrame:
+    """Build an in-transit daily timeseries synchronised with inventory receipts.
+
+    The output provides a daily step series per SKU whose decrements align
+    exactly with the receipt dates returned by :func:`annotate_move_schedule`.
+    """
+
+    centers = {str(c) for c in centers_sel}
+    skus = set(skus_sel)
+    today_norm = pd.to_datetime(today).normalize()
+
+    prepared = normalize_move_dates(moves)
+    prepared = annotate_move_schedule(prepared, today_norm, lag_days, horizon_end)
+
+    prepared = prepared[prepared.get("carrier_mode", "").astype(str).str.upper() != "WIP"].copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    prepared = prepared[
+        prepared["resource_code"].isin(skus)
+        & prepared["to_center"].astype(str).isin(centers)
+        & prepared["onboard_date"].notna()
+    ].copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    idx = pd.date_range(start_dt, horizon_end, freq="D")
+
+    series_frames: List[pd.DataFrame] = []
+
+    for sku, grp in prepared.groupby("resource_code"):
+        starts = grp.groupby("onboard_date")["qty_ea"].sum()
+        ends = grp.groupby("in_transit_end_date")["qty_ea"].sum() * -1
+
+        deltas = starts.add(ends, fill_value=0)
+        deltas = deltas.reindex(idx, fill_value=0)
+        in_transit = deltas.cumsum()
+
+        # Carry-over keeps shipments that left before the window but have not yet reached the end date.
+        carry_mask = (
+            grp["onboard_date"] < idx[0]
+        ) & (grp["in_transit_end_date"] > idx[0])
+        carry_qty = grp.loc[carry_mask, "qty_ea"].sum()
+        if carry_qty:
+            in_transit = in_transit + carry_qty
+
+        in_transit = in_transit.clip(lower=0)
+
+        if in_transit.any():
+            series_frames.append(
+                pd.DataFrame(
+                    {
+                        "date": idx,
+                        "center": "In-Transit",
+                        "resource_code": sku,
+                        "stock_qty": in_transit.astype(float).round().astype(int),
+                    }
+                )
+            )
+
+    if not series_frames:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    return pd.concat(series_frames, ignore_index=True)
 
 
 def build_timeline(
@@ -24,7 +166,8 @@ def build_timeline(
     horizon_end = end_dt + pd.Timedelta(days=horizon_days)
     full_dates = pd.date_range(start_dt, horizon_end, freq="D")
 
-    mv_all = moves.copy()
+    mv_all = normalize_move_dates(moves.copy())
+    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
 
     base = snap_long[
         snap_long["center"].isin(centers_sel) & snap_long["resource_code"].isin(skus_sel)
@@ -60,16 +203,6 @@ def build_timeline(
 
         mv_center = mv[(mv["to_center"].astype(str) == str(ct))].copy()
         if not mv_center.empty:
-            pred_inbound = pd.Series(pd.NaT, index=mv_center.index, dtype="datetime64[ns]")
-            mask_inb = mv_center["inbound_date"].notna()
-            pred_inbound.loc[mask_inb] = mv_center.loc[mask_inb, "inbound_date"]
-            mask_arr = (~mask_inb) & mv_center["arrival_date"].notna()
-            if mask_arr.any():
-                past_arr = mask_arr & (mv_center["arrival_date"] <= today)
-                pred_inbound.loc[past_arr] = mv_center.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
-                fut_arr = mask_arr & (mv_center["arrival_date"] > today)
-                pred_inbound.loc[fut_arr] = mv_center.loc[fut_arr, "arrival_date"]
-            mv_center["pred_inbound_date"] = pred_inbound
             eff_plus = (
                 mv_center[(mv_center["pred_inbound_date"].notna()) & (mv_center["pred_inbound_date"] > last_dt)]
                 .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
@@ -121,62 +254,11 @@ def build_timeline(
         )
     ]
 
+    in_transit_lines = compute_in_transit_series(mv_sel, centers_sel, skus_sel, start_dt, horizon_end, today, lag_days)
+    if not in_transit_lines.empty:
+        lines.append(in_transit_lines)
+
     for sku, g in mv_sel.groupby("resource_code"):
-        g_nonwip = g[g["carrier_mode"] != "WIP"]
-        if not g_nonwip.empty:
-            g_selected = g_nonwip[g_nonwip["to_center"].isin(centers_sel)]
-            if not g_selected.empty:
-                idx = pd.date_range(start_dt, horizon_end, freq="D")
-                today_norm = (today or pd.Timestamp.today()).normalize()
-
-                end_eff = pd.Series(pd.NaT, index=g_selected.index, dtype="datetime64[ns]")
-
-                mask_inb = g_selected["inbound_date"].notna()
-                end_eff.loc[mask_inb] = g_selected.loc[mask_inb, "inbound_date"]
-
-                mask_arr = (~mask_inb) & g_selected["arrival_date"].notna()
-                if mask_arr.any():
-                    past_arr = mask_arr & (g_selected["arrival_date"] <= today_norm)
-                    end_eff.loc[past_arr] = g_selected.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
-
-                    fut_arr = mask_arr & (g_selected["arrival_date"] > today_norm)
-                    end_eff.loc[fut_arr] = g_selected.loc[fut_arr, "arrival_date"]
-
-                end_eff = end_eff.fillna(min(today_norm + pd.Timedelta(days=1), idx[-1] + pd.Timedelta(days=1)))
-
-                g_selected_with_end = g_selected.copy()
-                g_selected_with_end["end_date"] = end_eff
-
-                starts = g_selected_with_end.dropna(subset=["onboard_date"]).groupby("onboard_date")["qty_ea"].sum()
-                ends = g_selected_with_end.groupby("end_date")["qty_ea"].sum() * -1
-
-                delta = (
-                    starts.rename_axis("date").to_frame("delta").add(ends.rename_axis("date").to_frame("delta"), fill_value=0)["delta"].sort_index()
-                )
-
-                s = delta.reindex(idx, fill_value=0).cumsum().clip(lower=0)
-
-                carry_mask = (
-                    g_selected["onboard_date"].notna()
-                    & (g_selected["onboard_date"] < idx[0])
-                    & (end_eff > idx[0])
-                )
-                carry = int(g_selected.loc[carry_mask, "qty_ea"].sum())
-                if carry:
-                    s = (s + carry).clip(lower=0)
-
-                if s.any():
-                    lines.append(
-                        pd.DataFrame(
-                            {
-                                "date": s.index,
-                                "center": "In-Transit",
-                                "resource_code": sku,
-                                "stock_qty": s.values.astype(int),
-                            }
-                        )
-                    )
-
         g_wip = g[g["carrier_mode"] == "WIP"]
         if not g_wip.empty:
             s = pd.Series(0, index=pd.to_datetime(full_dates))
