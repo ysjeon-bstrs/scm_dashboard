@@ -1,66 +1,91 @@
-import pathlib
-import sys
+"""Regression tests for in-transit inventory timeline generation."""
 
 import pandas as pd
+import pytest
 
-sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-
-from scm_dashboard_v4.timeline import (  # noqa: E402
+from scm_dashboard_v4.timeline import (
+    normalize_move_dates,
     annotate_move_schedule,
     compute_in_transit_series,
-    normalize_move_dates,
 )
 
 
-def test_in_transit_steps_match_center_policy():
+def test_in_transit_aggregates_multiple_shipments():
     moves = pd.DataFrame(
         {
             "resource_code": ["SKU-1", "SKU-1", "SKU-1"],
-            "qty_ea": [10, 5, 4],
-            "carrier_mode": ["AIR", "AIR", "AIR"],
+            "qty_ea": [10, 5, 3],
+            "carrier_mode": ["AIR", "OCEAN", "AIR"],
             "from_center": ["FC1", "FC1", "FC2"],
             "to_center": ["C1", "C1", "C1"],
-            "onboard_date": ["2023-12-28", "2024-01-03", "2024-01-06"],
-            "arrival_date": ["2023-12-30", "2024-01-08", "2024-01-09"],
-            "inbound_date": ["2024-01-05", pd.NaT, pd.NaT],
+            "onboard_date": ["2024-01-01", "2024-01-02", "2024-01-03"],
+            "arrival_date": ["2024-01-03", "2024-01-05", "2024-01-04"],
         }
     )
 
-    today = pd.Timestamp("2024-01-04")
-    start = pd.Timestamp("2023-12-30")
-    horizon_end = pd.Timestamp("2024-01-12")
-    lag_days = 2
-
-    prepared = normalize_move_dates(moves)
-    prepared = annotate_move_schedule(prepared, today, lag_days, horizon_end)
+    start = pd.Timestamp("2024-01-01")
+    horizon_end = pd.Timestamp("2024-01-10")
+    today = pd.Timestamp("2024-01-05")
 
     in_transit = compute_in_transit_series(
-        prepared,
+        moves,
         centers_sel=["C1"],
         skus_sel=["SKU-1"],
         start_dt=start,
         horizon_end=horizon_end,
         today=today,
-        lag_days=lag_days,
     )
 
     assert not in_transit.empty
+    assert (in_transit["center"] == "In-Transit").all()
 
     ts = (
-        in_transit.set_index("date")["stock_qty"].sort_index().astype(int)
+        in_transit[in_transit["resource_code"] == "SKU-1"]
+        .sort_values("date")
+        .set_index("date")["stock_qty"]
     )
 
-    deltas = ts.diff().fillna(ts.iloc[0]).astype(int)
+    # Shipments accumulate on board dates
+    assert ts.loc["2024-01-01"] >= 10
+    assert ts.loc["2024-01-02"] >= 15
+    assert ts.loc["2024-01-03"] >= 18
 
-    center_events = (
-        prepared[(prepared["to_center"].astype(str) == "C1") & (prepared["carrier_mode"] != "WIP")]
-        .groupby("pred_inbound_date")["qty_ea"].sum()
+
+def test_in_transit_synchronises_with_annotate_dates():
+    """Verify that in-transit decrements match pred_inbound_date from annotate_move_schedule."""
+    moves = pd.DataFrame(
+        {
+            "resource_code": ["SKU-1", "SKU-1"],
+            "qty_ea": [10, 5],
+            "carrier_mode": ["AIR", "AIR"],
+            "from_center": ["FC1", "FC1"],
+            "to_center": ["C1", "C1"],
+            "onboard_date": ["2024-01-01", "2024-01-02"],
+            "arrival_date": ["2024-01-03", "2024-01-05"],
+            "inbound_date": ["2024-01-04", pd.NaT],
+        }
     )
 
-    for event_date, qty in center_events.items():
-        if event_date < start or event_date > horizon_end:
-            continue
-        assert deltas.loc[event_date] == -qty
+    start = pd.Timestamp("2024-01-01")
+    horizon_end = pd.Timestamp("2024-01-10")
+    today = pd.Timestamp("2024-01-06")
+    lag_days = 1
+
+    prepared = normalize_move_dates(moves)
+    prepared = annotate_move_schedule(prepared, today, lag_days, horizon_end)
+
+    in_transit = compute_in_transit_series(
+        moves, ["C1"], ["SKU-1"], start, horizon_end, today, lag_days
+    )
+
+    ts = (
+        in_transit[in_transit["resource_code"] == "SKU-1"]
+        .sort_values("date")
+        .set_index("date")["stock_qty"]
+    )
+
+    # Check that deltas match predicted inbound dates
+    deltas = ts.diff().fillna(ts.iloc[0])
 
     onboard_events = (
         prepared[prepared["to_center"].astype(str) == "C1"]

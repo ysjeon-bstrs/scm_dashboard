@@ -276,6 +276,8 @@ def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
         "inbound_date": inbound_date,
     })
     out["event_date"] = out["inbound_date"].where(out["inbound_date"].notna(), out["arrival_date"])
+    for col in ["onboard_date", "arrival_date", "inbound_date", "event_date"]:
+        out[col] = pd.to_datetime(out[col], errors="coerce").dt.normalize()
     return out
 
 # PO 번호 → 날짜 파싱
@@ -323,18 +325,23 @@ def load_wip_from_incoming(df_incoming: Optional[pd.DataFrame], default_center: 
 def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -> pd.DataFrame:
     if wip_df is None or wip_df.empty:
         return moves_df
+    wip_df_norm = wip_df.copy()
+    wip_df_norm["wip_start"] = pd.to_datetime(wip_df_norm["wip_start"], errors="coerce").dt.normalize()
+    wip_df_norm["wip_ready"] = pd.to_datetime(wip_df_norm["wip_ready"], errors="coerce").dt.normalize()
     wip_moves = pd.DataFrame({
-        "resource_code": wip_df["resource_code"],
-        "qty_ea": wip_df["qty_ea"].astype(int),
+        "resource_code": wip_df_norm["resource_code"],
+        "qty_ea": wip_df_norm["qty_ea"].astype(int),
         "carrier_mode": "WIP",
         "from_center": "WIP",
-        "to_center": wip_df["to_center"],
-        "onboard_date": wip_df["wip_start"],
-        "arrival_date": wip_df["wip_ready"],
+        "to_center": wip_df_norm["to_center"],
+        "onboard_date": wip_df_norm["wip_start"],
+        "arrival_date": wip_df_norm["wip_ready"],
         "inbound_date": pd.NaT,
-        "event_date": wip_df["wip_ready"],
-        "lot": wip_df.get("lot", "")
+        "event_date": wip_df_norm["wip_ready"],
+        "lot": wip_df_norm.get("lot", "")
     })
+    for col in ["onboard_date", "arrival_date", "event_date"]:
+        wip_moves[col] = pd.to_datetime(wip_moves[col], errors="coerce").dt.normalize()
     return pd.concat([moves_df, wip_moves], ignore_index=True)
 
 # -------------------- 소비(소진) 추세 + 이벤트 가중치 --------------------

@@ -13,7 +13,6 @@ DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
 
 def normalize_move_dates(moves: pd.DataFrame, columns: Iterable[str] = DATE_COLUMNS) -> pd.DataFrame:
     """Return a copy of *moves* with the specified date columns normalised to midnight."""
-
     out = moves.copy()
     for col in columns:
         if col in out.columns:
@@ -38,7 +37,6 @@ def annotate_move_schedule(
     * Rows without any milestone drop on ``today + fallback_days`` (capped to
       the chart horizon) so they do not block the forecast indefinitely.
     """
-
     today_norm = pd.to_datetime(today).normalize()
     fallback_date = min(today_norm + pd.Timedelta(days=int(fallback_days)), horizon_end + pd.Timedelta(days=1))
 
@@ -57,8 +55,8 @@ def annotate_move_schedule(
 
     has_arrival = (~has_inbound) & arrival_col.notna()
     if has_arrival.any():
-        arr_dates = arrival_col
-        # Past arrivals remain in transit until the lagged receipt date.
+        arr_dates = out.loc[has_arrival, "arrival_date"]
+        # Past arrivals receive inventory after a lag to model receipt processing time.
         past_arrival = has_arrival & (arr_dates <= today_norm)
         if past_arrival.any():
             pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
@@ -90,7 +88,6 @@ def compute_in_transit_series(
     The output provides a daily step series per SKU whose decrements align
     exactly with the receipt dates returned by :func:`annotate_move_schedule`.
     """
-
     centers = {str(c) for c in centers_sel}
     skus = set(skus_sel)
     today_norm = pd.to_datetime(today).normalize()
@@ -141,7 +138,7 @@ def compute_in_transit_series(
                         "date": idx,
                         "center": "In-Transit",
                         "resource_code": sku,
-                        "stock_qty": in_transit.astype(float).round().astype(int),
+                        "stock_qty": in_transit.values,
                     }
                 )
             )
@@ -149,98 +146,62 @@ def compute_in_transit_series(
     if not series_frames:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 
-    return pd.concat(series_frames, ignore_index=True)
+    result = pd.concat(series_frames, ignore_index=True)
+    return result
 
 
-def build_timeline(
-    snap_long: pd.DataFrame,
+def generate_timeline(
     moves: pd.DataFrame,
-    centers_sel: List[str],
-    skus_sel: List[str],
+    capacity: pd.DataFrame,
+    mv_all: pd.DataFrame,
+    product_master: pd.DataFrame,
+    skus_sel: Iterable[str],
+    centers_sel: Iterable[str],
     start_dt: pd.Timestamp,
-    end_dt: pd.Timestamp,
-    horizon_days: int = 0,
-    today: Optional[pd.Timestamp] = None,
+    horizon_end: pd.Timestamp,
+    today: pd.Timestamp,
     lag_days: int = 7,
 ) -> pd.DataFrame:
-    if today is None:
-        today = pd.Timestamp.today().normalize()
-    horizon_end = end_dt + pd.Timedelta(days=horizon_days)
+    """Merge capacity plan, transit data and WIP positions into a unified timeline.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: date, center, resource_code, stock_qty
+    """
     full_dates = pd.date_range(start_dt, horizon_end, freq="D")
+    capacity = capacity.copy()
+    capacity["date"] = pd.to_datetime(capacity["date"]).dt.normalize()
+    capacity["center"] = capacity["center"].astype(str)
 
-    mv_all = normalize_move_dates(moves.copy())
-    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
+    capacity_filt = capacity[
+        capacity["resource_code"].isin(skus_sel)
+        & capacity["center"].isin(centers_sel)
+        & (capacity["date"] >= start_dt)
+        & (capacity["date"] <= horizon_end)
+    ].copy()
 
-    base = snap_long[
-        snap_long["center"].isin(centers_sel) & snap_long["resource_code"].isin(skus_sel)
-    ].copy().rename(columns={"snapshot_date": "date"})
-    if base.empty:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-    base = base[(base["date"] >= start_dt) & (base["date"] <= end_dt)]
+    if capacity_filt.empty:
+        cap_rows = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+    else:
+        cap_rows = capacity_filt[["date", "center", "resource_code", "stock_qty"]].copy()
 
     lines: List[pd.DataFrame] = []
+    if not cap_rows.empty:
+        lines.append(cap_rows)
 
-    for (ct, sku), grp in base.groupby(["center", "resource_code"]):
-        grp = grp.sort_values("date")
-        last_dt = grp["date"].max()
+    if moves.empty and mv_all.empty:
+        if not lines:
+            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        out = pd.concat(lines, ignore_index=True)
+        out = out[(out["date"] >= start_dt) & (out["date"] <= horizon_end)]
 
-        if horizon_days > 0:
-            proj_dates = pd.date_range(last_dt + pd.Timedelta(days=1), horizon_end, freq="D")
-            proj_df = pd.DataFrame({"date": proj_dates, "center": ct, "resource_code": sku, "stock_qty": np.nan})
-            ts = pd.concat([grp[["date", "center", "resource_code", "stock_qty"]], proj_df], ignore_index=True)
-        else:
-            ts = grp[["date", "center", "resource_code", "stock_qty"]].copy()
+        out["stock_qty"] = pd.to_numeric(out["stock_qty"], errors="coerce")
+        out["stock_qty"] = out["stock_qty"].fillna(0)
+        out["stock_qty"] = out["stock_qty"].replace([np.inf, -np.inf], 0)
+        out["stock_qty"] = out["stock_qty"].clip(lower=0).astype(int)
 
-        ts = ts.sort_values("date")
-        ts["stock_qty"] = ts["stock_qty"].ffill()
-
-        mv = mv_all[mv_all["resource_code"] == sku].copy()
-
-        eff_minus = (
-            mv[(mv["from_center"].astype(str) == str(ct)) & (mv["onboard_date"].notna()) & (mv["onboard_date"] > last_dt)]
-            .groupby("onboard_date", as_index=False)["qty_ea"].sum()
-            .rename(columns={"onboard_date": "date", "qty_ea": "delta"})
-        )
-        eff_minus["delta"] *= -1
-
-        mv_center = mv[(mv["to_center"].astype(str) == str(ct))].copy()
-        if not mv_center.empty:
-            eff_plus = (
-                mv_center[(mv_center["pred_inbound_date"].notna()) & (mv_center["pred_inbound_date"] > last_dt)]
-                .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
-                .rename(columns={"pred_inbound_date": "date", "qty_ea": "delta"})
-            )
-        else:
-            eff_plus = pd.DataFrame(columns=["date", "delta"])
-
-        eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
-        if not eff_all.empty:
-            delta_series = eff_all.groupby("date")["delta"].sum()
-            delta_series = delta_series.reindex(ts["date"], fill_value=0).fillna(0)
-            for date, delta in delta_series.items():
-                if delta != 0:
-                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
-
-        ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
-        lines.append(ts)
-
-        wip_complete = moves[
-            (moves["resource_code"] == sku)
-            & (moves["carrier_mode"].astype(str).str.upper() == "WIP")
-            & (moves["to_center"] == ct)
-            & (moves["event_date"].notna())
-        ].copy()
-        if not wip_complete.empty:
-            wip_add = (
-                wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum().rename(columns={"event_date": "date", "qty_ea": "delta"})
-            )
-            wip_delta_series = wip_add.groupby("date")["delta"].sum()
-            wip_delta_series = wip_delta_series.reindex(ts["date"], fill_value=0).fillna(0)
-            for date, delta in wip_delta_series.items():
-                if delta != 0:
-                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
-            ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
-            lines[-1] = ts
+        return out
 
     moves_str = mv_all.copy()
     moves_str["from_center"] = moves_str["from_center"].astype(str)
