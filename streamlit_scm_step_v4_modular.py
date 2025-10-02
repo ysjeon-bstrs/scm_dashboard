@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from scm_dashboard_v4.config import CENTER_COL, PALETTE, configure_page, initialize_session_state
@@ -20,6 +21,7 @@ from scm_dashboard_v4.processing import (
     normalize_refined_snapshot,
     load_wip_from_incoming,
 )
+from scm_dashboard_v4.sales import prepare_amazon_sales_series
 from scm_dashboard_v4.timeline import build_timeline
 
 configure_page()
@@ -190,7 +192,6 @@ proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 st.sidebar.header("표시 옵션")
 show_prod = st.sidebar.checkbox("생산중(미완료) 표시", value=True)
-show_transit = st.sidebar.checkbox("이동중 표시", value=True)
 use_cons_forecast = st.sidebar.checkbox("추세 기반 재고 예측", value=True)
 lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
 
@@ -310,14 +311,11 @@ if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
     vis_df = timeline[(timeline["date"] >= start_dt) & (timeline["date"] <= end_dt)].copy()
-    vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*$", "이동중", regex=True)
     vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
     if "태광KR" not in centers_sel:
         vis_df = vis_df[vis_df["center"] != "생산중"]
     if not show_prod:
         vis_df = vis_df[vis_df["center"] != "생산중"]
-    if not show_transit:
-        vis_df = vis_df[~vis_df["center"].str.startswith("이동중")]
 
     vis_df = vis_df[vis_df["stock_qty"] > 0]
     vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
@@ -335,7 +333,7 @@ else:
         hovermode="x unified",
         xaxis_title="날짜",
         yaxis_title="재고량(EA)",
-        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
+        legend_title_text="SKU @ Center / 생산중(점선)",
         margin=dict(l=20, r=20, t=60, b=20),
     )
 
@@ -371,9 +369,7 @@ else:
             continue
         _, kind = name.split(" @ ", 1)
         line_color = line_colors.get(name, PALETTE[0])
-        if kind == "이동중":
-            fig.data[i].update(line=dict(color=line_color, dash="dot", width=1.2), opacity=0.9)
-        elif kind == "생산중":
+        if kind == "생산중":
             fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
         else:
             fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
@@ -381,41 +377,59 @@ else:
     chart_key = (
         f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
         f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
-        f"prod{int(show_prod)}|tran{int(show_transit)}"
+        f"prod{int(show_prod)}"
     )
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+
+# -------------------- Amazon US sales vs. inventory --------------------
+st.subheader("Amazon US 일일 판매 & 재고")
+sales_result = prepare_amazon_sales_series(snap_long, skus_sel, start_dt, end_dt)
+sales_df = sales_result.data
+
+if sales_df.empty:
+    st.caption("선택된 SKU/기간에 대한 Amazon US 판매 데이터가 없습니다.")
+else:
+    sales_fig = go.Figure()
+    sales_fig.add_bar(
+        x=sales_df["date"],
+        y=sales_df["sales_qty"],
+        name="일일 판매량",
+        marker_color="#ff7f0e",
+        opacity=0.8,
+    )
+    sales_fig.add_scatter(
+        x=sales_df["date"],
+        y=sales_df["inventory_qty"],
+        name="Amazon 재고",
+        mode="lines",
+        line=dict(color="#1f77b4", width=2),
+        yaxis="y2",
+    )
+    sales_fig.add_scatter(
+        x=sales_df["date"],
+        y=sales_df["sales_roll_mean"],
+        name="판매 7일 이동평균",
+        mode="lines",
+        line=dict(color="#d62728", dash="dash"),
+        visible="legendonly",
+    )
+
+    sales_fig.update_layout(
+        barmode="overlay",
+        hovermode="x unified",
+        legend_title_text="Amazon 판매/재고",
+        xaxis=dict(title="날짜"),
+        yaxis=dict(title="일일 판매량(EA)"),
+        yaxis2=dict(title="Amazon 재고(EA)", overlaying="y", side="right"),
+        margin=dict(l=20, r=40, t=40, b=20),
+    )
+    sales_fig.update_yaxes(tickformat=",.0f")
+    st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
-
-arr_transport = mv[
-    (mv["carrier_mode"] != "WIP")
-    & (mv["to_center"].isin(centers_sel))
-    & (mv["resource_code"].isin(skus_sel))
-    & (mv["inbound_date"].isna())
-].copy()
-
-arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
-arr_transport = arr_transport[arr_transport["display_date"].notna()]
-arr_transport = arr_transport[
-    (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
-]
-
-arr_wip = pd.DataFrame()
-if "태광KR" in centers_sel:
-    arr_wip = mv[
-        (mv["carrier_mode"] == "WIP")
-        & (mv["to_center"] == "태광KR")
-        & (mv["resource_code"].isin(skus_sel))
-        & (mv["event_date"].notna())
-        & (mv["event_date"] >= window_start)
-        & (mv["event_date"] <= window_end)
-    ].copy()
-    arr_wip["display_date"] = arr_wip["event_date"]
-
-upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
 
 mv_view = mv.copy()
 if not mv_view.empty:
@@ -434,24 +448,50 @@ if not mv_view.empty:
 
     mv_view["pred_inbound_date"] = pred_inbound
 
-upcoming = upcoming.merge(
-    mv_view[["resource_code", "onboard_date", "pred_inbound_date"]],
-    on=["resource_code", "onboard_date"],
-    how="left",
-)
+arr_transport = mv_view[
+    (mv_view["carrier_mode"] != "WIP")
+    & (mv_view["to_center"].isin(centers_sel))
+    & (mv_view["resource_code"].isin(skus_sel))
+    & (mv_view["inbound_date"].isna())
+].copy()
 
-if _name_map:
-    upcoming["resource_name"] = upcoming["resource_code"].map(_name_map).fillna("")
+arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
+arr_transport = arr_transport[arr_transport["display_date"].notna()]
+arr_transport = arr_transport[
+    (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
+]
 
-if upcoming.empty:
-    st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
+arr_wip = pd.DataFrame()
+if "태광KR" in centers_sel:
+    arr_wip = mv_view[
+        (mv_view["carrier_mode"] == "WIP")
+        & (mv_view["to_center"] == "태광KR")
+        & (mv_view["resource_code"].isin(skus_sel))
+        & (mv_view["event_date"].notna())
+        & (mv_view["event_date"] >= window_start)
+        & (mv_view["event_date"] <= window_end)
+    ].copy()
+    arr_wip["display_date"] = arr_wip["event_date"]
+
+confirmed_inbound = arr_transport.copy()
+if _name_map and not confirmed_inbound.empty:
+    confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(_name_map).fillna("")
+
+st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
+if confirmed_inbound.empty:
+    st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
 else:
-    upcoming["days_to_arrival"] = (upcoming["display_date"].dt.normalize() - today).dt.days
-    upcoming["days_to_inbound"] = (upcoming["pred_inbound_date"].dt.normalize() - today).dt.days
-    upcoming = upcoming.sort_values(
-        ["display_date", "to_center", "resource_code", "qty_ea"], ascending=[True, True, True, False]
+    confirmed_inbound["days_to_arrival"] = (
+        confirmed_inbound["display_date"].dt.normalize() - today
+    ).dt.days
+    confirmed_inbound["days_to_inbound"] = (
+        confirmed_inbound["pred_inbound_date"].dt.normalize() - today
+    ).dt.days
+    confirmed_inbound = confirmed_inbound.sort_values(
+        ["display_date", "to_center", "resource_code", "qty_ea"],
+        ascending=[True, True, True, False],
     )
-    cols = [
+    inbound_cols = [
         "display_date",
         "days_to_arrival",
         "to_center",
@@ -464,10 +504,37 @@ else:
         "days_to_inbound",
         "lot",
     ]
-    cols = [c for c in cols if c in upcoming.columns]
-    st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
-    st.caption("※ days_to_arrival가 음수(–)로 보이면: 화물은 '도착'했으나 인바운드(입고완료) 등록 전 상태입니다.")
+    inbound_cols = [c for c in inbound_cols if c in confirmed_inbound.columns]
+    st.dataframe(
+        confirmed_inbound[inbound_cols].head(1000),
+        use_container_width=True,
+        height=300,
+    )
     st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
+
+if not arr_wip.empty:
+    if _name_map:
+        arr_wip["resource_name"] = arr_wip["resource_code"].map(_name_map).fillna("")
+    st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+    arr_wip = arr_wip.sort_values(
+        ["display_date", "resource_code", "qty_ea"], ascending=[True, True, False]
+    )
+    arr_wip["days_to_completion"] = (
+        arr_wip["display_date"].dt.normalize() - today
+    ).dt.days
+    wip_cols = [
+        "display_date",
+        "days_to_completion",
+        "resource_code",
+        "resource_name",
+        "qty_ea",
+        "pred_inbound_date",
+        "lot",
+    ]
+    wip_cols = [c for c in wip_cols if c in arr_wip.columns]
+    st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
+else:
+    st.caption("생산중(WIP) 데이터가 없습니다.")
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
 st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
