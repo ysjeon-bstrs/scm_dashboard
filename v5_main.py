@@ -9,8 +9,9 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from scm_dashboard_v4.config import PALETTE
-from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api
+from scm_dashboard_v4.config import CENTER_COL, PALETTE
+from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
+from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api, load_snapshot_raw
 from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
     merge_wip_as_moves,
@@ -475,6 +476,201 @@ def main() -> None:
         st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
+
+    snapshot_df = data.snapshot.copy()
+    if snapshot_df.empty or "date" not in snapshot_df.columns:
+        st.info("스냅샷 데이터가 없습니다.")
+        return
+
+    snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+    latest_dt = snapshot_df["date"].max()
+    if pd.isna(latest_dt):
+        st.info("스냅샷 데이터의 날짜 정보를 확인할 수 없습니다.")
+        return
+
+    latest_dt_str = latest_dt.strftime("%Y-%m-%d")
+    st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
+
+    current_snapshot = snapshot_df[
+        (snapshot_df["date"] == latest_dt) & (snapshot_df["center"].isin(selected_centers))
+    ].copy()
+
+    pivot = (
+        current_snapshot.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
+        .pivot(index="resource_code", columns="center", values="stock_qty")
+        .fillna(0)
+    )
+
+    for center in selected_centers:
+        if center not in pivot.columns:
+            pivot[center] = 0
+    if pivot.empty:
+        pivot = pivot.reindex(columns=selected_centers)
+    pivot = pivot.reindex(columns=selected_centers, fill_value=0)
+    pivot = pivot.astype(int)
+    pivot["총합"] = pivot.sum(axis=1)
+
+    col_filter, col_sort = st.columns([2, 1])
+    with col_filter:
+        sku_query = st.text_input(
+            "SKU 필터 — 품목번호 검색 시 해당 SKU의 센터별 제조번호(LOT) 확인",
+            "",
+            key="v5_sku_filter_text",
+        )
+    with col_sort:
+        sort_candidates = ["총합"] + selected_centers
+        sort_by = st.selectbox("정렬 기준", sort_candidates, index=0)
+
+    col_zero, col_cost = st.columns(2)
+    with col_zero:
+        hide_zero = st.checkbox("총합=0 숨기기", value=True)
+    with col_cost:
+        show_cost = st.checkbox("재고자산(제조원가) 표시", value=False)
+
+    view = pivot.copy()
+    if sku_query.strip():
+        view = view[view.index.astype(str).str.contains(sku_query.strip(), case=False, regex=False)]
+    if hide_zero and "총합" in view.columns:
+        view = view[view["총합"] > 0]
+    if sort_by in view.columns:
+        view = view.sort_values(by=sort_by, ascending=False)
+
+    display_df = view.reset_index().rename(columns={"resource_code": "SKU"})
+    if resource_name_map:
+        display_df.insert(1, "품명", display_df["SKU"].map(resource_name_map).fillna(""))
+
+    if show_cost:
+        snap_raw_df = load_snapshot_raw()
+        cost_pivot = pivot_inventory_cost_from_raw(snap_raw_df, latest_dt, selected_centers)
+        if cost_pivot.empty:
+            st.warning(
+                "재고자산 계산을 위한 'snapshot_raw' 데이터를 불러올 수 없어 수량만 표시합니다. (엑셀에 'snapshot_raw' 시트가 있으면 자동 사용됩니다)"
+            )
+            merged_df = display_df
+            cost_columns = []
+        else:
+            merged_df = display_df.merge(
+                cost_pivot.rename(columns={"resource_code": "SKU"}),
+                on="SKU",
+                how="left",
+            )
+            cost_columns = [c for c in merged_df.columns if c.endswith("_재고자산")]
+            if "총 재고자산" in merged_df.columns:
+                cost_columns.append("총 재고자산")
+            if cost_columns:
+                merged_df[cost_columns] = merged_df[cost_columns].fillna(0).astype(int)
+                for col in cost_columns:
+                    merged_df[col] = merged_df[col].apply(
+                        lambda x: f"{x:,}원" if isinstance(x, (int, float)) else x
+                    )
+        quantity_columns = [
+            c
+            for c in merged_df.columns
+            if c not in {"SKU", "품명", "총합", *cost_columns}
+        ]
+        ordered_columns = ["SKU"]
+        if "품명" in merged_df.columns:
+            ordered_columns.append("품명")
+        ordered_columns.extend([c for c in quantity_columns if not c.endswith("_재고자산")])
+        if "총합" in merged_df.columns:
+            ordered_columns.append("총합")
+        ordered_columns.extend(cost_columns)
+        show_df = merged_df[ordered_columns]
+    else:
+        show_df = display_df
+        cost_columns = []
+
+    qty_columns = [
+        c
+        for c in show_df.columns
+        if c not in {"SKU", "품명"}
+        and not c.endswith("_재고자산")
+        and c != "총 재고자산"
+    ]
+    for column in qty_columns:
+        show_df[column] = show_df[column].apply(
+            lambda x: f"{int(x):,}" if pd.notna(x) and isinstance(x, (int, float)) else x
+        )
+
+    st.dataframe(show_df, use_container_width=True, height=380)
+
+    csv_bytes = show_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "현재 표 CSV 다운로드",
+        data=csv_bytes,
+        file_name=f"centers_{'-'.join(selected_centers)}_snapshot_{latest_dt_str}.csv",
+        mime="text/csv",
+    )
+
+    st.caption(
+        "※ 이 표는 **선택된 센터 전체 SKU**의 최신 스냅샷 재고입니다. 상단 'SKU 선택'과 무관하게 모든 SKU가 포함됩니다."
+    )
+
+    filtered_df = (
+        show_df if "SKU" in show_df.columns else view.reset_index().rename(columns={"resource_code": "SKU"})
+    )
+    visible_skus = filtered_df.get("SKU", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+
+    if len(visible_skus) == 1:
+        lot_sku = visible_skus[0]
+        snap_raw_df = load_snapshot_raw()
+        if snap_raw_df is None or snap_raw_df.empty:
+            st.markdown(
+                f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+            )
+            st.caption("해당 조건의 로트 상세가 없습니다. (snapshot_raw 없음)")
+        else:
+            raw_df = snap_raw_df.copy()
+            cols_map = {str(col).strip().lower(): col for col in raw_df.columns}
+            col_date = cols_map.get("snapshot_date") or cols_map.get("date")
+            col_sku = (
+                cols_map.get("resource_code")
+                or cols_map.get("sku")
+                or cols_map.get("상품코드")
+            )
+            col_lot = cols_map.get("lot")
+            used_centers = [ct for ct in selected_centers if CENTER_COL.get(ct) in raw_df.columns]
+            if not all([col_date, col_sku, col_lot]) or not used_centers:
+                st.markdown(
+                    f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                )
+                st.caption("해당 조건의 로트 상세가 없습니다.")
+            else:
+                raw_df[col_date] = pd.to_datetime(raw_df[col_date], errors="coerce").dt.normalize()
+                lot_subset = raw_df[
+                    (raw_df[col_date] == latest_dt) & (raw_df[col_sku].astype(str) == str(lot_sku))
+                ].copy()
+                if lot_subset.empty:
+                    st.markdown(
+                        f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                    )
+                    st.caption("해당 조건의 로트 상세가 없습니다.")
+                else:
+                    for center in used_centers:
+                        src_col = CENTER_COL.get(center)
+                        lot_subset[src_col] = (
+                            pd.to_numeric(lot_subset[src_col], errors="coerce").fillna(0).clip(lower=0)
+                        )
+                    lot_table = pd.DataFrame({"lot": lot_subset[col_lot].astype(str).fillna("(no lot)")})
+                    for center in used_centers:
+                        src_col = CENTER_COL.get(center)
+                        lot_table[center] = lot_subset.groupby(col_lot)[src_col].transform("sum")
+                    lot_table = lot_table.drop_duplicates()
+                    lot_table["합계"] = lot_table[used_centers].sum(axis=1)
+                    lot_table = lot_table[lot_table["합계"] > 0]
+                    st.markdown(
+                        f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                    )
+                    if lot_table.empty:
+                        st.caption("해당 조건의 로트 상세가 없습니다.")
+                    else:
+                        st.dataframe(
+                            lot_table[["lot"] + used_centers + ["합계"]]
+                            .sort_values("합계", ascending=False)
+                            .reset_index(drop=True),
+                            use_container_width=True,
+                            height=320,
+                        )
 
 
 if __name__ == "__main__":
