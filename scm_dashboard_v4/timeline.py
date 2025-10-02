@@ -126,6 +126,10 @@ def build_timeline(
     mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
 
 
+    mv_all = normalize_move_dates(moves.copy())
+    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
+
+
     if not series_frames:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 

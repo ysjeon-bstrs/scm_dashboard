@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable
+
+from typing import Iterable, NamedTuple
 
 
 import pandas as pd
 
 
-@dataclass
-class AmazonSalesResult:
+
+class AmazonSalesResult(NamedTuple):
+
     """Container for aggregated Amazon sales/inventory series."""
 
     data: pd.DataFrame

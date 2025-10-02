@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-
 import streamlit as st
 
 from scm_dashboard_v4.config import CENTER_COL, PALETTE, configure_page, initialize_session_state
@@ -313,7 +312,6 @@ if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
     vis_df = timeline[(timeline["date"] >= start_dt) & (timeline["date"] <= end_dt)].copy()
-
     vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
     if "태광KR" not in centers_sel:
         vis_df = vis_df[vis_df["center"] != "생산중"]
@@ -470,14 +468,11 @@ if not sales_series.empty:
         f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
         f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
         f"prod{int(show_prod)}"
-
     )
     chart.update_yaxes(title_text="Daily Sales (EA)", secondary_y=False)
     chart.update_yaxes(title_text="Inventory (EA)", secondary_y=True)
     chart.update_xaxes(title_text="날짜")
     chart.update_traces(hovertemplate="날짜: %{x|%Y-%m-%d}<br>값: %{y:,.0f}<extra>%{fullData.name}</extra>")
-
-    st.plotly_chart(chart, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Amazon US sales vs. inventory --------------------
 st.subheader("Amazon US 일일 판매 & 재고")
@@ -525,9 +520,10 @@ else:
     st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
-st.subheader("Upcoming Inbound (선택 센터/SKU)")
+st.subheader("입고 예정 내역 (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
+
 
 mv_view = mv.copy()
 if not mv_view.empty:
@@ -558,7 +554,6 @@ arr_transport = arr_transport[arr_transport["display_date"].notna()]
 arr_transport = arr_transport[
     (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
 ]
-
 
 arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
@@ -591,7 +586,6 @@ else:
         ascending=[True, True, True, False],
     )
     inbound_cols = [
-
         "display_date",
         "days_to_arrival",
         "to_center",
@@ -604,7 +598,6 @@ else:
         "days_to_inbound",
         "lot",
     ]
-
     inbound_cols = [c for c in inbound_cols if c in confirmed_inbound.columns]
     st.dataframe(
         confirmed_inbound[inbound_cols].head(1000),
@@ -636,7 +629,6 @@ if not arr_wip.empty:
     st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
 else:
     st.caption("생산중(WIP) 데이터가 없습니다.")
-
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
 st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
