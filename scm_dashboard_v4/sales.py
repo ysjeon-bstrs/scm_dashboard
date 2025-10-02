@@ -10,6 +10,9 @@ import pandas as pd
 
 
 
+__all__ = ["prepare_amazon_sales_series", "prepare_amazon_daily_sales"]
+
+
 class AmazonSalesResult(NamedTuple):
 
     """Container for aggregated Amazon sales/inventory series."""
@@ -91,3 +94,6 @@ def prepare_amazon_sales_series(
     )
 
     return AmazonSalesResult(agg, center)
+
+
+prepare_amazon_daily_sales = prepare_amazon_sales_series
