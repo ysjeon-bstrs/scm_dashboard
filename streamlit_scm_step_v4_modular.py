@@ -190,7 +190,6 @@ proj_days_for_build = max(0, int((end_dt - _latest_snap).days))
 
 st.sidebar.header("표시 옵션")
 show_prod = st.sidebar.checkbox("생산중(미완료) 표시", value=True)
-show_transit = st.sidebar.checkbox("이동중 표시", value=True)
 use_cons_forecast = st.sidebar.checkbox("추세 기반 재고 예측", value=True)
 lookback_days = st.sidebar.number_input("추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7)
 
@@ -310,80 +309,80 @@ if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
     vis_df = timeline[(timeline["date"] >= start_dt) & (timeline["date"] <= end_dt)].copy()
-    vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*$", "이동중", regex=True)
+    vis_df = vis_df[~vis_df["center"].astype(str).str.startswith("In-Transit")]
     vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
     if "태광KR" not in centers_sel:
         vis_df = vis_df[vis_df["center"] != "생산중"]
     if not show_prod:
         vis_df = vis_df[vis_df["center"] != "생산중"]
-    if not show_transit:
-        vis_df = vis_df[~vis_df["center"].str.startswith("이동중")]
 
     vis_df = vis_df[vis_df["stock_qty"] > 0]
-    vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
 
-    fig = px.line(
-        vis_df,
-        x="date",
-        y="stock_qty",
-        color="label",
-        line_shape="hv",
-        title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
-        render_mode="svg",
-    )
-    fig.update_layout(
-        hovermode="x unified",
-        xaxis_title="날짜",
-        yaxis_title="재고량(EA)",
-        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
-        margin=dict(l=20, r=20, t=60, b=20),
-    )
+    if vis_df.empty:
+        st.info("선택한 조건에서 표시할 센터/생산중 데이터가 없습니다.")
+    else:
+        vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
 
-    if start_dt <= today <= end_dt:
-        fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
-        fig.add_annotation(
-            x=today,
-            y=1.02,
-            xref="x",
-            yref="paper",
-            text="오늘",
-            showarrow=False,
-            font=dict(size=12, color="#555"),
-            align="center",
-            yanchor="bottom",
+        fig = px.line(
+            vis_df,
+            x="date",
+            y="stock_qty",
+            color="label",
+            line_shape="hv",
+            title="선택한 SKU × 센터(및 생산중) 계단식 재고 흐름",
+            render_mode="svg",
+        )
+        fig.update_layout(
+            hovermode="x unified",
+            xaxis_title="날짜",
+            yaxis_title="재고량(EA)",
+            legend_title_text="SKU @ Center / 생산중(점선)",
+            margin=dict(l=20, r=20, t=60, b=20),
         )
 
-    fig.update_yaxes(tickformat=",.0f")
-    fig.update_traces(
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
-    )
+        if start_dt <= today <= end_dt:
+            fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
+            fig.add_annotation(
+                x=today,
+                y=1.02,
+                xref="x",
+                yref="paper",
+                text="오늘",
+                showarrow=False,
+                font=dict(size=12, color="#555"),
+                align="center",
+                yanchor="bottom",
+            )
 
-    line_colors: Dict[str, str] = {}
-    color_idx = 0
-    for tr in fig.data:
-        name = tr.name or ""
-        if " @ " in name and name not in line_colors:
-            line_colors[name] = PALETTE[color_idx % len(PALETTE)]
-            color_idx += 1
-    for i, tr in enumerate(fig.data):
-        name = tr.name or ""
-        if " @ " not in name:
-            continue
-        _, kind = name.split(" @ ", 1)
-        line_color = line_colors.get(name, PALETTE[0])
-        if kind == "이동중":
-            fig.data[i].update(line=dict(color=line_color, dash="dot", width=1.2), opacity=0.9)
-        elif kind == "생산중":
-            fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
-        else:
-            fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
+        fig.update_yaxes(tickformat=",.0f")
+        fig.update_traces(
+            hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
+        )
 
-    chart_key = (
-        f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
-        f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
-        f"prod{int(show_prod)}|tran{int(show_transit)}"
-    )
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+        line_colors: Dict[str, str] = {}
+        color_idx = 0
+        for tr in fig.data:
+            name = tr.name or ""
+            if " @ " in name and name not in line_colors:
+                line_colors[name] = PALETTE[color_idx % len(PALETTE)]
+                color_idx += 1
+        for i, tr in enumerate(fig.data):
+            name = tr.name or ""
+            if " @ " not in name:
+                continue
+            _, kind = name.split(" @ ", 1)
+            line_color = line_colors.get(name, PALETTE[0])
+            if kind == "생산중":
+                fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
+            else:
+                fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
+
+        chart_key = (
+            f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
+            f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
+            f"prod{int(show_prod)}"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
