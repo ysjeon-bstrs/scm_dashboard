@@ -385,7 +385,7 @@ else:
         st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
-st.subheader("입고 예정 내역 (선택 센터/SKU)")
+st.subheader("Upcoming Inbound (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
 
@@ -419,32 +419,22 @@ arr_transport = arr_transport[
     (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
 ]
 
-arr_wip = pd.DataFrame()
-if "태광KR" in centers_sel:
-    arr_wip = mv_view[
-        (mv_view["carrier_mode"] == "WIP")
-        & (mv_view["to_center"] == "태광KR")
-        & (mv_view["resource_code"].isin(skus_sel))
-        & (mv_view["event_date"].notna())
-        & (mv_view["event_date"] >= window_start)
-        & (mv_view["event_date"] <= window_end)
-    ].copy()
-    arr_wip["display_date"] = arr_wip["event_date"]
+if _name_map and not arr_transport.empty:
+    arr_transport["resource_name"] = arr_transport["resource_code"].map(_name_map).fillna("")
 
-upcoming = pd.concat([arr_transport, arr_wip], ignore_index=True)
-
-if _name_map:
-    upcoming["resource_name"] = upcoming["resource_code"].map(_name_map).fillna("")
-
-if upcoming.empty:
-    st.caption("도착 예정 없음 (오늘 이후 / 선택 기간)")
+if arr_transport.empty:
+    st.caption("도착 예정 없음 (운송/입고 대기)")
 else:
-    upcoming["days_to_arrival"] = (upcoming["display_date"].dt.normalize() - today).dt.days
-    upcoming["days_to_inbound"] = (upcoming["pred_inbound_date"].dt.normalize() - today).dt.days
-    upcoming = upcoming.sort_values(
+    arr_transport["days_to_arrival"] = (
+        arr_transport["display_date"].dt.normalize() - today
+    ).dt.days
+    arr_transport["days_to_inbound"] = (
+        arr_transport["pred_inbound_date"].dt.normalize() - today
+    ).dt.days
+    arr_transport = arr_transport.sort_values(
         ["display_date", "to_center", "resource_code", "qty_ea"], ascending=[True, True, True, False]
     )
-    cols = [
+    transport_cols = [
         "display_date",
         "days_to_arrival",
         "to_center",
@@ -457,10 +447,53 @@ else:
         "days_to_inbound",
         "lot",
     ]
-    cols = [c for c in cols if c in upcoming.columns]
-    st.dataframe(upcoming[cols].head(1000), use_container_width=True, height=300)
-    st.caption("※ days_to_arrival가 음수(–)로 보이면: 화물은 '도착'했으나 인바운드(입고완료) 등록 전 상태입니다.")
+    transport_cols = [c for c in transport_cols if c in arr_transport.columns]
+    st.dataframe(arr_transport[transport_cols].head(1000), use_container_width=True, height=300)
+    st.caption(
+        "※ 운송 중/입고 대기 건 — days_to_arrival < 0 이면 도착 완료, 입고 등록 전 상태입니다."
+    )
     st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
+
+arr_wip = pd.DataFrame()
+if "태광KR" in centers_sel:
+    arr_wip = mv_view[
+        (mv_view["carrier_mode"] == "WIP")
+        & (mv_view["to_center"] == "태광KR")
+        & (mv_view["resource_code"].isin(skus_sel))
+        & (mv_view["event_date"].notna())
+        & (mv_view["event_date"] >= window_start)
+        & (mv_view["event_date"] <= window_end)
+    ].copy()
+    arr_wip["display_date"] = arr_wip["event_date"]
+
+if not arr_wip.empty:
+    st.subheader("생산중 (WIP)")
+    if _name_map:
+        arr_wip["resource_name"] = arr_wip["resource_code"].map(_name_map).fillna("")
+    arr_wip["days_to_arrival"] = (
+        arr_wip["display_date"].dt.normalize() - today
+    ).dt.days
+    arr_wip["days_to_inbound"] = (
+        arr_wip["pred_inbound_date"].dt.normalize() - today
+    ).dt.days
+    arr_wip = arr_wip.sort_values(
+        ["display_date", "to_center", "resource_code", "qty_ea"], ascending=[True, True, True, False]
+    )
+    wip_cols = [
+        "display_date",
+        "days_to_arrival",
+        "to_center",
+        "resource_code",
+        "resource_name",
+        "qty_ea",
+        "carrier_mode",
+        "pred_inbound_date",
+        "days_to_inbound",
+        "lot",
+    ]
+    wip_cols = [c for c in wip_cols if c in arr_wip.columns]
+    st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=240)
+    st.caption("※ 생산중인 물량 — pred_inbound_date 기준 예상 입고 스케줄 확인")
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
 st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
