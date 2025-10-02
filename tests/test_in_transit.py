@@ -87,9 +87,10 @@ def test_in_transit_synchronises_with_annotate_dates():
     # Check that deltas match predicted inbound dates
     deltas = ts.diff().fillna(ts.iloc[0])
 
+    onboard_field = "_onboard_date_actual" if "_onboard_date_actual" in prepared.columns else "onboard_date"
     onboard_events = (
         prepared[prepared["to_center"].astype(str) == "C1"]
-        .groupby("onboard_date")["qty_ea"].sum()
+        .groupby(onboard_field)["qty_ea"].sum()
     )
 
     for event_date, qty in onboard_events.items():
@@ -98,7 +99,7 @@ def test_in_transit_synchronises_with_annotate_dates():
         assert deltas.loc[event_date] == qty
 
     carry_expected = prepared[
-        (prepared["onboard_date"] < start)
+        (prepared[onboard_field] <= start)
         & (prepared["in_transit_end_date"] > start)
         & (prepared["to_center"].astype(str) == "C1")
     ]["qty_ea"].sum()
