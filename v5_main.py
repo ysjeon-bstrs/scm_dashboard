@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from scm_dashboard_v4.config import PALETTE
 from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api
 from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
@@ -159,20 +160,94 @@ def _build_timeline(
     return timeline
 
 
-def _plot_timeline(timeline: pd.DataFrame) -> None:
-    """Render the timeline using Plotly."""
+def _plot_timeline(
+    timeline: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> None:
+    """Render the timeline using Plotly with styling borrowed from v4."""
+
+    if timeline.empty:
+        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
+        return
+
+    vis_df = timeline.copy()
+    vis_df["date"] = pd.to_datetime(vis_df["date"]).dt.normalize()
+    vis_df = vis_df[(vis_df["date"] >= start) & (vis_df["date"] <= end)]
+
+    center_translation = {"In-Transit": "이동중", "WIP": "생산중"}
+    vis_df["center"] = vis_df["center"].replace(center_translation)
+
+    vis_df = vis_df[vis_df["stock_qty"] != 0]
+    if vis_df.empty:
+        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
+        return
+
+    vis_df["label"] = vis_df["resource_code"].astype(str) + " @ " + vis_df["center"].astype(str)
 
     fig = px.line(
-        timeline,
+        vis_df,
         x="date",
         y="stock_qty",
-        color="center",
-        line_dash="resource_code",
-        markers=True,
-        title="센터/라인별 재고 추이",
+        color="label",
+        line_shape="hv",
+        title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
+        render_mode="svg",
     )
-    fig.update_layout(hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
+
+    fig.update_layout(
+        hovermode="x unified",
+        xaxis_title="날짜",
+        yaxis_title="재고량(EA)",
+        legend_title_text="SKU @ Center / 생산중(점선)",
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    fig.update_yaxes(tickformat=",.0f")
+    fig.update_traces(
+        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
+    )
+
+    line_colors: dict[str, str] = {}
+    color_idx = 0
+    for trace in fig.data:
+        name = trace.name or ""
+        if " @ " in name and name not in line_colors:
+            line_colors[name] = PALETTE[color_idx % len(PALETTE)]
+            color_idx += 1
+
+    for idx, trace in enumerate(fig.data):
+        name = trace.name or ""
+        if " @ " not in name:
+            continue
+        _, center_name = name.split(" @ ", 1)
+        line_color = line_colors.get(name, PALETTE[0])
+        is_transit = center_name in {"이동중", "생산중"}
+        fig.data[idx].update(
+            line=dict(
+                color=line_color,
+                dash="dash" if is_transit else "solid",
+                width=1.0 if is_transit else 1.5,
+            ),
+            opacity=0.8 if is_transit else 1.0,
+        )
+
+    today = pd.Timestamp.today().normalize()
+    if start <= today <= end:
+        fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
+        fig.add_annotation(
+            x=today,
+            y=1.02,
+            xref="x",
+            yref="paper",
+            text="오늘",
+            showarrow=False,
+            font=dict(size=12, color="#555"),
+            align="center",
+            yanchor="bottom",
+        )
+
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 
 def main() -> None:
@@ -242,7 +317,7 @@ def main() -> None:
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
-    _plot_timeline(timeline)
+    _plot_timeline(timeline, start=start_ts, end=end_ts)
 
     st.subheader("센터별 타임라인")
     st.dataframe(timeline[timeline["center"].isin(selected_centers)])
