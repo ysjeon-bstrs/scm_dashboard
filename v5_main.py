@@ -7,6 +7,8 @@ from typing import Iterable, Optional, Tuple
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from scm_dashboard_v4.config import CENTER_COL, PALETTE
@@ -18,6 +20,8 @@ from scm_dashboard_v4.processing import (
     normalize_moves,
     normalize_refined_snapshot,
 )
+
+from scm_dashboard_v5.analytics import prepare_amazon_daily_sales
 from scm_dashboard_v5.analytics.kpi import kpi_breakdown_per_sku
 from scm_dashboard_v5.forecast import apply_consumption_with_events
 from scm_dashboard_v5.pipeline import BuildInputs, build_timeline_bundle
@@ -466,6 +470,88 @@ def main() -> None:
         show_production=show_prod,
         selected_centers=selected_centers,
     )
+
+    # -------------------- Amazon US sales vs. inventory --------------------
+    amazon_candidates = [
+        center
+        for center in selected_centers
+        if str(center).strip()
+        and (
+            "amazon" in str(center).lower()
+            or str(center).upper().startswith("AMZ")
+        )
+    ]
+
+    sales_result = prepare_amazon_daily_sales(
+        data.snapshot,
+        centers=amazon_candidates,
+        skus=selected_skus,
+        start_dt=start_ts,
+        end_dt=end_ts,
+        rolling_window=7,
+    )
+
+    st.divider()
+    st.subheader("Amazon US 일별 판매 vs. 재고")
+    sales_df = sales_result.data
+    if sales_df.empty:
+        st.caption("선택된 SKU/기간에 대한 Amazon US 판매 데이터가 없습니다.")
+    else:
+        sales_df = sales_df.copy()
+        sales_df["date"] = pd.to_datetime(sales_df["date"], errors="coerce")
+        sales_df = sales_df.sort_values("date")
+
+        sales_fig = make_subplots(specs=[[{"secondary_y": True}]])
+        sales_fig.add_trace(
+            go.Bar(
+                x=sales_df["date"],
+                y=sales_df["sales_qty"],
+                name="Daily Sales (EA)",
+                marker_color=PALETTE[0],
+                opacity=0.85,
+            ),
+            secondary_y=False,
+        )
+        sales_fig.add_trace(
+            go.Scatter(
+                x=sales_df["date"],
+                y=sales_df["inventory_qty"],
+                mode="lines+markers",
+                name="Amazon Inventory (EA)",
+                line=dict(color=PALETTE[1], width=2),
+                marker=dict(size=4),
+            ),
+            secondary_y=True,
+        )
+        sales_fig.add_trace(
+            go.Scatter(
+                x=sales_df["date"],
+                y=sales_df["sales_roll_mean"],
+                name="Sales 7d Rolling Avg",
+                mode="lines",
+                line=dict(color=PALETTE[2], dash="dash"),
+                visible="legendonly",
+            ),
+            secondary_y=False,
+        )
+
+        sales_fig.update_layout(
+            hovermode="x unified",
+            legend_title_text="Amazon 판매/재고",
+            margin=dict(l=20, r=40, t=40, b=20),
+        )
+        sales_fig.update_xaxes(title_text="날짜")
+        sales_fig.update_yaxes(
+            title_text="일일 판매량(EA)",
+            secondary_y=False,
+            tickformat=",.0f",
+        )
+        sales_fig.update_yaxes(
+            title_text="Amazon 재고(EA)",
+            secondary_y=True,
+            tickformat=",.0f",
+        )
+        st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
     window_start = start_ts
     window_end = end_ts
