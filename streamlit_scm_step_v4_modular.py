@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from scm_dashboard_v4.config import CENTER_COL, PALETTE, configure_page, initialize_session_state
@@ -21,6 +23,7 @@ from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
 )
 from scm_dashboard_v4.timeline import build_timeline
+from scm_dashboard_v4.sales import prepare_amazon_daily_sales
 
 configure_page()
 initialize_session_state()
@@ -383,6 +386,71 @@ else:
             f"prod{int(show_prod)}"
         )
         st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+
+# ==================== Amazon US Sales vs Inventory ====================
+amazon_centers = sorted({c for c in snap_long["center"].unique() if "amazon" in str(c).lower()})
+selected_amazon_centers = [c for c in centers_sel if c in amazon_centers]
+
+sales_series = prepare_amazon_daily_sales(
+    snap_long,
+    centers=selected_amazon_centers or amazon_centers,
+    skus=skus_sel,
+    rolling_window=7,
+)
+
+if not sales_series.empty:
+    sales_df = sales_series.frame
+    # This chart shows Amazon-related snapshot totals with derived sales deltas.
+    # Users can toggle individual traces (sales, inventory, rolling avg) via the legend.
+    st.divider()
+    st.subheader("Amazon US 일별 판매 vs. 재고")
+
+    chart = make_subplots(specs=[[{"secondary_y": True}]])
+    chart.add_trace(
+        go.Bar(
+            x=sales_df["date"],
+            y=sales_df["daily_sales"],
+            name="Daily Sales (EA)",
+            marker_color=PALETTE[0],
+        ),
+        secondary_y=False,
+    )
+    chart.add_trace(
+        go.Scatter(
+            x=sales_df["date"],
+            y=sales_df["inventory_qty"],
+            mode="lines+markers",
+            name="Amazon Inventory (EA)",
+            line=dict(color=PALETTE[1], width=2),
+        ),
+        secondary_y=True,
+    )
+
+    ma_cols = [c for c in sales_df.columns if c.startswith("sales_ma_")]
+    for idx, col in enumerate(ma_cols, start=2):
+        chart.add_trace(
+            go.Scatter(
+                x=sales_df["date"],
+                y=sales_df[col],
+                mode="lines",
+                name=f"{col.split('_')[-1]}-Day Avg Sales",
+                line=dict(color=PALETTE[(idx) % len(PALETTE)], dash="dash"),
+            ),
+            secondary_y=False,
+        )
+
+    chart.update_layout(
+        title="Amazon US 판매 및 재고 추이",
+        hovermode="x unified",
+        legend_title_text="Toggle Series",
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    chart.update_yaxes(title_text="Daily Sales (EA)", secondary_y=False)
+    chart.update_yaxes(title_text="Inventory (EA)", secondary_y=True)
+    chart.update_xaxes(title_text="날짜")
+    chart.update_traces(hovertemplate="날짜: %{x|%Y-%m-%d}<br>값: %{y:,.0f}<extra>%{fullData.name}</extra>")
+
+    st.plotly_chart(chart, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
 st.subheader("Upcoming Inbound (선택 센터/SKU)")
