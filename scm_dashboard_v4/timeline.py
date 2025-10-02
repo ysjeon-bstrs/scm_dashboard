@@ -45,8 +45,11 @@ def annotate_move_schedule(
 
     pred = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
 
-    has_inbound = out["inbound_date"].notna() if "inbound_date" in out else pd.Series(False, index=out.index)
-    pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
+    if "inbound_date" in out:
+        has_inbound = out["inbound_date"].notna()
+        pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
+    else:
+        has_inbound = pd.Series(False, index=out.index)
 
     if "arrival_date" in out:
         arrival_col = out["arrival_date"]
@@ -87,6 +90,12 @@ def compute_in_transit_series(
 
     The output provides a daily step series per SKU whose decrements align
     exactly with the receipt dates returned by :func:`annotate_move_schedule`.
+
+    Note
+    ----
+    The Streamlit dashboard no longer renders this series directly in the
+    inventory step chart, but the helper remains available for data export and
+    offline diagnostics.
     """
     centers = {str(c) for c in centers_sel}
     skus = set(skus_sel)
@@ -217,8 +226,19 @@ def generate_timeline(
         )
     ]
 
-    in_transit_lines = compute_in_transit_series(mv_sel, centers_sel, skus_sel, start_dt, horizon_end, today, lag_days)
+    in_transit_lines = compute_in_transit_series(
+        mv_sel,
+        centers_sel,
+        skus_sel,
+        start_dt,
+        horizon_end,
+        today,
+        lag_days,
+    )
     if not in_transit_lines.empty:
+        # The UI filters these rows out, but they are kept here so other
+        # consumers (e.g. exports/tests) can still access the detailed transit
+        # trajectory.
         lines.append(in_transit_lines)
 
     for sku, g in mv_sel.groupby("resource_code"):
