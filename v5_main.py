@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -18,6 +18,7 @@ from scm_dashboard_v4.processing import (
     normalize_moves,
     normalize_refined_snapshot,
 )
+from scm_dashboard_v5.forecast import apply_consumption_with_events
 from scm_dashboard_v5.pipeline import BuildInputs, build_timeline_bundle
 
 
@@ -166,6 +167,8 @@ def _plot_timeline(
     *,
     start: pd.Timestamp,
     end: pd.Timestamp,
+    show_production: bool,
+    selected_centers: Iterable[str],
 ) -> None:
     """Render the timeline using Plotly with styling borrowed from v4."""
 
@@ -179,6 +182,10 @@ def _plot_timeline(
 
     center_translation = {"In-Transit": "이동중", "WIP": "생산중"}
     vis_df["center"] = vis_df["center"].replace(center_translation)
+
+    centers_set = {str(c) for c in selected_centers}
+    if ("태광KR" not in centers_set) or not show_production:
+        vis_df = vis_df[vis_df["center"] != "생산중"]
 
     vis_df = vis_df[vis_df["stock_qty"] != 0]
     if vis_df.empty:
@@ -284,7 +291,52 @@ def main() -> None:
             min_value=min_dt.to_pydatetime(),
             max_value=max_dt.to_pydatetime(),
         )
-        lag_days = st.slider("WIP 지연 일수", min_value=0, max_value=30, value=7, step=1)
+        st.header("표시 옵션")
+        show_prod = st.checkbox("생산중(미완료) 표시", value=True)
+        use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
+        lookback_days = int(
+            st.number_input(
+                "추세 계산 기간(일)",
+                min_value=7,
+                max_value=56,
+                value=28,
+                step=7,
+            )
+        )
+
+        st.subheader("입고 반영 가정")
+        lag_days = int(
+            st.number_input(
+                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
+                min_value=0,
+                max_value=21,
+                value=7,
+                step=1,
+            )
+        )
+
+        with st.expander("프로모션 가중치(+%)", expanded=False):
+            enable_event = st.checkbox("가중치 적용", value=False)
+            ev_start = st.date_input("시작일")
+            ev_end = st.date_input("종료일")
+            ev_pct = st.number_input(
+                "가중치(%)",
+                min_value=-100.0,
+                max_value=300.0,
+                value=30.0,
+                step=5.0,
+            )
+
+        if enable_event:
+            events = [
+                {
+                    "start": pd.Timestamp(ev_start).strftime("%Y-%m-%d"),
+                    "end": pd.Timestamp(ev_end).strftime("%Y-%m-%d"),
+                    "uplift": float(ev_pct) / 100.0,
+                }
+            ]
+        else:
+            events = []
 
     if not selected_centers:
         st.warning("최소 한 개의 센터를 선택하세요.")
@@ -318,7 +370,25 @@ def main() -> None:
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
-    _plot_timeline(timeline, start=start_ts, end=end_ts)
+    if use_cons_forecast:
+        timeline = apply_consumption_with_events(
+            timeline,
+            data.snapshot,
+            centers=selected_centers,
+            skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+            lookback_days=lookback_days,
+            events=events,
+        )
+
+    _plot_timeline(
+        timeline,
+        start=start_ts,
+        end=end_ts,
+        show_production=show_prod,
+        selected_centers=selected_centers,
+    )
 
     window_start = start_ts
     window_end = end_ts
