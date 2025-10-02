@@ -282,13 +282,28 @@ def main() -> None:
 
     min_dt, max_dt = _date_bounds(data.moves, data.snapshot)
     today = pd.Timestamp.today().normalize()
-    default_start = max(min_dt, today - pd.Timedelta(days=30))
-    default_end = min(max_dt, today + pd.Timedelta(days=60))
+    preset_start = today - pd.Timedelta(days=10)
+    preset_end = today + pd.Timedelta(days=30)
+    default_start = max(min_dt, preset_start)
+    default_end = min(max_dt, preset_end)
+    if default_start > default_end:
+        default_start, default_end = min_dt, max_dt
 
     with st.sidebar:
         st.header("필터")
-        selected_centers = st.multiselect("센터", centers, default=centers)
-        default_skus = skus if len(skus) <= 10 else skus[:10]
+        st.caption(
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘±(−10일, +30일)."
+            " 해당 항목이 없으면 전체 데이터를 기준으로 표시합니다."
+        )
+        preset_centers = ["태광KR", "AMZUS"]
+        default_centers = [c for c in preset_centers if c in centers]
+        if not default_centers:
+            default_centers = centers
+        selected_centers = st.multiselect("센터", centers, default=default_centers)
+        preset_skus = ["BA00021", "BA00022"]
+        default_skus = [s for s in preset_skus if s in skus]
+        if not default_skus:
+            default_skus = skus if len(skus) <= 10 else skus[:10]
         selected_skus = st.multiselect("SKU", skus, default=default_skus)
         date_range = st.date_input(
             "타임라인 범위",
