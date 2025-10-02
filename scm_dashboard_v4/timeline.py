@@ -47,8 +47,10 @@ def annotate_move_schedule(
 
     pred = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
 
+
     has_inbound = out["inbound_date"].notna() if "inbound_date" in out else pd.Series(False, index=out.index)
     pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
+
 
     if "arrival_date" in out:
         arrival_col = out["arrival_date"]
@@ -57,8 +59,10 @@ def annotate_move_schedule(
 
     has_arrival = (~has_inbound) & arrival_col.notna()
     if has_arrival.any():
+
         arr_dates = arrival_col
         # Past arrivals remain in transit until the lagged receipt date.
+
         past_arrival = has_arrival & (arr_dates <= today_norm)
         if past_arrival.any():
             pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
@@ -76,49 +80,114 @@ def annotate_move_schedule(
     return out
 
 
+
 def build_timeline(
     snap_long: pd.DataFrame,
+
     moves: pd.DataFrame,
-    centers_sel: List[str],
-    skus_sel: List[str],
+    centers_sel: Iterable[str],
+    skus_sel: Iterable[str],
     start_dt: pd.Timestamp,
-    end_dt: pd.Timestamp,
-    horizon_days: int = 0,
-    today: Optional[pd.Timestamp] = None,
+    horizon_end: pd.Timestamp,
+    today: pd.Timestamp,
     lag_days: int = 7,
 ) -> pd.DataFrame:
-    if today is None:
-        today = pd.Timestamp.today().normalize()
-    horizon_end = end_dt + pd.Timedelta(days=horizon_days)
-    full_dates = pd.date_range(start_dt, horizon_end, freq="D")
+    """Build an in-transit daily timeseries synchronised with inventory receipts.
+
+    The output provides a daily step series per SKU whose decrements align
+    exactly with the receipt dates returned by :func:`annotate_move_schedule`.
+
+    Note
+    ----
+    The Streamlit dashboard no longer renders this series directly in the
+    inventory step chart, but the helper remains available for data export and
+    offline diagnostics.
+    """
+    centers = {str(c) for c in centers_sel}
+    skus = set(skus_sel)
+    today_norm = pd.to_datetime(today).normalize()
+
+    prepared = normalize_move_dates(moves)
+    prepared = annotate_move_schedule(prepared, today_norm, lag_days, horizon_end)
+
+    prepared = prepared[prepared.get("carrier_mode", "").astype(str).str.upper() != "WIP"].copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    prepared = prepared[
+        prepared["resource_code"].isin(skus)
+        & prepared["to_center"].astype(str).isin(centers)
+        & prepared["onboard_date"].notna()
+    ].copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 
     mv_all = normalize_move_dates(moves.copy())
     mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
 
-    base = snap_long[
-        snap_long["center"].isin(centers_sel) & snap_long["resource_code"].isin(skus_sel)
-    ].copy().rename(columns={"snapshot_date": "date"})
-    if base.empty:
+
+    mv_all = normalize_move_dates(moves.copy())
+    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
+
+
+    if not series_frames:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-    base = base[(base["date"] >= start_dt) & (base["date"] <= end_dt)]
+
+    result = pd.concat(series_frames, ignore_index=True)
+    return result
+
+
+def generate_timeline(
+    moves: pd.DataFrame,
+    capacity: pd.DataFrame,
+    mv_all: pd.DataFrame,
+    product_master: pd.DataFrame,
+    skus_sel: Iterable[str],
+    centers_sel: Iterable[str],
+    start_dt: pd.Timestamp,
+    horizon_end: pd.Timestamp,
+    today: pd.Timestamp,
+    lag_days: int = 7,
+) -> pd.DataFrame:
+    """Merge capacity plan, transit data and WIP positions into a unified timeline.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: date, center, resource_code, stock_qty
+    """
+    full_dates = pd.date_range(start_dt, horizon_end, freq="D")
+    capacity = capacity.copy()
+    capacity["date"] = pd.to_datetime(capacity["date"]).dt.normalize()
+    capacity["center"] = capacity["center"].astype(str)
+
+    capacity_filt = capacity[
+        capacity["resource_code"].isin(skus_sel)
+        & capacity["center"].isin(centers_sel)
+        & (capacity["date"] >= start_dt)
+        & (capacity["date"] <= horizon_end)
+    ].copy()
+
+    if capacity_filt.empty:
+        cap_rows = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+    else:
+        cap_rows = capacity_filt[["date", "center", "resource_code", "stock_qty"]].copy()
 
     lines: List[pd.DataFrame] = []
+    if not cap_rows.empty:
+        lines.append(cap_rows)
 
-    for (ct, sku), grp in base.groupby(["center", "resource_code"]):
-        grp = grp.sort_values("date")
-        last_dt = grp["date"].max()
+    if moves.empty and mv_all.empty:
+        if not lines:
+            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        out = pd.concat(lines, ignore_index=True)
+        out = out[(out["date"] >= start_dt) & (out["date"] <= horizon_end)]
 
-        if horizon_days > 0:
-            proj_dates = pd.date_range(last_dt + pd.Timedelta(days=1), horizon_end, freq="D")
-            proj_df = pd.DataFrame({"date": proj_dates, "center": ct, "resource_code": sku, "stock_qty": np.nan})
-            ts = pd.concat([grp[["date", "center", "resource_code", "stock_qty"]], proj_df], ignore_index=True)
-        else:
-            ts = grp[["date", "center", "resource_code", "stock_qty"]].copy()
+        out["stock_qty"] = pd.to_numeric(out["stock_qty"], errors="coerce")
+        out["stock_qty"] = out["stock_qty"].fillna(0)
+        out["stock_qty"] = out["stock_qty"].replace([np.inf, -np.inf], 0)
+        out["stock_qty"] = out["stock_qty"].clip(lower=0).astype(int)
 
-        ts = ts.sort_values("date")
-        ts["stock_qty"] = ts["stock_qty"].ffill()
-
-        mv = mv_all[mv_all["resource_code"] == sku].copy()
 
         eff_minus = (
             mv[(mv["from_center"].astype(str) == str(ct)) & (mv["onboard_date"].notna()) & (mv["onboard_date"] > last_dt)]
@@ -166,6 +235,7 @@ def build_timeline(
             ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
             lines[-1] = ts
 
+
     moves_str = mv_all.copy()
     moves_str["from_center"] = moves_str["from_center"].astype(str)
     moves_str["to_center"] = moves_str["to_center"].astype(str)
@@ -179,6 +249,7 @@ def build_timeline(
             | (moves_str["carrier_mode"] == "WIP")
         )
     ]
+
 
     for sku, g in mv_sel.groupby("resource_code"):
         g_wip = g[g["carrier_mode"] == "WIP"]
