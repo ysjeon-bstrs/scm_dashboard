@@ -1,106 +1,92 @@
-"""Sales analytics helpers for the SCM dashboard."""
+"""Utilities for preparing Amazon US sales and inventory series."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Iterable
+
 
 import pandas as pd
 
 
 @dataclass
-class SalesSeries:
-    """Simple container for prepared Amazon sales data."""
+class AmazonSalesResult:
+    """Container for aggregated Amazon sales/inventory series."""
 
-    frame: pd.DataFrame
-
-    @property
-    def empty(self) -> bool:
-        return self.frame.empty
+    data: pd.DataFrame
+    center: str
 
 
-def _normalize_list(values: Optional[Iterable[str]]) -> list[str]:
-    if not values:
-        return []
-    return [str(v).strip() for v in values if str(v).strip()]
-
-
-def prepare_amazon_daily_sales(
-    snapshots: Optional[pd.DataFrame],
-    *,
-    center_keyword: str = "amazon",
-    centers: Optional[Sequence[str]] = None,
-    skus: Optional[Sequence[str]] = None,
+def prepare_amazon_sales_series(
+    snap_long: pd.DataFrame,
+    skus: Iterable[str],
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    center: str = "AMZUS",
     rolling_window: int = 7,
-) -> SalesSeries:
-    """Return daily Amazon inventory & sales derived from snapshot data."""
+) -> AmazonSalesResult:
+    """Return aggregated Amazon sales and inventory series for the requested window.
 
-    empty_result = SalesSeries(
-        pd.DataFrame(
-            {
-                "date": pd.Series(dtype="datetime64[ns]"),
-                "inventory_qty": pd.Series(dtype="float"),
-                "daily_sales": pd.Series(dtype="float"),
-            }
-        )
-    )
+    Parameters
+    ----------
+    snap_long:
+        Normalised snapshot table containing at least ``date``, ``center``,
+        ``resource_code`` and ``stock_qty`` columns.
+    skus:
+        Iterable of SKU identifiers to include. When empty the function returns
+        an empty dataframe.
+    start_dt / end_dt:
+        Inclusive date range to cover. The output is reindexed to every day in
+        this window so charts never break on sparse data.
+    center:
+        Snapshot centre identifier representing Amazon US inventory.
+    rolling_window:
+        Window (in days) for the optional rolling average of sales.
+    """
 
-    if snapshots is None or snapshots.empty:
-        return empty_result
+    sku_list = [str(sku) for sku in skus if pd.notna(sku)]
+    if not sku_list:
+        return AmazonSalesResult(pd.DataFrame(), center)
 
-    df = snapshots.copy()
-
-    if "date" not in df.columns or "center" not in df.columns or "stock_qty" not in df.columns:
-        return empty_result
+    df = snap_long.copy()
+    if "date" not in df.columns:
+        raise KeyError("snap_long must contain a 'date' column for sales prep")
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
-    df = df.dropna(subset=["date"])
-    if df.empty:
-        return empty_result
-
     df["center"] = df["center"].astype(str)
-    if "resource_code" in df.columns:
-        df["resource_code"] = df["resource_code"].astype(str)
-    else:
-        df["resource_code"] = ""
+    df["resource_code"] = df["resource_code"].astype(str)
 
-    selected_centers = _normalize_list(centers)
-    if selected_centers:
-        center_mask = df["center"].isin(selected_centers)
-    else:
-        center_mask = df["center"].str.contains(center_keyword, case=False, na=False)
-
-    df = df[center_mask]
+    df = df[(df["center"] == center) & (df["resource_code"].isin(sku_list))]
     if df.empty:
-        return empty_result
+        return AmazonSalesResult(pd.DataFrame(), center)
 
-    selected_skus = _normalize_list(skus)
-    if selected_skus:
-        df = df[df["resource_code"].isin(selected_skus)]
-        if df.empty:
-            return empty_result
+    idx = pd.date_range(start_dt, end_dt, freq="D")
 
-    grouped = df.groupby("date", as_index=True)["stock_qty"].sum().sort_index()
-    if grouped.empty:
-        return empty_result
+    series_frames = []
+    for sku, grp in df.groupby("resource_code"):
+        daily = grp.groupby("date")["stock_qty"].sum().sort_index()
+        daily = daily.reindex(idx).ffill().fillna(0)
 
-    full_range = pd.date_range(grouped.index.min(), grouped.index.max(), freq="D")
-    inventory = grouped.reindex(full_range).ffill()
+        delta = daily.diff().fillna(0)
+        sales = (-delta).clip(lower=0)
 
-    sales = (-inventory.diff()).clip(lower=0)
-    sales = sales.fillna(0)
+        frame = pd.DataFrame({
+            "date": idx,
+            "resource_code": sku,
+            "inventory_qty": daily.values,
+            "sales_qty": sales.values,
+        })
+        series_frames.append(frame)
 
-    result = pd.DataFrame(
-        {
-            "date": inventory.index,
-            "inventory_qty": inventory.values,
-            "daily_sales": sales.values,
-        }
+    combined = pd.concat(series_frames, ignore_index=True)
+    agg = (
+        combined.groupby("date", as_index=False)[["inventory_qty", "sales_qty"]]
+        .sum()
+        .sort_values("date")
     )
 
-    if rolling_window and rolling_window > 1:
-        result[f"sales_ma_{rolling_window}"] = (
-            result["daily_sales"].rolling(rolling_window, min_periods=1).mean()
-        )
+    agg["sales_roll_mean"] = (
+        agg["sales_qty"].rolling(window=int(max(1, rolling_window)), min_periods=1).mean()
+    )
 
-    return SalesSeries(result)
+    return AmazonSalesResult(agg, center)

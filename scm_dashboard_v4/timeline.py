@@ -13,6 +13,7 @@ DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
 
 def normalize_move_dates(moves: pd.DataFrame, columns: Iterable[str] = DATE_COLUMNS) -> pd.DataFrame:
     """Return a copy of *moves* with the specified date columns normalised to midnight."""
+
     out = moves.copy()
     for col in columns:
         if col in out.columns:
@@ -37,6 +38,7 @@ def annotate_move_schedule(
     * Rows without any milestone drop on ``today + fallback_days`` (capped to
       the chart horizon) so they do not block the forecast indefinitely.
     """
+
     today_norm = pd.to_datetime(today).normalize()
     fallback_date = min(today_norm + pd.Timedelta(days=int(fallback_days)), horizon_end + pd.Timedelta(days=1))
 
@@ -45,11 +47,10 @@ def annotate_move_schedule(
 
     pred = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
 
-    if "inbound_date" in out:
-        has_inbound = out["inbound_date"].notna()
-        pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
-    else:
-        has_inbound = pd.Series(False, index=out.index)
+
+    has_inbound = out["inbound_date"].notna() if "inbound_date" in out else pd.Series(False, index=out.index)
+    pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
+
 
     if "arrival_date" in out:
         arrival_col = out["arrival_date"]
@@ -58,8 +59,10 @@ def annotate_move_schedule(
 
     has_arrival = (~has_inbound) & arrival_col.notna()
     if has_arrival.any():
-        arr_dates = out.loc[has_arrival, "arrival_date"]
-        # Past arrivals receive inventory after a lag to model receipt processing time.
+
+        arr_dates = arrival_col
+        # Past arrivals remain in transit until the lagged receipt date.
+
         past_arrival = has_arrival & (arr_dates <= today_norm)
         if past_arrival.any():
             pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
@@ -77,7 +80,10 @@ def annotate_move_schedule(
     return out
 
 
-def compute_in_transit_series(
+
+def build_timeline(
+    snap_long: pd.DataFrame,
+
     moves: pd.DataFrame,
     centers_sel: Iterable[str],
     skus_sel: Iterable[str],
@@ -116,41 +122,9 @@ def compute_in_transit_series(
     if prepared.empty:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 
-    idx = pd.date_range(start_dt, horizon_end, freq="D")
+    mv_all = normalize_move_dates(moves.copy())
+    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
 
-    series_frames: List[pd.DataFrame] = []
-
-    for sku, grp in prepared.groupby("resource_code"):
-        starts = grp.groupby("onboard_date")["qty_ea"].sum()
-        ends = grp.groupby("in_transit_end_date")["qty_ea"].sum() * -1
-
-        deltas = starts.add(ends, fill_value=0)
-        # Ensure the step series has an entry for every day in the reporting window
-        # before taking the cumulative sum so the chart never drops missing dates.
-        deltas = deltas.reindex(idx, fill_value=0)
-        in_transit = deltas.cumsum()
-
-        # Carry-over keeps shipments that left before the window but have not yet reached the end date.
-        carry_mask = (
-            grp["onboard_date"] < idx[0]
-        ) & (grp["in_transit_end_date"] > idx[0])
-        carry_qty = grp.loc[carry_mask, "qty_ea"].sum()
-        if carry_qty:
-            in_transit = in_transit + carry_qty
-
-        in_transit = in_transit.clip(lower=0)
-
-        if in_transit.any():
-            series_frames.append(
-                pd.DataFrame(
-                    {
-                        "date": idx,
-                        "center": "In-Transit",
-                        "resource_code": sku,
-                        "stock_qty": in_transit.values,
-                    }
-                )
-            )
 
     if not series_frames:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
@@ -210,7 +184,53 @@ def generate_timeline(
         out["stock_qty"] = out["stock_qty"].replace([np.inf, -np.inf], 0)
         out["stock_qty"] = out["stock_qty"].clip(lower=0).astype(int)
 
-        return out
+
+        eff_minus = (
+            mv[(mv["from_center"].astype(str) == str(ct)) & (mv["onboard_date"].notna()) & (mv["onboard_date"] > last_dt)]
+            .groupby("onboard_date", as_index=False)["qty_ea"].sum()
+            .rename(columns={"onboard_date": "date", "qty_ea": "delta"})
+        )
+        eff_minus["delta"] *= -1
+
+        mv_center = mv[(mv["to_center"].astype(str) == str(ct))].copy()
+        if not mv_center.empty:
+            eff_plus = (
+                mv_center[(mv_center["pred_inbound_date"].notna()) & (mv_center["pred_inbound_date"] > last_dt)]
+                .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
+                .rename(columns={"pred_inbound_date": "date", "qty_ea": "delta"})
+            )
+        else:
+            eff_plus = pd.DataFrame(columns=["date", "delta"])
+
+        eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
+        if not eff_all.empty:
+            delta_series = eff_all.groupby("date")["delta"].sum()
+            delta_series = delta_series.reindex(ts["date"], fill_value=0).fillna(0)
+            for date, delta in delta_series.items():
+                if delta != 0:
+                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
+
+        ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
+        lines.append(ts)
+
+        wip_complete = moves[
+            (moves["resource_code"] == sku)
+            & (moves["carrier_mode"].astype(str).str.upper() == "WIP")
+            & (moves["to_center"] == ct)
+            & (moves["event_date"].notna())
+        ].copy()
+        if not wip_complete.empty:
+            wip_add = (
+                wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum().rename(columns={"event_date": "date", "qty_ea": "delta"})
+            )
+            wip_delta_series = wip_add.groupby("date")["delta"].sum()
+            wip_delta_series = wip_delta_series.reindex(ts["date"], fill_value=0).fillna(0)
+            for date, delta in wip_delta_series.items():
+                if delta != 0:
+                    ts.loc[ts["date"] >= date, "stock_qty"] = ts.loc[ts["date"] >= date, "stock_qty"] + delta
+            ts["stock_qty"] = ts["stock_qty"].fillna(0).replace([np.inf, -np.inf], 0).clip(lower=0)
+            lines[-1] = ts
+
 
     moves_str = mv_all.copy()
     moves_str["from_center"] = moves_str["from_center"].astype(str)
@@ -226,20 +246,6 @@ def generate_timeline(
         )
     ]
 
-    in_transit_lines = compute_in_transit_series(
-        mv_sel,
-        centers_sel,
-        skus_sel,
-        start_dt,
-        horizon_end,
-        today,
-        lag_days,
-    )
-    if not in_transit_lines.empty:
-        # The UI filters these rows out, but they are kept here so other
-        # consumers (e.g. exports/tests) can still access the detailed transit
-        # trajectory.
-        lines.append(in_transit_lines)
 
     for sku, g in mv_sel.groupby("resource_code"):
         g_wip = g[g["carrier_mode"] == "WIP"]
