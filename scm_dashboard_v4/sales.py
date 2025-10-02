@@ -89,3 +89,12 @@ def prepare_amazon_sales_series(
     return AmazonSalesResult(agg, center)
 
 
+prepare_amazon_daily_sales = prepare_amazon_sales_series
+
+
+__all__ = [
+    "AmazonSalesResult",
+    "prepare_amazon_sales_series",
+    "prepare_amazon_daily_sales",
+]
+
