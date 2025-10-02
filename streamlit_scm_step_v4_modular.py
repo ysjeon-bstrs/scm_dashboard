@@ -469,10 +469,8 @@ if not sales_series.empty:
         f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
         f"prod{int(show_prod)}"
     )
-    chart.update_yaxes(title_text="Daily Sales (EA)", secondary_y=False)
-    chart.update_yaxes(title_text="Inventory (EA)", secondary_y=True)
-    chart.update_xaxes(title_text="날짜")
-    chart.update_traces(hovertemplate="날짜: %{x|%Y-%m-%d}<br>값: %{y:,.0f}<extra>%{fullData.name}</extra>")
+    sales_fig.update_yaxes(tickformat=",.0f")
+    st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Amazon US sales vs. inventory --------------------
 st.subheader("Amazon US 일일 판매 & 재고")
@@ -523,7 +521,6 @@ else:
 st.subheader("입고 예정 내역 (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
-
 
 mv_view = mv.copy()
 if not mv_view.empty:

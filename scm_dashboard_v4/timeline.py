@@ -51,7 +51,6 @@ def annotate_move_schedule(
     has_inbound = out["inbound_date"].notna() if "inbound_date" in out else pd.Series(False, index=out.index)
     pred.loc[has_inbound] = out.loc[has_inbound, "inbound_date"]
 
-
     if "arrival_date" in out:
         arrival_col = out["arrival_date"]
     else:
@@ -62,7 +61,6 @@ def annotate_move_schedule(
 
         arr_dates = arrival_col
         # Past arrivals remain in transit until the lagged receipt date.
-
         past_arrival = has_arrival & (arr_dates <= today_norm)
         if past_arrival.any():
             pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
@@ -78,7 +76,6 @@ def annotate_move_schedule(
     out["in_transit_end_date"] = out["pred_inbound_date"]
 
     return out
-
 
 
 def build_timeline(
@@ -198,11 +195,20 @@ def generate_timeline(
 
         mv_center = mv[(mv["to_center"].astype(str) == str(ct))].copy()
         if not mv_center.empty:
-            eff_plus = (
-                mv_center[(mv_center["pred_inbound_date"].notna()) & (mv_center["pred_inbound_date"] > last_dt)]
-                .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
-                .rename(columns={"pred_inbound_date": "date", "qty_ea": "delta"})
-            )
+            eff_plus_src = mv_center[
+                (mv_center["carrier_mode"].astype(str).str.upper() != "WIP")
+                & (mv_center["pred_inbound_date"].notna())
+                & (mv_center["pred_inbound_date"] > last_dt)
+            ]
+            if eff_plus_src.empty:
+                eff_plus = pd.DataFrame(columns=["date", "delta"])
+            else:
+                eff_plus = (
+                    eff_plus_src.groupby("pred_inbound_date", as_index=False)["qty_ea"].sum().rename(
+                        columns={"pred_inbound_date": "date", "qty_ea": "delta"}
+                    )
+                )
+
         else:
             eff_plus = pd.DataFrame(columns=["date", "delta"])
 
@@ -249,7 +255,6 @@ def generate_timeline(
             | (moves_str["carrier_mode"] == "WIP")
         )
     ]
-
 
     for sku, g in mv_sel.groupby("resource_code"):
         g_wip = g[g["carrier_mode"] == "WIP"]
