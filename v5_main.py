@@ -319,11 +319,162 @@ def main() -> None:
 
     _plot_timeline(timeline, start=start_ts, end=end_ts)
 
-    st.subheader("센터별 타임라인")
-    st.dataframe(timeline[timeline["center"].isin(selected_centers)])
+    window_start = start_ts
+    window_end = end_ts
+    today = pd.Timestamp.today().normalize()
 
-    st.subheader("In-Transit / WIP")
-    st.dataframe(timeline[~timeline["center"].isin(selected_centers)])
+    moves_view = data.moves.copy()
+    for col in [
+        "carrier_mode",
+        "to_center",
+        "resource_code",
+        "inbound_date",
+        "arrival_date",
+        "onboard_date",
+        "event_date",
+        "lot",
+    ]:
+        if col not in moves_view.columns:
+            if "date" in col:
+                moves_view[col] = pd.Series(pd.NaT, index=moves_view.index, dtype="datetime64[ns]")
+            else:
+                moves_view[col] = pd.Series("", index=moves_view.index, dtype="object")
+
+    if not moves_view.empty:
+        pred_inbound = pd.Series(pd.NaT, index=moves_view.index, dtype="datetime64[ns]")
+
+        if "inbound_date" in moves_view.columns:
+            mask_inbound = moves_view["inbound_date"].notna()
+            pred_inbound.loc[mask_inbound] = moves_view.loc[mask_inbound, "inbound_date"]
+        else:
+            mask_inbound = pd.Series(False, index=moves_view.index)
+
+        arrival_series = moves_view.get("arrival_date")
+        if arrival_series is not None:
+            mask_arrival = (~mask_inbound) & arrival_series.notna()
+        else:
+            mask_arrival = pd.Series(False, index=moves_view.index)
+
+        if mask_arrival.any():
+            past_arr = mask_arrival & (arrival_series <= today)
+            if past_arr.any():
+                pred_inbound.loc[past_arr] = moves_view.loc[past_arr, "arrival_date"] + pd.Timedelta(
+                    days=int(lag_days)
+                )
+            fut_arr = mask_arrival & (arrival_series > today)
+            if fut_arr.any():
+                pred_inbound.loc[fut_arr] = moves_view.loc[fut_arr, "arrival_date"]
+
+        moves_view["pred_inbound_date"] = pred_inbound
+    else:
+        moves_view["pred_inbound_date"] = pd.Series(
+            pd.NaT, index=moves_view.index, dtype="datetime64[ns]"
+        )
+
+    arr_transport = moves_view[
+        (moves_view["carrier_mode"] != "WIP")
+        & (moves_view["to_center"].isin(selected_centers))
+        & (moves_view["resource_code"].isin(selected_skus))
+        & (moves_view["inbound_date"].isna())
+    ].copy()
+
+    arr_transport["display_date"] = arr_transport["arrival_date"].fillna(
+        arr_transport["onboard_date"]
+    )
+    arr_transport = arr_transport[arr_transport["display_date"].notna()]
+    arr_transport = arr_transport[
+        (arr_transport["display_date"] >= window_start)
+        & (arr_transport["display_date"] <= window_end)
+    ]
+
+    arr_wip = pd.DataFrame()
+    if "태광KR" in selected_centers:
+        arr_wip = moves_view[
+            (moves_view["carrier_mode"] == "WIP")
+            & (moves_view["to_center"] == "태광KR")
+            & (moves_view["resource_code"].isin(selected_skus))
+            & (moves_view["event_date"].notna())
+            & (moves_view["event_date"] >= window_start)
+            & (moves_view["event_date"] <= window_end)
+        ].copy()
+        arr_wip["display_date"] = arr_wip["event_date"]
+
+    resource_name_map: dict[str, str] = {}
+    if "resource_name" in data.snapshot.columns:
+        name_rows = data.snapshot.loc[data.snapshot["resource_name"].notna(), [
+            "resource_code",
+            "resource_name",
+        ]].copy()
+        name_rows["resource_code"] = name_rows["resource_code"].astype(str)
+        name_rows["resource_name"] = name_rows["resource_name"].astype(str).str.strip()
+        name_rows = name_rows[name_rows["resource_name"] != ""]
+        if not name_rows.empty:
+            resource_name_map = (
+                name_rows.drop_duplicates("resource_code").set_index("resource_code")["resource_name"].to_dict()
+            )
+
+    confirmed_inbound = arr_transport.copy()
+    if resource_name_map and not confirmed_inbound.empty:
+        confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
+
+    st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
+    if confirmed_inbound.empty:
+        st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
+    else:
+        confirmed_inbound["days_to_arrival"] = (
+            confirmed_inbound["display_date"].dt.normalize() - today
+        ).dt.days
+        confirmed_inbound["days_to_inbound"] = (
+            confirmed_inbound["pred_inbound_date"].dt.normalize() - today
+        ).dt.days
+        confirmed_inbound = confirmed_inbound.sort_values(
+            ["display_date", "to_center", "resource_code", "qty_ea"],
+            ascending=[True, True, True, False],
+        )
+        inbound_cols = [
+            "display_date",
+            "days_to_arrival",
+            "to_center",
+            "resource_code",
+            "resource_name",
+            "qty_ea",
+            "carrier_mode",
+            "onboard_date",
+            "pred_inbound_date",
+            "days_to_inbound",
+            "lot",
+        ]
+        inbound_cols = [c for c in inbound_cols if c in confirmed_inbound.columns]
+        st.dataframe(
+            confirmed_inbound[inbound_cols].head(1000),
+            use_container_width=True,
+            height=300,
+        )
+        st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
+
+    if not arr_wip.empty:
+        if resource_name_map:
+            arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
+        st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+        arr_wip = arr_wip.sort_values(
+            ["display_date", "resource_code", "qty_ea"], ascending=[True, True, False]
+        )
+        arr_wip["days_to_completion"] = (
+            arr_wip["display_date"].dt.normalize() - today
+        ).dt.days
+        wip_cols = [
+            "display_date",
+            "days_to_completion",
+            "resource_code",
+            "resource_name",
+            "qty_ea",
+            "pred_inbound_date",
+            "lot",
+        ]
+        wip_cols = [c for c in wip_cols if c in arr_wip.columns]
+        st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
+    else:
+        st.caption("생산중(WIP) 데이터가 없습니다.")
 
 
 if __name__ == "__main__":
