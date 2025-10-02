@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
 import streamlit as st
 
 from scm_dashboard_v4.config import CENTER_COL, PALETTE, configure_page, initialize_session_state
@@ -23,6 +24,7 @@ from scm_dashboard_v4.processing import (
 )
 from scm_dashboard_v4.sales import prepare_amazon_sales_series
 from scm_dashboard_v4.timeline import build_timeline
+from scm_dashboard_v4.sales import prepare_amazon_daily_sales
 
 configure_page()
 initialize_session_state()
@@ -311,6 +313,7 @@ if timeline.empty:
     st.info("선택 조건에 해당하는 타임라인 데이터가 없습니다.")
 else:
     vis_df = timeline[(timeline["date"] >= start_dt) & (timeline["date"] <= end_dt)].copy()
+
     vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
     if "태광KR" not in centers_sel:
         vis_df = vis_df[vis_df["center"] != "생산중"]
@@ -318,6 +321,7 @@ else:
         vis_df = vis_df[vis_df["center"] != "생산중"]
 
     vis_df = vis_df[vis_df["stock_qty"] > 0]
+
     vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
 
     fig = px.line(
@@ -337,24 +341,112 @@ else:
         margin=dict(l=20, r=20, t=60, b=20),
     )
 
-    if start_dt <= today <= end_dt:
-        fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
-        fig.add_annotation(
-            x=today,
-            y=1.02,
-            xref="x",
-            yref="paper",
-            text="오늘",
-            showarrow=False,
-            font=dict(size=12, color="#555"),
-            align="center",
-            yanchor="bottom",
+
+    if vis_df.empty:
+        st.info("선택한 조건에서 표시할 센터/생산중 데이터가 없습니다.")
+    else:
+        vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
+
+        fig = px.line(
+            vis_df,
+            x="date",
+            y="stock_qty",
+            color="label",
+            line_shape="hv",
+            title="선택한 SKU × 센터(및 생산중) 계단식 재고 흐름",
+            render_mode="svg",
+        )
+        fig.update_layout(
+            hovermode="x unified",
+            xaxis_title="날짜",
+            yaxis_title="재고량(EA)",
+            legend_title_text="SKU @ Center / 생산중(점선)",
+            margin=dict(l=20, r=20, t=60, b=20),
         )
 
-    fig.update_yaxes(tickformat=",.0f")
-    fig.update_traces(
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
+        if start_dt <= today <= end_dt:
+            fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
+            fig.add_annotation(
+                x=today,
+                y=1.02,
+                xref="x",
+                yref="paper",
+                text="오늘",
+                showarrow=False,
+                font=dict(size=12, color="#555"),
+                align="center",
+                yanchor="bottom",
+            )
+
+        fig.update_yaxes(tickformat=",.0f")
+        fig.update_traces(
+            hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
+        )
+
+        line_colors: Dict[str, str] = {}
+        color_idx = 0
+        for tr in fig.data:
+            name = tr.name or ""
+            if " @ " in name and name not in line_colors:
+                line_colors[name] = PALETTE[color_idx % len(PALETTE)]
+                color_idx += 1
+        for i, tr in enumerate(fig.data):
+            name = tr.name or ""
+            if " @ " not in name:
+                continue
+            _, kind = name.split(" @ ", 1)
+            line_color = line_colors.get(name, PALETTE[0])
+            if kind == "생산중":
+                fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
+            else:
+                fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
+
+        chart_key = (
+            f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
+            f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
+            f"prod{int(show_prod)}"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+
+# ==================== Amazon US Sales vs Inventory ====================
+amazon_centers = sorted({c for c in snap_long["center"].unique() if "amazon" in str(c).lower()})
+selected_amazon_centers = [c for c in centers_sel if c in amazon_centers]
+
+sales_series = prepare_amazon_daily_sales(
+    snap_long,
+    centers=selected_amazon_centers or amazon_centers,
+    skus=skus_sel,
+    rolling_window=7,
+)
+
+if not sales_series.empty:
+    sales_df = sales_series.frame
+    # This chart shows Amazon-related snapshot totals with derived sales deltas.
+    # Users can toggle individual traces (sales, inventory, rolling avg) via the legend.
+    st.divider()
+    st.subheader("Amazon US 일별 판매 vs. 재고")
+
+    chart = make_subplots(specs=[[{"secondary_y": True}]])
+    chart.add_trace(
+        go.Bar(
+            x=sales_df["date"],
+            y=sales_df["daily_sales"],
+            name="Daily Sales (EA)",
+            marker_color=PALETTE[0],
+        ),
+        secondary_y=False,
     )
+    chart.add_trace(
+        go.Scatter(
+            x=sales_df["date"],
+            y=sales_df["inventory_qty"],
+            mode="lines+markers",
+            name="Amazon Inventory (EA)",
+            line=dict(color=PALETTE[1], width=2),
+        ),
+        secondary_y=True,
+    )
+
 
     line_colors: Dict[str, str] = {}
     color_idx = 0
@@ -378,8 +470,14 @@ else:
         f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
         f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
         f"prod{int(show_prod)}"
+
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, key=chart_key)
+    chart.update_yaxes(title_text="Daily Sales (EA)", secondary_y=False)
+    chart.update_yaxes(title_text="Inventory (EA)", secondary_y=True)
+    chart.update_xaxes(title_text="날짜")
+    chart.update_traces(hovertemplate="날짜: %{x|%Y-%m-%d}<br>값: %{y:,.0f}<extra>%{fullData.name}</extra>")
+
+    st.plotly_chart(chart, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Amazon US sales vs. inventory --------------------
 st.subheader("Amazon US 일일 판매 & 재고")
@@ -427,7 +525,7 @@ else:
     st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Upcoming Arrivals (fixed) --------------------
-st.subheader("입고 예정 내역 (선택 센터/SKU)")
+st.subheader("Upcoming Inbound (선택 센터/SKU)")
 window_start = start_dt
 window_end = end_dt
 
@@ -461,6 +559,7 @@ arr_transport = arr_transport[
     (arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)
 ]
 
+
 arr_wip = pd.DataFrame()
 if "태광KR" in centers_sel:
     arr_wip = mv_view[
@@ -492,6 +591,7 @@ else:
         ascending=[True, True, True, False],
     )
     inbound_cols = [
+
         "display_date",
         "days_to_arrival",
         "to_center",
@@ -504,6 +604,7 @@ else:
         "days_to_inbound",
         "lot",
     ]
+
     inbound_cols = [c for c in inbound_cols if c in confirmed_inbound.columns]
     st.dataframe(
         confirmed_inbound[inbound_cols].head(1000),
@@ -535,6 +636,7 @@ if not arr_wip.empty:
     st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
 else:
     st.caption("생산중(WIP) 데이터가 없습니다.")
+
 
 # -------------------- 선택 센터 현재 재고 (전체 SKU) --------------------
 st.subheader(f"선택 센터 현재 재고 (스냅샷 {_latest_dt_str} / 전체 SKU)")
