@@ -173,6 +173,7 @@ def _plot_timeline(
     start: pd.Timestamp,
     end: pd.Timestamp,
     show_production: bool,
+    show_in_transit: bool,
     selected_centers: Iterable[str],
 ) -> None:
     """Render the timeline using Plotly with styling borrowed from v4."""
@@ -201,6 +202,9 @@ def _plot_timeline(
     today = pd.Timestamp.today().normalize()
     actual_df = actual_df[actual_df["stock_qty"] != 0]
     actual_df = actual_df[actual_df["date"] <= today]
+        vis_df = vis_df[vis_df["center"] != "생산중"]
+    if not show_in_transit:
+        vis_df = vis_df[vis_df["center"] != "이동중"]
 
     if forecast_df is not None and not forecast_df.empty:
         forecast_df = forecast_df[forecast_df["stock_qty"] != 0]
@@ -310,13 +314,28 @@ def main() -> None:
 
     min_dt, max_dt = _date_bounds(data.moves, data.snapshot)
     today = pd.Timestamp.today().normalize()
-    default_start = max(min_dt, today - pd.Timedelta(days=30))
-    default_end = min(max_dt, today + pd.Timedelta(days=60))
+    preset_start = today - pd.Timedelta(days=10)
+    preset_end = today + pd.Timedelta(days=30)
+    default_start = max(min_dt, preset_start)
+    default_end = min(max_dt, preset_end)
+    if default_start > default_end:
+        default_start, default_end = min_dt, max_dt
 
     with st.sidebar:
         st.header("필터")
-        selected_centers = st.multiselect("센터", centers, default=centers)
-        default_skus = skus if len(skus) <= 10 else skus[:10]
+        st.caption(
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘±(−10일, +30일)."
+            " 해당 항목이 없으면 전체 데이터를 기준으로 표시합니다."
+        )
+        preset_centers = ["태광KR", "AMZUS"]
+        default_centers = [c for c in preset_centers if c in centers]
+        if not default_centers:
+            default_centers = centers
+        selected_centers = st.multiselect("센터", centers, default=default_centers)
+        preset_skus = ["BA00021", "BA00022"]
+        default_skus = [s for s in preset_skus if s in skus]
+        if not default_skus:
+            default_skus = skus if len(skus) <= 10 else skus[:10]
         selected_skus = st.multiselect("SKU", skus, default=default_skus)
         date_range = st.date_input(
             "타임라인 범위",
@@ -325,7 +344,11 @@ def main() -> None:
             max_value=max_dt.to_pydatetime(),
         )
         st.header("표시 옵션")
-        show_prod = st.checkbox("생산중(미완료) 표시", value=True)
+        show_prod = st.checkbox("생산중 표시", value=True)
+        show_transit = st.checkbox("이동중 표시", value=True)
+        st.caption(
+            "체크 해제 시 생산중(WIP) 및 이동중(In-Transit) 데이터가 그래프와 표에서 숨겨집니다."
+        )
         use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
         lookback_days = int(
             st.number_input(
@@ -498,6 +521,7 @@ def main() -> None:
         start=start_ts,
         end=end_ts,
         show_production=show_prod,
+        show_in_transit=show_transit,
         selected_centers=selected_centers,
     )
 
@@ -717,7 +741,9 @@ def main() -> None:
         confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
 
     st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
-    if confirmed_inbound.empty:
+    if not show_transit:
+        st.caption("'이동중 표시' 옵션을 끄면 이동중(In-Transit) 데이터가 숨겨집니다.")
+    elif confirmed_inbound.empty:
         st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
     else:
         confirmed_inbound["days_to_arrival"] = (
@@ -751,10 +777,12 @@ def main() -> None:
         )
         st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
 
-    if not arr_wip.empty:
+    st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+    if not show_prod:
+        st.caption("'생산중 표시' 옵션을 끄면 생산중(WIP) 데이터가 숨겨집니다.")
+    elif not arr_wip.empty:
         if resource_name_map:
             arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
-        st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
         arr_wip = arr_wip.sort_values(
             ["display_date", "resource_code", "qty_ea"], ascending=[True, True, False]
         )
