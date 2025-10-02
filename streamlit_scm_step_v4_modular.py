@@ -24,7 +24,7 @@ from scm_dashboard_v4.processing import (
 from scm_dashboard_v4.sales import prepare_amazon_sales_series
 from scm_dashboard_v4.timeline import build_timeline
 from scm_dashboard_v4.sales import prepare_amazon_daily_sales
-# 전용수 메모 
+# 전용수 메모 추가 부분
 configure_page()
 initialize_session_state()
 
