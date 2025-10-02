@@ -21,9 +21,9 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
-
     try:
         gs = st.secrets["google_sheets"]
+        
     except Exception:
         st.error("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()

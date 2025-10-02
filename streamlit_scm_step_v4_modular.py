@@ -9,6 +9,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from scm_dashboard_v4.sales import prepare_amazon_sales_series
+from scm_dashboard_v4.timeline import build_timeline
 from scm_dashboard_v4.config import CENTER_COL, PALETTE, configure_page, initialize_session_state
 from scm_dashboard_v4.consumption import apply_consumption_with_events
 from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
@@ -21,9 +23,6 @@ from scm_dashboard_v4.processing import (
     normalize_refined_snapshot,
     load_wip_from_incoming,
 )
-from scm_dashboard_v4.sales import prepare_amazon_sales_series
-from scm_dashboard_v4.timeline import build_timeline
-from scm_dashboard_v4.sales import prepare_amazon_daily_sales
 # 전용수 메모 추가 부분
 configure_page()
 initialize_session_state()
@@ -290,8 +289,7 @@ timeline = build_timeline(
     centers_sel,
     skus_sel,
     start_dt,
-    end_dt,
-    horizon_days=proj_days_for_build,
+    horizon_end=end_dt,
     today=today,
     lag_days=int(lag_days),
 )
@@ -410,67 +408,67 @@ else:
 amazon_centers = sorted({c for c in snap_long["center"].unique() if "amazon" in str(c).lower()})
 selected_amazon_centers = [c for c in centers_sel if c in amazon_centers]
 
-sales_series = prepare_amazon_daily_sales(
-    snap_long,
-    centers=selected_amazon_centers or amazon_centers,
-    skus=skus_sel,
-    rolling_window=7,
-)
+# sales_series = prepare_amazon_daily_sales(
+#     snap_long,
+#     centers=selected_amazon_centers or amazon_centers,
+#     skus=skus_sel,
+#     rolling_window=7,
+# )
 
-if not sales_series.empty:
-    sales_df = sales_series.frame
-    # This chart shows Amazon-related snapshot totals with derived sales deltas.
-    # Users can toggle individual traces (sales, inventory, rolling avg) via the legend.
-    st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고")
+# if not sales_series.empty:
+#     sales_df = sales_series.frame
+#     # This chart shows Amazon-related snapshot totals with derived sales deltas.
+#     # Users can toggle individual traces (sales, inventory, rolling avg) via the legend.
+#     st.divider()
+#     st.subheader("Amazon US 일별 판매 vs. 재고")
 
-    chart = make_subplots(specs=[[{"secondary_y": True}]])
-    chart.add_trace(
-        go.Bar(
-            x=sales_df["date"],
-            y=sales_df["daily_sales"],
-            name="Daily Sales (EA)",
-            marker_color=PALETTE[0],
-        ),
-        secondary_y=False,
-    )
-    chart.add_trace(
-        go.Scatter(
-            x=sales_df["date"],
-            y=sales_df["inventory_qty"],
-            mode="lines+markers",
-            name="Amazon Inventory (EA)",
-            line=dict(color=PALETTE[1], width=2),
-        ),
-        secondary_y=True,
-    )
+#     chart = make_subplots(specs=[[{"secondary_y": True}]])
+#     chart.add_trace(
+#         go.Bar(
+#             x=sales_df["date"],
+#             y=sales_df["daily_sales"],
+#             name="Daily Sales (EA)",
+#             marker_color=PALETTE[0],
+#         ),
+#         secondary_y=False,
+#     )
+#     chart.add_trace(
+#         go.Scatter(
+#             x=sales_df["date"],
+#             y=sales_df["inventory_qty"],
+#             mode="lines+markers",
+#             name="Amazon Inventory (EA)",
+#             line=dict(color=PALETTE[1], width=2),
+#         ),
+#         secondary_y=True,
+#     )
 
 
-    line_colors: Dict[str, str] = {}
-    color_idx = 0
-    for tr in fig.data:
-        name = tr.name or ""
-        if " @ " in name and name not in line_colors:
-            line_colors[name] = PALETTE[color_idx % len(PALETTE)]
-            color_idx += 1
-    for i, tr in enumerate(fig.data):
-        name = tr.name or ""
-        if " @ " not in name:
-            continue
-        _, kind = name.split(" @ ", 1)
-        line_color = line_colors.get(name, PALETTE[0])
-        if kind == "생산중":
-            fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
-        else:
-            fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
+#     line_colors: Dict[str, str] = {}
+#     color_idx = 0
+#     for tr in fig.data:
+#         name = tr.name or ""
+#         if " @ " in name and name not in line_colors:
+#             line_colors[name] = PALETTE[color_idx % len(PALETTE)]
+#             color_idx += 1
+#     for i, tr in enumerate(fig.data):
+#         name = tr.name or ""
+#         if " @ " not in name:
+#             continue
+#         _, kind = name.split(" @ ", 1)
+#         line_color = line_colors.get(name, PALETTE[0])
+#         if kind == "생산중":
+#             fig.data[i].update(line=dict(color=line_color, dash="dash", width=1.0), opacity=0.8)
+#         else:
+#             fig.data[i].update(line=dict(color=line_color, dash="solid", width=1.5), opacity=1.0)
 
-    chart_key = (
-        f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
-        f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
-        f"prod{int(show_prod)}"
-    )
-    sales_fig.update_yaxes(tickformat=",.0f")
-    st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
+#     chart_key = (
+#         f"stepchart|centers={','.join(centers_sel)}|skus={','.join(skus_sel)}|"
+#         f"{start_dt:%Y%m%d}-{end_dt:%Y%m%d}|h{int(st.session_state.horizon_days)}|"
+#         f"prod{int(show_prod)}"
+#     )
+#     sales_fig.update_yaxes(tickformat=",.0f")
+#     st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
 
 # -------------------- Amazon US sales vs. inventory --------------------
 st.subheader("Amazon US 일일 판매 & 재고")

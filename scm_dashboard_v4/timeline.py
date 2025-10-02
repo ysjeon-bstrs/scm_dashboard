@@ -89,6 +89,8 @@ def build_timeline(
     today: pd.Timestamp,
     lag_days: int = 7,
 ) -> pd.DataFrame:
+
+
     """Build an in-transit daily timeseries synchronised with inventory receipts.
 
     The output provides a daily step series per SKU whose decrements align
@@ -122,11 +124,8 @@ def build_timeline(
     mv_all = normalize_move_dates(moves.copy())
     mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
 
-
-    mv_all = normalize_move_dates(moves.copy())
-    mv_all = annotate_move_schedule(mv_all, today, lag_days, horizon_end)
-
-
+    # Initialize container for per-SKU series; remains empty until implemented
+    series_frames: List[pd.DataFrame] = []
     if not series_frames:
         return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 
