@@ -202,9 +202,6 @@ def _plot_timeline(
     today = pd.Timestamp.today().normalize()
     actual_df = actual_df[actual_df["stock_qty"] != 0]
     actual_df = actual_df[actual_df["date"] <= today]
-        vis_df = vis_df[vis_df["center"] != "생산중"]
-    if not show_in_transit:
-        vis_df = vis_df[vis_df["center"] != "이동중"]
 
     if forecast_df is not None and not forecast_df.empty:
         forecast_df = forecast_df[forecast_df["stock_qty"] != 0]
