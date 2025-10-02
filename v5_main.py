@@ -20,7 +20,9 @@ from scm_dashboard_v4.processing import (
     normalize_moves,
     normalize_refined_snapshot,
 )
+
 from scm_dashboard_v5.analytics import prepare_amazon_daily_sales
+from scm_dashboard_v5.analytics.kpi import kpi_breakdown_per_sku
 from scm_dashboard_v5.forecast import apply_consumption_with_events
 from scm_dashboard_v5.pipeline import BuildInputs, build_timeline_bundle
 
@@ -360,6 +362,82 @@ def main() -> None:
         st.warning("종료일이 시작일보다 빠릅니다.")
         return
 
+    snapshot_df = data.snapshot.copy()
+    if "date" in snapshot_df.columns:
+        snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+        latest_dt = snapshot_df["date"].max()
+    else:
+        latest_dt = pd.NaT
+
+    st.subheader("요약 KPI")
+
+    if snapshot_df.empty or "date" not in snapshot_df.columns or pd.isna(latest_dt):
+        st.caption("스냅샷 데이터가 없어 KPI를 계산할 수 없습니다.")
+        kpi_df = pd.DataFrame()
+        selected_skus_str = [str(sku) for sku in selected_skus]
+    else:
+        selected_skus_str = [str(sku) for sku in selected_skus]
+        latest_snapshot_rows = snapshot_df[snapshot_df["date"] == latest_dt].copy()
+        kpi_name_map: dict[str, str] = {}
+        if "resource_name" in latest_snapshot_rows.columns:
+            name_rows = latest_snapshot_rows.dropna(
+                subset=["resource_code", "resource_name"]
+            ).copy()
+            if not name_rows.empty:
+                name_rows["resource_code"] = name_rows["resource_code"].astype(str)
+                name_rows["resource_name"] = (
+                    name_rows["resource_name"].astype(str).str.strip()
+                )
+                name_rows = name_rows[name_rows["resource_name"] != ""]
+                if not name_rows.empty:
+                    kpi_name_map = dict(
+                        zip(name_rows["resource_code"], name_rows["resource_name"])
+                    )
+        else:
+            kpi_name_map = {}
+
+        moves_for_kpi = data.moves.copy()
+        if not moves_for_kpi.empty:
+            moves_for_kpi["carrier_mode"] = moves_for_kpi["carrier_mode"].astype(str).str.upper()
+            moves_for_kpi["resource_code"] = moves_for_kpi["resource_code"].astype(str)
+
+        today_norm = pd.Timestamp.today().normalize()
+        kpi_df = kpi_breakdown_per_sku(
+            snapshot_df,
+            moves_for_kpi,
+            selected_centers,
+            selected_skus_str,
+            today_norm,
+            "date",
+            latest_dt,
+            int(lag_days),
+        )
+        if not kpi_df.empty:
+            kpi_df.index = kpi_df.index.astype(str)
+
+        def _chunked(seq: list[str], size: int) -> Iterable[list[str]]:
+            for idx in range(0, len(seq), size):
+                yield seq[idx : idx + size]
+
+        for group in _chunked(selected_skus_str, 2):
+            cols = st.columns(len(group))
+            for idx, sku in enumerate(group):
+                with cols[idx].container(border=True):
+                    display_name = kpi_name_map.get(sku, "")
+                    if display_name:
+                        st.markdown(f"**{display_name}**  \\n`{sku}`")
+                    else:
+                        st.markdown(f"`{sku}`")
+                    c1, c2, c3 = st.columns(3)
+                    current_val = int(kpi_df.at[sku, "current"]) if sku in kpi_df.index else 0
+                    transit_val = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
+                    wip_val = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
+                    c1.metric("현재 재고", f"{current_val:,}")
+                    c2.metric("이동중", f"{transit_val:,}")
+                    c3.metric("생산중", f"{wip_val:,}")
+
+    st.divider()
+
     timeline = _build_timeline(
         data=data,
         centers=selected_centers,
@@ -376,7 +454,7 @@ def main() -> None:
     if use_cons_forecast:
         timeline = apply_consumption_with_events(
             timeline,
-            data.snapshot,
+            snapshot_df,
             centers=selected_centers,
             skus=selected_skus,
             start=start_ts,
@@ -556,8 +634,8 @@ def main() -> None:
         arr_wip["display_date"] = arr_wip["event_date"]
 
     resource_name_map: dict[str, str] = {}
-    if "resource_name" in data.snapshot.columns:
-        name_rows = data.snapshot.loc[data.snapshot["resource_name"].notna(), [
+    if "resource_name" in snapshot_df.columns:
+        name_rows = snapshot_df.loc[snapshot_df["resource_name"].notna(), [
             "resource_code",
             "resource_name",
         ]].copy()
@@ -632,13 +710,10 @@ def main() -> None:
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
 
-    snapshot_df = data.snapshot.copy()
     if snapshot_df.empty or "date" not in snapshot_df.columns:
         st.info("스냅샷 데이터가 없습니다.")
         return
 
-    snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
-    latest_dt = snapshot_df["date"].max()
     if pd.isna(latest_dt):
         st.info("스냅샷 데이터의 날짜 정보를 확인할 수 없습니다.")
         return
