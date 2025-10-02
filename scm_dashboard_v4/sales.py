@@ -87,3 +87,5 @@ def prepare_amazon_sales_series(
     )
 
     return AmazonSalesResult(agg, center)
+
+
