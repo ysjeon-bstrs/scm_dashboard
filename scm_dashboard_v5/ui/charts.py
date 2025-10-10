@@ -68,23 +68,32 @@ def render_step_chart(
 
     vis_df = timeline.copy()
     vis_df["date"] = pd.to_datetime(vis_df["date"], errors="coerce").dt.normalize()
-    vis_df = vis_df[(vis_df["date"] >= pd.to_datetime(start).normalize()) & (vis_df["date"] <= pd.to_datetime(end).normalize())]
+    vis_df = vis_df[
+        (vis_df["date"] >= pd.to_datetime(start).normalize())
+        & (vis_df["date"] <= pd.to_datetime(end).normalize())
+    ]
 
     if vis_df.empty:
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
     vis_df["center"] = vis_df["center"].astype(str)
-    vis_df["center"] = vis_df["center"].str.replace(r"^In-Transit.*$", "이동중", regex=True)
-    vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
+    vis_df["center"] = vis_df["center"].str.replace(
+        r"^In-Transit.*$", "In-Transit", regex=True
+    )
 
     centers_set = set(centers)
     if "태광KR" not in centers_set:
-        vis_df = vis_df[vis_df["center"] != "생산중"]
+        vis_df = vis_df[vis_df["center"] != "WIP"]
     if not show_production:
-        vis_df = vis_df[vis_df["center"] != "생산중"]
+        vis_df = vis_df[vis_df["center"] != "WIP"]
     if not show_in_transit:
-        vis_df = vis_df[~vis_df["center"].str.startswith("이동중")]
+        vis_df = vis_df[vis_df["center"] != "In-Transit"]
+
+    vis_df["center"] = vis_df["center"].str.replace(
+        r"^In-Transit$", "이동중", regex=True
+    )
+    vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
 
     vis_df = vis_df[pd.to_numeric(vis_df["stock_qty"], errors="coerce").fillna(0) > 0]
     if vis_df.empty:

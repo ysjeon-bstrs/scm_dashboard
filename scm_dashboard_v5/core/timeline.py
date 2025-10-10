@@ -19,6 +19,7 @@ def build_timeline(
     end: pd.Timestamp,
     today: pd.Timestamp,
     lag_days: int = 7,
+    horizon_days: int = 0,
     move_fallback_days: int = 1,
 ) -> pd.DataFrame:
     """Return the concatenated timeline bundle for the given filters."""
@@ -32,6 +33,7 @@ def build_timeline(
         end=end,
         today=today,
         lag_days=lag_days,
+        horizon_days=int(max(0, horizon_days)),
     )
     timeline = bundle.concat()
     if timeline.empty:

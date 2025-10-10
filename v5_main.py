@@ -152,19 +152,74 @@ def main() -> None:
         st.info("데이터를 로드하면 차트와 테이블이 표시됩니다.")
         return
 
-    centers, skus = _center_and_sku_options(data.moves, data.snapshot)
+    snapshot_df = data.snapshot.copy()
+    if "date" in snapshot_df.columns:
+        snapshot_df["date"] = (
+            pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+        )
+    elif "snapshot_date" in snapshot_df.columns:
+        snapshot_df["date"] = (
+            pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
+        )
+    else:
+        snapshot_df["date"] = pd.NaT
+
+    centers, skus = _center_and_sku_options(data.moves, snapshot_df)
     if not centers or not skus:
         st.warning("센터 또는 SKU 정보를 찾을 수 없습니다.")
         return
 
-    min_dt, max_dt = _date_bounds(data.moves, data.snapshot)
     today = pd.Timestamp.today().normalize()
-    preset_start = today - pd.Timedelta(days=10)
-    preset_end = today + pd.Timedelta(days=30)
-    default_start = max(min_dt, preset_start)
-    default_end = min(max_dt, preset_end)
-    if default_start > default_end:
-        default_start, default_end = min_dt, max_dt
+    snap_dates = snapshot_df["date"].dropna()
+    latest_dt = snap_dates.max() if not snap_dates.empty else pd.NaT
+    latest_snapshot_dt = (
+        None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
+    )
+    past_days = 42
+    future_days = 60
+    if snap_dates.empty:
+        snap_min = today - pd.Timedelta(days=past_days)
+        snap_max = today
+    else:
+        snap_min = snap_dates.min().normalize()
+        snap_max = snap_dates.max().normalize()
+
+    bound_min = max(today - pd.Timedelta(days=past_days), snap_min)
+    bound_max = min(today + pd.Timedelta(days=future_days), snap_max + pd.Timedelta(days=60))
+    if bound_min > bound_max:
+        bound_min = bound_max
+
+    def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
+        start_val, end_val = range_value
+        start_val = pd.Timestamp(start_val).normalize()
+        end_val = pd.Timestamp(end_val).normalize()
+        start_val = max(min(start_val, bound_max), bound_min)
+        end_val = max(min(end_val, bound_max), bound_min)
+        if end_val < start_val:
+            end_val = start_val
+        return (start_val, end_val)
+
+    def _init_range() -> None:
+        if "date_range" not in st.session_state:
+            default_start = max(today - pd.Timedelta(days=20), bound_min)
+            default_end = min(today + pd.Timedelta(days=20), bound_max)
+            st.session_state.date_range = (default_start, default_end)
+        else:
+            st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
+        if "horizon_days" not in st.session_state:
+            st.session_state.horizon_days = 20
+        st.session_state.horizon_days = int(
+            max(0, min(int(st.session_state.horizon_days), future_days))
+        )
+
+    def _apply_horizon_to_range() -> None:
+        horizon = int(max(0, min(int(st.session_state.horizon_days), future_days)))
+        st.session_state.horizon_days = horizon
+        start_val = max(today - pd.Timedelta(days=horizon), bound_min)
+        end_val = min(today + pd.Timedelta(days=horizon), bound_max)
+        st.session_state.date_range = (start_val, end_val)
+
+    _init_range()
 
     with st.sidebar:
         st.header("필터")
@@ -182,18 +237,31 @@ def main() -> None:
         if not default_skus:
             default_skus = skus if len(skus) <= 10 else skus[:10]
         selected_skus = st.multiselect("SKU", skus, default=default_skus)
-        date_range = st.date_input(
-            "타임라인 범위",
-            value=(default_start.to_pydatetime(), default_end.to_pydatetime()),
-            min_value=min_dt.to_pydatetime(),
-            max_value=max_dt.to_pydatetime(),
+        st.subheader("기간 설정")
+        st.number_input(
+            "미래 전망 일수",
+            min_value=0,
+            max_value=future_days,
+            step=1,
+            key="horizon_days",
+            on_change=_apply_horizon_to_range,
         )
+        date_range_value = st.slider(
+            "기간",
+            min_value=bound_min.to_pydatetime(),
+            max_value=bound_max.to_pydatetime(),
+            value=tuple(
+                d.to_pydatetime() for d in _clamp_range(st.session_state.date_range)
+            ),
+            format="YYYY-MM-DD",
+        )
+        start_ts = pd.Timestamp(date_range_value[0]).normalize()
+        end_ts = pd.Timestamp(date_range_value[1]).normalize()
+        st.session_state.date_range = (start_ts, end_ts)
         st.header("표시 옵션")
         show_prod = st.checkbox("생산중 표시", value=True)
         show_transit = st.checkbox("이동중 표시", value=True)
-        st.caption(
-            "체크 해제 시 생산중(WIP) 및 이동중(In-Transit) 데이터가 그래프와 표에서 숨겨집니다."
-        )
+        st.caption("체크 해제 시 계단식 차트에서 해당 라인이 숨겨집니다.")
         use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
         lookback_days = int(
             st.number_input(
@@ -246,31 +314,15 @@ def main() -> None:
         st.warning("최소 한 개의 SKU를 선택하세요.")
         return
 
-    if isinstance(date_range, tuple):
-        start_date, end_date = date_range
-    else:
-        start_date = date_range
-        end_date = date_range
-
-    start_ts = pd.Timestamp(start_date).normalize()
-    end_ts = pd.Timestamp(end_date).normalize()
-    if end_ts < start_ts:
-        st.warning("종료일이 시작일보다 빠릅니다.")
-        return
-
     selected_centers = [str(center) for center in selected_centers if str(center).strip()]
     selected_skus = [str(sku) for sku in selected_skus if str(sku).strip()]
 
-    snapshot_df = data.snapshot.copy()
-    if "date" in snapshot_df.columns:
-        snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
-        latest_dt = snapshot_df["date"].max()
-    else:
-        latest_dt = pd.NaT
-    latest_snapshot_dt = None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
-
     st.subheader("요약 KPI")
     today_norm = pd.Timestamp.today().normalize()
+    if latest_snapshot_dt is not None:
+        proj_days_for_build = max(0, int((end_ts - latest_snapshot_dt).days))
+    else:
+        proj_days_for_build = max(0, int((end_ts - start_ts).days))
     render_sku_summary_cards(
         snapshot_df,
         data.moves,
@@ -292,6 +344,7 @@ def main() -> None:
         end=end_ts,
         today=today_norm,
         lag_days=int(lag_days),
+        horizon_days=int(proj_days_for_build),
     )
 
     if timeline_actual is None or timeline_actual.empty:
@@ -480,9 +533,7 @@ def main() -> None:
         confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
 
     st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
-    if not show_transit:
-        st.caption("'이동중 표시' 옵션을 끄면 이동중(In-Transit) 데이터가 숨겨집니다.")
-    elif confirmed_inbound.empty:
+    if confirmed_inbound.empty:
         st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
     else:
         confirmed_inbound["days_to_arrival"] = (
@@ -517,9 +568,7 @@ def main() -> None:
         st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
 
     st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
-    if not show_prod:
-        st.caption("'생산중 표시' 옵션을 끄면 생산중(WIP) 데이터가 숨겨집니다.")
-    elif not arr_wip.empty:
+    if not arr_wip.empty:
         if resource_name_map:
             arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
         arr_wip = arr_wip.sort_values(
