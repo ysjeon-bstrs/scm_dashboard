@@ -379,7 +379,6 @@ def main() -> None:
         return
 
     timeline_for_chart = timeline_actual.copy()
-    forecast_timeline: Optional[pd.DataFrame] = None
     if use_cons_forecast:
         cons_start = None
         if latest_snapshot_dt is not None:
@@ -395,7 +394,6 @@ def main() -> None:
             events=events,
             cons_start=cons_start,
         )
-        forecast_timeline = timeline_for_chart
 
     render_step_chart(
         timeline_for_chart,
@@ -431,33 +429,28 @@ def main() -> None:
     with toggle_cols[1]:
         show_amazon_inbound = st.checkbox(
             "입고 표시",
-            value=True,
+            value=False,
             key="amazon_show_inbound",
         )
     with toggle_cols[2]:
         show_amazon_forecast = st.checkbox(
             "재고 예측 표시",
-            value=forecast_timeline is not None,
+            value=True,
             key="amazon_show_forecast",
-            disabled=forecast_timeline is None,
-            help="사이드바에서 '추세 기반 재고 예측'을 켜면 사용할 수 있습니다.",
         )
 
-    if forecast_timeline is None:
-        show_amazon_forecast = False
-
     render_amazon_sales_vs_inventory(
-        timeline_actual,
+        snapshot_df,
+        moves=data.moves,
         centers=amazon_candidates,
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
-        latest_snapshot=latest_snapshot_dt,
-        forecast_timeline=forecast_timeline,
-        moves=data.moves,
+        lookback_days=lookback_days,
+        today=today_norm,
         show_ma7=show_amazon_ma7,
         show_inbound=show_amazon_inbound,
-        show_forecast=show_amazon_forecast,
+        show_inventory_forecast=show_amazon_forecast,
         caption="판매 막대는 좌측 축, 재고 선은 우측 축 기준입니다.",
     )
 
