@@ -74,3 +74,47 @@ def apply_consumption_with_events(
         int(lookback_days),
         events_list,
     )
+
+    if cons_start is None or "date" not in result.columns:
+        return result
+
+    cons_start_norm = pd.to_datetime(cons_start).normalize()
+    result = result.copy()
+    result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
+
+    if "date" not in timeline_copy.columns:
+        return result
+
+    key_cols = [
+        col
+        for col in ["date", "center", "resource_code"]
+        if col in result.columns and col in timeline_copy.columns
+    ]
+
+    if not key_cols:
+        return result
+
+    orig = (
+        timeline_copy[key_cols + ["stock_qty"]]
+        .copy()
+        .rename(columns={"stock_qty": "_orig_stock_qty"})
+    )
+
+    # Ensure unique keys to avoid Cartesian products during alignment.
+    orig = orig.drop_duplicates(subset=key_cols, keep="last")
+
+    merged = result.merge(orig, on=key_cols, how="left")
+    mask = merged["date"] < cons_start_norm
+    if mask.any():
+        restored = merged.loc[mask, "_orig_stock_qty"].fillna(merged.loc[mask, "stock_qty"])
+        merged.loc[mask, "stock_qty"] = restored.values
+
+    merged = merged.drop(columns=["_orig_stock_qty"], errors="ignore")
+
+    # Reorder columns to match the original timeline when possible.
+    desired_cols = list(timeline_copy.columns)
+    remaining_cols = [c for c in merged.columns if c not in desired_cols]
+    ordered_cols = desired_cols + remaining_cols
+    merged = merged[[c for c in ordered_cols if c in merged.columns]]
+
+    return merged
