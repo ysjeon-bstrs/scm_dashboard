@@ -27,6 +27,49 @@ from scm_dashboard_v5.ui import (
 )
 
 
+def _validate_timeline_inputs(
+    snapshot: object,
+    moves: object,
+    start: object,
+    end: object,
+) -> bool:
+    """Return True if the timeline inputs look structurally correct."""
+
+    if not isinstance(snapshot, pd.DataFrame):
+        st.error("스냅샷 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        return False
+    if not isinstance(moves, pd.DataFrame):
+        st.error("이동 원장 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        return False
+
+    required_snapshot_cols = {"center", "resource_code", "stock_qty"}
+    missing_snapshot = [col for col in required_snapshot_cols if col not in snapshot.columns]
+    if missing_snapshot:
+        st.error(
+            "스냅샷 데이터에 필요한 컬럼이 없습니다: "
+            + ", ".join(sorted(missing_snapshot))
+        )
+        return False
+
+    required_move_cols = {"from_center", "to_center", "resource_code"}
+    missing_moves = [col for col in required_move_cols if col not in moves.columns]
+    if missing_moves:
+        st.error(
+            "이동 원장 데이터에 필요한 컬럼이 없습니다: " + ", ".join(sorted(missing_moves))
+        )
+        return False
+
+    if not isinstance(start, pd.Timestamp) or not isinstance(end, pd.Timestamp):
+        st.error("기간 정보가 손상되었습니다. 기간 슬라이더를 다시 설정해 주세요.")
+        return False
+
+    if end < start:
+        st.error("기간의 종료일이 시작일보다 빠릅니다. 기간을 다시 선택하세요.")
+        return False
+
+    return True
+
+
 @dataclass
 class LoadedData:
     moves: pd.DataFrame
@@ -119,25 +162,6 @@ def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tupl
         skus = sorted(moves["resource_code"].dropna().astype(str).unique().tolist())
 
     return centers, skus
-
-
-def _date_bounds(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[pd.Timestamp, pd.Timestamp]:
-    """Compute a sensible default date window based on available data."""
-
-    dates = [
-        snapshot["date"].min() if not snapshot.empty else None,
-        snapshot["date"].max() if not snapshot.empty else None,
-        moves.get("onboard_date").min() if "onboard_date" in moves.columns else None,
-        moves.get("pred_inbound_date").min() if "pred_inbound_date" in moves.columns else None,
-        moves.get("pred_inbound_date").max() if "pred_inbound_date" in moves.columns else None,
-        moves.get("event_date").max() if "event_date" in moves.columns else None,
-    ]
-    dates = [pd.to_datetime(d).normalize() for d in dates if pd.notna(d)]
-    if not dates:
-        today = pd.Timestamp.today().normalize()
-        return today - pd.Timedelta(days=30), today + pd.Timedelta(days=30)
-
-    return min(dates), max(dates)
 
 
 def main() -> None:
@@ -334,6 +358,9 @@ def main() -> None:
     )
 
     st.divider()
+
+    if not _validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts):
+        return
 
     timeline_actual = build_core_timeline(
         snapshot_df,
@@ -782,7 +809,5 @@ def main() -> None:
                             use_container_width=True,
                             height=320,
                         )
-
-
 if __name__ == "__main__":
     main()
