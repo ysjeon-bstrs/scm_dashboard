@@ -203,12 +203,23 @@ def _plot_timeline(
         actual_df = actual_df[actual_df["center"] != "생산중"]
         forecast_df = forecast_df[forecast_df["center"] != "생산중"]
 
+    # Respect 'show_in_transit' toggle like v4 (hide lines starting with 이동중)
+    if not show_in_transit:
+        actual_df = actual_df[~actual_df["center"].astype(str).str.startswith("이동중")]
+        forecast_df = forecast_df[~forecast_df["center"].astype(str).str.startswith("이동중")]
+
     today = pd.Timestamp.today().normalize()
-    actual_df = actual_df[actual_df["stock_qty"] != 0]
+    # Sanitize quantities: numeric, non-negative, and hide zeros
+    if not actual_df.empty and "stock_qty" in actual_df.columns:
+        actual_df["stock_qty"] = pd.to_numeric(actual_df["stock_qty"], errors="coerce").fillna(0)
+        actual_df["stock_qty"] = actual_df["stock_qty"].clip(lower=0)
+    actual_df = actual_df[actual_df["stock_qty"] > 0]
     actual_df = actual_df[actual_df["date"] <= today]
 
     if forecast_df is not None and not forecast_df.empty:
-        forecast_df = forecast_df[forecast_df["stock_qty"] != 0]
+        forecast_df["stock_qty"] = pd.to_numeric(forecast_df["stock_qty"], errors="coerce").fillna(0)
+        forecast_df["stock_qty"] = forecast_df["stock_qty"].clip(lower=0)
+        forecast_df = forecast_df[forecast_df["stock_qty"] > 0]
         forecast_df = forecast_df[forecast_df["date"] >= today]
     else:
         forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
@@ -246,6 +257,39 @@ def _plot_timeline(
     for idx, label in enumerate(labels):
         line_colors[label] = PALETTE[idx % len(PALETTE)]
 
+    # Bridge actual -> forecast at 'today' to avoid visual gaps
+    if not actual_df.empty and not forecast_df.empty and labels:
+        bridge_rows: list[dict] = []
+        for label in labels:
+            act_lbl = actual_df[actual_df.get("label", pd.Series(dtype=str)) == label]
+            fc_lbl = forecast_df[forecast_df.get("label", pd.Series(dtype=str)) == label]
+            if act_lbl.empty or fc_lbl.empty:
+                continue
+            last_act_idx = act_lbl["date"].idxmax()
+            if pd.isna(last_act_idx):
+                continue
+            last_y = float(act_lbl.loc[last_act_idx, "stock_qty"])
+            # Parse label into resource_code and center
+            try:
+                resource_code, center = label.split(" @ ", 1)
+            except ValueError:
+                # Fallback: skip if unexpected label
+                continue
+            bridge_dt = today
+            if (start <= bridge_dt <= end):
+                bridge_rows.append({
+                    "date": bridge_dt,
+                    "center": center,
+                    "resource_code": resource_code,
+                    "stock_qty": last_y,
+                    "label": label,
+                })
+        if bridge_rows:
+            forecast_df = pd.concat([forecast_df, pd.DataFrame(bridge_rows)], ignore_index=True)
+
+    # Recompute for any added bridge rows
+    forecast_label_series = forecast_df.get("label")
+
     fig = go.Figure()
 
     hover_template = "날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
@@ -254,15 +298,27 @@ def _plot_timeline(
         color = line_colors[label]
         act = actual_df[actual_df["label"] == label].sort_values("date")
         if not act.empty:
+            # v4-like styling by center type for actual lines
+            center_kind = label.split(" @ ", 1)[1] if " @ " in label else ""
+            if center_kind == "이동중":
+                line_style = dict(color=color, dash="dot", width=1.2)
+                opacity = 0.9
+            elif center_kind == "생산중":
+                line_style = dict(color=color, dash="dash", width=1.0)
+                opacity = 0.8
+            else:
+                line_style = dict(color=color, dash="solid", width=1.5)
+                opacity = 1.0
             fig.add_trace(
                 go.Scatter(
                     x=act["date"],
                     y=act["stock_qty"],
                     mode="lines",
-                    line=dict(color=color, width=1.8),
+                    line=line_style,
                     name=f"{label} · 실데이터",
                     legendgroup=label,
                     line_shape="hv",
+                    opacity=opacity,
                     hovertemplate=hover_template,
                 )
             )
