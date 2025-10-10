@@ -7,14 +7,10 @@ from typing import Optional, Sequence
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
 from scm_dashboard_v4.config import PALETTE
-from scm_dashboard_v5.analytics.sales import (
-    AmazonSeriesResult,
-    prepare_amazon_inventory_layers,
-)
+from scm_dashboard_v4.consumption import estimate_daily_consumption
 
 
 def _apply_line_styles(fig) -> None:
@@ -146,136 +142,229 @@ def render_step_chart(
 
 
 def render_amazon_sales_vs_inventory(
-    timeline: pd.DataFrame,
+    snapshot: pd.DataFrame,
     *,
+    moves: Optional[pd.DataFrame],
     centers: Sequence[str],
     skus: Sequence[str],
     start: pd.Timestamp,
     end: pd.Timestamp,
-    latest_snapshot: Optional[pd.Timestamp],
-    forecast_timeline: Optional[pd.DataFrame] = None,
-    moves: Optional[pd.DataFrame] = None,
+    lookback_days: int = 28,
+    today: Optional[pd.Timestamp] = None,
     show_ma7: bool = True,
-    show_inbound: bool = True,
-    show_forecast: bool = True,
+    show_inbound: bool = False,
+    show_inventory_forecast: bool = True,
     caption: str | None = None,
 ) -> None:
-    """Render the Amazon sales vs. inventory chart with dual axes."""
+    """Render the Amazon sales vs. inventory chart with improved UX."""
 
-    series: AmazonSeriesResult = prepare_amazon_inventory_layers(
-        timeline,
-        centers=centers,
-        skus=skus,
-        start_dt=start,
-        end_dt=end,
-        forecast_timeline=forecast_timeline,
-        moves=moves,
-        latest_snapshot=latest_snapshot,
-    )
-
-    inventory = series.inventory
-    sales = series.sales
-    forecast_series = series.forecast if show_forecast else None
-    inbound_series = series.inbound if show_inbound else None
-
-    if inventory is None or inventory.empty:
-        st.caption("선택된 조건에 해당하는 Amazon 재고 데이터가 없습니다.")
+    today = pd.to_datetime(today).normalize() if today is not None else pd.Timestamp.today().normalize()
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    if end_norm < start_norm:
+        st.warning("기간 설정이 올바르지 않아 Amazon 차트를 그릴 수 없습니다.")
         return
 
-    if sales is None or sales.empty:
-        sales = pd.Series(0.0, index=inventory.index, name="sales_qty")
+    if snapshot is None or snapshot.empty:
+        st.caption("선택된 조건에 해당하는 Amazon 스냅샷 데이터가 없습니다.")
+        return
 
-    idx = inventory.index
+    def _is_amazon_center(label: str) -> bool:
+        value = str(label or "").strip()
+        if not value:
+            return False
+        lowered = value.lower()
+        return "amazon" in lowered or value.upper().startswith("AMZ")
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    center_list = [str(center).strip() for center in centers if str(center).strip()]
+    if not center_list:
+        center_list = [
+            str(center)
+            for center in snapshot.get("center", pd.Series(dtype=str)).dropna().astype(str).unique()
+            if _is_amazon_center(center)
+        ]
 
-    fig.add_trace(
-        go.Bar(
-            x=idx,
-            y=sales.values,
-            name="판매(실측)",
-            opacity=0.75,
-            marker_color=PALETTE[0],
-            hovertemplate="날짜=%{x|%Y-%m-%d}<br>판매=%{y:,.0f} EA<extra></extra>",
-        ),
-        secondary_y=False,
+    center_list = [center for center in center_list if _is_amazon_center(center)]
+    if not center_list:
+        st.caption("Amazon 계열 센터가 선택되지 않았습니다.")
+        return
+
+    sku_list = [str(sku).strip() for sku in skus if str(sku).strip()]
+    if not sku_list:
+        st.caption("표시할 SKU가 없습니다.")
+        return
+
+    work = snapshot.copy()
+    date_col = "date" if "date" in work.columns else "snapshot_date"
+    work[date_col] = pd.to_datetime(work[date_col], errors="coerce").dt.normalize()
+    work = work.dropna(subset=[date_col])
+    work["center"] = work["center"].astype(str)
+    work["resource_code"] = work["resource_code"].astype(str)
+    work = work[
+        work["center"].isin(center_list) & work["resource_code"].astype(str).isin(sku_list)
+    ]
+
+    if work.empty:
+        st.caption("선택된 조건에 해당하는 Amazon 스냅샷 데이터가 없습니다.")
+        return
+
+    work = work.rename(columns={date_col: "date"}).copy()
+    idx = pd.date_range(start_norm, end_norm, freq="D")
+    ts_inv = (
+        work.groupby("date")["stock_qty"].sum()
+        .sort_index()
+        .reindex(idx)
+        .ffill()
+        .fillna(0.0)
+    )
+    ts_inv = ts_inv.clip(lower=0.0)
+    ts_inv.name = "inventory_qty"
+
+    if ts_inv.empty:
+        st.caption("표시할 Amazon 재고 데이터가 없습니다.")
+        return
+
+    latest_snap = work["date"].max().normalize()
+
+    inbound = pd.Series(0.0, index=ts_inv.index, name="inbound_qty")
+    if moves is not None and not moves.empty:
+        required_cols = {"inbound_date", "qty_ea", "to_center", "resource_code"}
+        if required_cols.issubset(moves.columns):
+            inbound_work = moves.dropna(subset=["inbound_date"]).copy()
+            if not inbound_work.empty:
+                inbound_work["inbound_date"] = pd.to_datetime(
+                    inbound_work["inbound_date"], errors="coerce"
+                ).dt.normalize()
+                inbound_work = inbound_work.dropna(subset=["inbound_date"])
+                inbound_work["to_center"] = inbound_work["to_center"].astype(str)
+                inbound_work["resource_code"] = inbound_work["resource_code"].astype(str)
+                inbound_work = inbound_work[
+                    inbound_work["to_center"].isin(center_list)
+                    & inbound_work["resource_code"].isin(sku_list)
+                ]
+                if not inbound_work.empty:
+                    inbound = (
+                        inbound_work.groupby("inbound_date")["qty_ea"].sum().sort_index().reindex(idx)
+                    ).fillna(0.0)
+                    inbound.name = "inbound_qty"
+
+    prev = ts_inv.shift(1).fillna(ts_inv.iloc[0])
+    sales = ((prev + inbound) - ts_inv).clip(lower=0.0)
+    sales.name = "sales_qty"
+
+    sales_ma = sales.rolling(7, min_periods=1).mean() if show_ma7 else None
+
+    rates = estimate_daily_consumption(
+        snapshot.rename(columns={"date": "snapshot_date"}),
+        centers_sel=center_list,
+        skus_sel=sku_list,
+        asof_dt=latest_snap,
+        lookback_days=int(lookback_days),
+    )
+    daily_rate = sum(float(rates.get((center, sku), 0.0)) for center in center_list for sku in sku_list)
+
+    future_start = max(today + pd.Timedelta(days=1), latest_snap + pd.Timedelta(days=1))
+    if future_start > end_norm:
+        future_index = pd.DatetimeIndex([], name="date")
+    else:
+        future_index = pd.date_range(future_start, end_norm, freq="D")
+
+    sales_forecast = (
+        pd.Series(daily_rate, index=future_index, name="sales_forecast") if len(future_index) else pd.Series(dtype=float)
     )
 
-    if show_ma7:
-        sales_ma7 = sales.rolling(window=7, min_periods=1).mean()
-        fig.add_trace(
-            go.Scatter(
-                x=idx,
-                y=sales_ma7.values,
-                name="판매 7일 평균",
-                mode="lines",
-                line=dict(width=2, color="#2ca02c", dash="dot"),
-                hovertemplate="날짜=%{x|%Y-%m-%d}<br>7일평균=%{y:,.0f} EA<extra></extra>",
-            ),
-            secondary_y=False,
-        )
+    inv_pred: Optional[pd.Series] = None
+    if show_inventory_forecast and len(future_index):
+        inv_values = []
+        current = float(ts_inv.loc[ts_inv.index <= latest_snap].iloc[-1]) if (ts_inv.index <= latest_snap).any() else float(ts_inv.iloc[-1])
+        for _ in future_index:
+            current = max(0.0, current - daily_rate)
+            inv_values.append(current)
+        inv_pred = pd.Series(inv_values, index=future_index, name="inventory_forecast").round()
 
-    fig.add_trace(
-        go.Scatter(
-            x=idx,
-            y=inventory.values,
-            name="재고(실측)",
+    fig = go.Figure()
+
+    fig.add_bar(
+        x=sales.index,
+        y=sales.values,
+        name="판매(실측)",
+        marker_color="rgba(33, 150, 243, 0.85)",
+        yaxis="y",
+    )
+
+    if show_ma7 and sales_ma is not None:
+        fig.add_scatter(
+            x=sales_ma.index,
+            y=sales_ma.values,
             mode="lines",
-            line=dict(color="#FF7F0E", width=2),
-            line_shape="hv",
-            hovertemplate="날짜=%{x|%Y-%m-%d}<br>재고=%{y:,.0f} EA<extra></extra>",
-        ),
-        secondary_y=True,
+            name="판매 7일 평균",
+            line=dict(color="rgba(33,150,243,0.6)", dash="dot", width=2),
+            yaxis="y",
+        )
+
+    if len(sales_forecast):
+        fig.add_bar(
+            x=sales_forecast.index,
+            y=sales_forecast.values,
+            name="판매(예측)",
+            marker_color="rgba(33,150,243,0.25)",
+            marker_pattern_shape="/",
+            yaxis="y",
+        )
+
+    if show_inbound and inbound.sum() > 0:
+        fig.add_bar(
+            x=inbound.index,
+            y=inbound.values,
+            name="입고(실제)",
+            marker_color="rgba(200,200,200,0.45)",
+            marker_pattern_shape="\\",
+            opacity=0.6,
+            yaxis="y2",
+        )
+
+    fig.add_scatter(
+        x=ts_inv.index,
+        y=ts_inv.values,
+        mode="lines",
+        name="재고",
+        line=dict(color="#ff7f0e", width=2.2),
+        yaxis="y2",
     )
 
-    if forecast_series is not None:
-        usable_forecast = forecast_series.dropna()
-        if not usable_forecast.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=usable_forecast.index,
-                    y=usable_forecast.values,
-                    name="재고(예측)",
-                    mode="lines",
-                    line=dict(color="#FF7F0E", width=2, dash="dash"),
-                    line_shape="hv",
-                    hovertemplate="날짜=%{x|%Y-%m-%d}<br>예측재고=%{y:,.0f} EA<extra></extra>",
-                ),
-                secondary_y=True,
-            )
-
-    if inbound_series is not None and not inbound_series.empty and inbound_series.sum() > 0:
-        fig.add_trace(
-            go.Bar(
-                x=inbound_series.index,
-                y=inbound_series.values,
-                name="입고(실제)",
-                marker=dict(color="#9edae5"),
-                opacity=0.55,
-                hovertemplate="날짜=%{x|%Y-%m-%d}<br>입고=%{y:,.0f} EA<extra></extra>",
-            ),
-            secondary_y=False,
+    if inv_pred is not None and len(inv_pred):
+        fig.add_scatter(
+            x=inv_pred.index,
+            y=inv_pred.values,
+            mode="lines",
+            name="재고",
+            showlegend=False,
+            line=dict(color="#ff7f0e", width=2.2, dash="dot"),
+            yaxis="y2",
         )
+
+    if start_norm <= today <= end_norm:
+        fig.add_vline(x=today, line_color="crimson", line_width=2, opacity=0.8)
 
     fig.update_layout(
-        title="Amazon US 일별 판매 vs. 재고",
         barmode="overlay",
         hovermode="x unified",
-        legend_title_text="시리즈",
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis=dict(showgrid=True, dtick="D7"),
-    )
-    fig.update_yaxes(
-        title_text="판매량 (EA/Day)",
-        secondary_y=False,
-        rangemode="tozero",
-        tickformat=",.0f",
-    )
-    fig.update_yaxes(
-        title_text="재고 (EA)",
-        secondary_y=True,
-        rangemode="tozero",
-        tickformat=",.0f",
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+        xaxis=dict(title=None),
+        yaxis=dict(
+            title="판매량 (EA/Day)",
+            rangemode="tozero",
+            gridcolor="rgba(0,0,0,0.06)",
+            zeroline=False,
+        ),
+        yaxis2=dict(
+            title="재고 (EA)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            zeroline=False,
+        ),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
