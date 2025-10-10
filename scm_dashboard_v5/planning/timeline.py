@@ -21,13 +21,21 @@ class TimelineContext:
     end: pd.Timestamp
     today: pd.Timestamp
     lag_days: int = 7
+    horizon_days: int = 0
 
     @property
     def index(self) -> SeriesIndex:
-        return SeriesIndex(
-            start=pd.to_datetime(self.start).normalize(),
-            end=pd.to_datetime(self.end).normalize(),
-        )
+        start = pd.to_datetime(self.start).normalize()
+        end = pd.to_datetime(self.end).normalize()
+        if self.horizon_days:
+            end = end + pd.Timedelta(days=int(max(0, self.horizon_days)))
+        return SeriesIndex(start=start, end=end)
+
+    @property
+    def horizon_end(self) -> pd.Timestamp:
+        """Return the inclusive end date for scheduling horizon calculations."""
+
+        return self.index.end
 
 
 class TimelineBuilder:
@@ -87,7 +95,7 @@ def prepare_moves(
         normalized,
         today=context.today,
         lag_days=context.lag_days,
-        horizon_end=context.end,
+        horizon_end=context.horizon_end,
         fallback_days=fallback_days,
     )
     return MoveTable(scheduled)

@@ -25,6 +25,7 @@ def build_timeline_bundle(
     end: pd.Timestamp,
     today: pd.Timestamp,
     lag_days: int = 7,
+    horizon_days: int = 0,
 ):
     context = TimelineContext(
         centers=list(centers),
@@ -33,6 +34,7 @@ def build_timeline_bundle(
         end=end,
         today=today,
         lag_days=lag_days,
+        horizon_days=int(max(0, horizon_days)),
     )
     builder = TimelineBuilder(context)
     snapshot_table = prepare_snapshot(inputs.snapshot)
