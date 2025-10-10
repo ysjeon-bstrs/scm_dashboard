@@ -6,11 +6,9 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
-from scm_dashboard_v4.config import CENTER_COL, PALETTE
+from scm_dashboard_v4.config import CENTER_COL
 from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api, load_snapshot_raw
 from scm_dashboard_v4.processing import (
@@ -20,10 +18,13 @@ from scm_dashboard_v4.processing import (
     normalize_refined_snapshot,
 )
 
-from scm_dashboard_v5.analytics import prepare_amazon_daily_sales
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
-from scm_dashboard_v5.ui import render_step_chart, render_sku_summary_cards
+from scm_dashboard_v5.ui import (
+    render_amazon_sales_vs_inventory,
+    render_step_chart,
+    render_sku_summary_cards,
+)
 
 
 @dataclass
@@ -266,6 +267,7 @@ def main() -> None:
         latest_dt = snapshot_df["date"].max()
     else:
         latest_dt = pd.NaT
+    latest_snapshot_dt = None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
 
     st.subheader("요약 KPI")
     today_norm = pd.Timestamp.today().normalize()
@@ -300,8 +302,8 @@ def main() -> None:
     forecast_timeline: Optional[pd.DataFrame] = None
     if use_cons_forecast:
         cons_start = None
-        if not pd.isna(latest_dt):
-            cons_start = (pd.to_datetime(latest_dt).normalize() + pd.Timedelta(days=1)).normalize()
+        if latest_snapshot_dt is not None:
+            cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
         timeline_for_chart = apply_consumption_with_events(
             timeline_for_chart,
             snapshot_df,
@@ -336,183 +338,48 @@ def main() -> None:
         )
     ]
 
-    sales_result = prepare_amazon_daily_sales(
-        data.snapshot,
-        centers=amazon_candidates,
-        skus=selected_skus,
-        start_dt=start_ts,
-        end_dt=end_ts,
-        rolling_window=7,
-    )
-
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
-    sales_df = sales_result.data
-    if sales_df.empty:
-        st.caption("선택된 SKU/기간에 대한 Amazon US 판매 데이터가 없습니다.")
-    else:
-        sales_df = sales_df.copy()
-        sales_df["date"] = pd.to_datetime(sales_df["date"], errors="coerce")
-        sales_df = sales_df.sort_values("date")
 
-        sales_fig = make_subplots(specs=[[{"secondary_y": True}]])
-        sales_fig.add_trace(
-            go.Bar(
-                x=sales_df["date"],
-                y=sales_df["sales_qty"],
-                name="Daily Sales (EA)",
-                marker_color=PALETTE[0],
-                opacity=0.85,
-                offsetgroup="actual-sales",
-            ),
-            secondary_y=False,
+    toggle_cols = st.columns(3)
+    with toggle_cols[0]:
+        show_amazon_ma7 = st.checkbox(
+            "판매 7일 이동평균",
+            value=True,
+            key="amazon_show_ma7",
+        )
+    with toggle_cols[1]:
+        show_amazon_inbound = st.checkbox(
+            "입고 표시",
+            value=True,
+            key="amazon_show_inbound",
+        )
+    with toggle_cols[2]:
+        show_amazon_forecast = st.checkbox(
+            "재고 예측 표시",
+            value=forecast_timeline is not None,
+            key="amazon_show_forecast",
+            disabled=forecast_timeline is None,
+            help="사이드바에서 '추세 기반 재고 예측'을 켜면 사용할 수 있습니다.",
         )
 
-        forecast_inventory = pd.DataFrame()
-        forecast_sales = pd.DataFrame()
-        amazon_center_set = {str(c) for c in amazon_candidates}
-        actual_inventory_series = pd.Series(dtype=float)
-        if amazon_center_set:
-            timeline_amazon = timeline_actual.copy()
-            timeline_amazon["center"] = timeline_amazon["center"].astype(str)
-            timeline_amazon = timeline_amazon[
-                ~timeline_amazon["center"].isin(["In-Transit", "WIP"])
-            ]
-            timeline_amazon = timeline_amazon[
-                timeline_amazon["center"].isin(amazon_center_set)
-            ]
-            if not timeline_amazon.empty:
-                timeline_amazon["date"] = pd.to_datetime(
-                    timeline_amazon["date"], errors="coerce"
-                ).dt.normalize()
-                timeline_amazon = timeline_amazon.dropna(subset=["date"])
-                if not timeline_amazon.empty:
-                    actual_inventory_series = (
-                        timeline_amazon.groupby("date")["stock_qty"].sum().sort_index()
-                    )
+    if forecast_timeline is None:
+        show_amazon_forecast = False
 
-        forecast_start = None
-        if not pd.isna(latest_dt):
-            forecast_start = (latest_dt + pd.Timedelta(days=1)).normalize()
-        display_start = pd.Timestamp.today().normalize()
-        if forecast_start is not None:
-            display_start = max(display_start, forecast_start)
-
-        if (
-            forecast_timeline is not None
-            and not forecast_timeline.empty
-            and amazon_center_set
-        ):
-            forecast_view = forecast_timeline.copy()
-            forecast_view["center"] = forecast_view["center"].astype(str)
-            forecast_view = forecast_view[
-                ~forecast_view["center"].isin(["In-Transit", "WIP"])
-            ]
-            forecast_view = forecast_view[forecast_view["center"].isin(amazon_center_set)]
-            if not forecast_view.empty:
-                forecast_view["date"] = pd.to_datetime(
-                    forecast_view["date"], errors="coerce"
-                ).dt.normalize()
-                forecast_view = forecast_view.dropna(subset=["date"])
-                if not forecast_view.empty:
-                    forecast_grouped = (
-                        forecast_view.groupby("date", as_index=False)["stock_qty"].sum()
-                    ).sort_values("date")
-                    forecast_inventory = forecast_grouped[
-                        forecast_grouped["date"] >= display_start
-                    ]
-
-                    combined_inventory = pd.concat(
-                        [actual_inventory_series, forecast_grouped.set_index("date")["stock_qty"]]
-                    ).sort_index()
-                    if not combined_inventory.empty:
-                        combined_inventory = combined_inventory[~combined_inventory.index.duplicated(keep="last")]
-                        prev_inventory = combined_inventory.shift(1)
-                        consumption = (prev_inventory - combined_inventory).clip(lower=0)
-                        if forecast_start is not None:
-                            consumption = consumption[consumption.index >= forecast_start]
-                        else:
-                            consumption = consumption[consumption.index >= display_start]
-                        consumption = consumption.dropna()
-                        if not consumption.empty:
-                            forecast_sales = consumption.reset_index()
-                            forecast_sales.columns = ["date", "predicted_sales_qty"]
-                            forecast_sales = forecast_sales[
-                                forecast_sales["predicted_sales_qty"] > 0
-                            ]
-                            forecast_sales = forecast_sales[
-                                forecast_sales["date"] >= display_start
-                            ]
-
-        sales_fig.add_trace(
-            go.Scatter(
-                x=sales_df["date"],
-                y=sales_df["inventory_qty"],
-                mode="lines+markers",
-                name="Amazon Inventory (EA) · 실데이터",
-                line=dict(color=PALETTE[1], width=2),
-                marker=dict(size=4),
-            ),
-            secondary_y=True,
-        )
-        if not forecast_inventory.empty:
-            sales_fig.add_trace(
-                go.Scatter(
-                    x=forecast_inventory["date"],
-                    y=forecast_inventory["stock_qty"],
-                    mode="lines",
-                    name="Amazon Inventory (EA) · 추세 예측치",
-                    line=dict(color=PALETTE[1], dash="dash", width=1.6),
-                ),
-                secondary_y=True,
-            )
-        if not forecast_sales.empty:
-            sales_fig.add_trace(
-                go.Bar(
-                    x=forecast_sales["date"],
-                    y=forecast_sales["predicted_sales_qty"],
-                    name="Forecast Sales (EA)",
-                    marker_color=PALETTE[3 % len(PALETTE)],
-                    marker=dict(pattern=dict(shape="/")),
-                    opacity=0.6,
-                    offsetgroup="forecast-sales",
-                ),
-                secondary_y=False,
-            )
-        sales_fig.add_trace(
-            go.Scatter(
-                x=sales_df["date"],
-                y=sales_df["sales_roll_mean"],
-                name="Sales 7d Rolling Avg",
-                mode="lines",
-                line=dict(color=PALETTE[2], dash="dash"),
-                visible="legendonly",
-            ),
-            secondary_y=False,
-        )
-
-        sales_fig.update_layout(
-            hovermode="x unified",
-            legend_title_text="Amazon 판매/재고",
-            margin=dict(l=20, r=40, t=40, b=20),
-            barmode="group",
-        )
-        sales_fig.update_xaxes(title_text="날짜")
-        sales_fig.update_yaxes(
-            title_text="일일 판매량(EA)",
-            secondary_y=False,
-            tickformat=",.0f",
-        )
-        sales_fig.update_yaxes(
-            title_text="Amazon 재고(EA)",
-            secondary_y=True,
-            tickformat=",.0f",
-        )
-        st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
-        if not forecast_inventory.empty or not forecast_sales.empty:
-            st.caption(
-                "Amazon 재고 실데이터는 실선, 추세 예측치는 점선이며 예측 판매량은 패턴 막대로 표시됩니다."
-            )
+    render_amazon_sales_vs_inventory(
+        timeline_actual,
+        centers=amazon_candidates,
+        skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+        latest_snapshot=latest_snapshot_dt,
+        forecast_timeline=forecast_timeline,
+        moves=data.moves,
+        show_ma7=show_amazon_ma7,
+        show_inbound=show_amazon_inbound,
+        show_forecast=show_amazon_forecast,
+        caption="판매 막대는 좌측 축, 재고 선은 우측 축 기준입니다.",
+    )
 
     window_start = start_ts
     window_end = end_ts

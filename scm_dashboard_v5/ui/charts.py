@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from scm_dashboard_v4.config import PALETTE
+from scm_dashboard_v5.analytics.sales import (
+    AmazonSeriesResult,
+    prepare_amazon_inventory_layers,
+)
 
 
 def _apply_line_styles(fig) -> None:
@@ -124,6 +130,144 @@ def render_step_chart(
         )
 
     _apply_line_styles(fig)
+
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+    if caption:
+        st.caption(caption)
+
+
+def render_amazon_sales_vs_inventory(
+    timeline: pd.DataFrame,
+    *,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    latest_snapshot: Optional[pd.Timestamp],
+    forecast_timeline: Optional[pd.DataFrame] = None,
+    moves: Optional[pd.DataFrame] = None,
+    show_ma7: bool = True,
+    show_inbound: bool = True,
+    show_forecast: bool = True,
+    caption: str | None = None,
+) -> None:
+    """Render the Amazon sales vs. inventory chart with dual axes."""
+
+    series: AmazonSeriesResult = prepare_amazon_inventory_layers(
+        timeline,
+        centers=centers,
+        skus=skus,
+        start_dt=start,
+        end_dt=end,
+        forecast_timeline=forecast_timeline,
+        moves=moves,
+        latest_snapshot=latest_snapshot,
+    )
+
+    inventory = series.inventory
+    sales = series.sales
+    forecast_series = series.forecast if show_forecast else None
+    inbound_series = series.inbound if show_inbound else None
+
+    if inventory is None or inventory.empty:
+        st.caption("선택된 조건에 해당하는 Amazon 재고 데이터가 없습니다.")
+        return
+
+    if sales is None or sales.empty:
+        sales = pd.Series(0.0, index=inventory.index, name="sales_qty")
+
+    idx = inventory.index
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Bar(
+            x=idx,
+            y=sales.values,
+            name="판매(실측)",
+            opacity=0.75,
+            marker_color=PALETTE[0],
+            hovertemplate="날짜=%{x|%Y-%m-%d}<br>판매=%{y:,.0f} EA<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    if show_ma7:
+        sales_ma7 = sales.rolling(window=7, min_periods=1).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=idx,
+                y=sales_ma7.values,
+                name="판매 7일 평균",
+                mode="lines",
+                line=dict(width=2, color="#2ca02c", dash="dot"),
+                hovertemplate="날짜=%{x|%Y-%m-%d}<br>7일평균=%{y:,.0f} EA<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=idx,
+            y=inventory.values,
+            name="재고(실측)",
+            mode="lines",
+            line=dict(color="#FF7F0E", width=2),
+            line_shape="hv",
+            hovertemplate="날짜=%{x|%Y-%m-%d}<br>재고=%{y:,.0f} EA<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    if forecast_series is not None:
+        usable_forecast = forecast_series.dropna()
+        if not usable_forecast.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=usable_forecast.index,
+                    y=usable_forecast.values,
+                    name="재고(예측)",
+                    mode="lines",
+                    line=dict(color="#FF7F0E", width=2, dash="dash"),
+                    line_shape="hv",
+                    hovertemplate="날짜=%{x|%Y-%m-%d}<br>예측재고=%{y:,.0f} EA<extra></extra>",
+                ),
+                secondary_y=True,
+            )
+
+    if inbound_series is not None and not inbound_series.empty and inbound_series.sum() > 0:
+        fig.add_trace(
+            go.Bar(
+                x=inbound_series.index,
+                y=inbound_series.values,
+                name="입고(실제)",
+                marker=dict(color="#9edae5"),
+                opacity=0.55,
+                hovertemplate="날짜=%{x|%Y-%m-%d}<br>입고=%{y:,.0f} EA<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+    fig.update_layout(
+        title="Amazon US 일별 판매 vs. 재고",
+        barmode="overlay",
+        hovermode="x unified",
+        legend_title_text="시리즈",
+        margin=dict(l=20, r=20, t=40, b=20),
+        xaxis=dict(showgrid=True, dtick="D7"),
+    )
+    fig.update_yaxes(
+        title_text="판매량 (EA/Day)",
+        secondary_y=False,
+        rangemode="tozero",
+        tickformat=",.0f",
+    )
+    fig.update_yaxes(
+        title_text="재고 (EA)",
+        secondary_y=True,
+        rangemode="tozero",
+        tickformat=",.0f",
+    )
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
     if caption:
