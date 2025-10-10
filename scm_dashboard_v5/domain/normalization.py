@@ -23,11 +23,22 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     """Coerce core move columns to predictable dtypes."""
 
     out = normalize_dates(frame)
-    out["carrier_mode"] = out.get("carrier_mode", "").astype(str).str.upper()
-    out["resource_code"] = out.get("resource_code", "").astype(str)
-    out["from_center"] = out.get("from_center", "").astype(str)
-    out["to_center"] = out.get("to_center", "").astype(str)
-    out["qty_ea"] = pd.to_numeric(out.get("qty_ea", 0), errors="coerce").fillna(0)
+
+    carrier_src = out["carrier_mode"] if "carrier_mode" in out.columns else pd.Series("", index=out.index)
+    out["carrier_mode"] = carrier_src.astype(str).str.upper()
+
+    resource_src = out["resource_code"] if "resource_code" in out.columns else pd.Series("", index=out.index)
+    out["resource_code"] = resource_src.astype(str)
+
+    from_src = out["from_center"] if "from_center" in out.columns else pd.Series("", index=out.index)
+    out["from_center"] = from_src.astype(str)
+
+    to_src = out["to_center"] if "to_center" in out.columns else pd.Series("", index=out.index)
+    out["to_center"] = to_src.astype(str)
+
+    qty_src = out["qty_ea"] if "qty_ea" in out.columns else pd.Series(0, index=out.index)
+    out["qty_ea"] = pd.to_numeric(qty_src, errors="coerce").fillna(0)
+
     return out
 
 
@@ -44,8 +55,15 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         raise KeyError("snapshot frame must include a 'date' or 'snapshot_date' column")
 
     out["date"] = pd.to_datetime(out[date_col], errors="coerce").dt.normalize()
-    out["center"] = out.get("center", "").astype(str)
-    out["resource_code"] = out.get("resource_code", "").astype(str)
-    out["stock_qty"] = pd.to_numeric(out.get("stock_qty", 0), errors="coerce")
+
+    center_src = out["center"] if "center" in out.columns else pd.Series("", index=out.index)
+    out["center"] = center_src.astype(str)
+
+    resource_src = out["resource_code"] if "resource_code" in out.columns else pd.Series("", index=out.index)
+    out["resource_code"] = resource_src.astype(str)
+
+    stock_src = out["stock_qty"] if "stock_qty" in out.columns else pd.Series(0, index=out.index)
+    out["stock_qty"] = pd.to_numeric(stock_src, errors="coerce")
+
     out = out.dropna(subset=["date"])
     return out[["date", "center", "resource_code", "stock_qty"]]
