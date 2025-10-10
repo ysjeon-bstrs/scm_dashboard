@@ -20,11 +20,8 @@ from scm_dashboard_v4.processing import (
 
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
-from scm_dashboard_v5.ui import (
-    render_amazon_sales_vs_inventory,
-    render_step_chart,
-    render_sku_summary_cards,
-)
+from scm_dashboard_v5.ui import render_step_chart, render_sku_summary_cards
+from scm_dashboard_v5.ui.charts import render_amazon_panel
 
 
 def _validate_timeline_inputs(
@@ -406,53 +403,26 @@ def main() -> None:
         today=today_norm,
     )
     # -------------------- Amazon US sales vs. inventory --------------------
-    amazon_candidates = [
-        center
-        for center in selected_centers
-        if str(center).strip()
-        and (
-            "amazon" in str(center).lower()
-            or str(center).upper().startswith("AMZ")
-        )
+    # 선택 센터 중 Amazon 계열만 추출 (없으면 패널 내부에서 자동 감지)
+    amazon_centers = [
+        c for c in selected_centers
+        if isinstance(c, str) and (c.upper().startswith("AMZ") or "amazon" in c.lower())
     ]
-
+    
     st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고")
-
-    toggle_cols = st.columns(3)
-    with toggle_cols[0]:
-        show_amazon_ma7 = st.checkbox(
-            "판매 7일 이동평균",
-            value=True,
-            key="amazon_show_ma7",
-        )
-    with toggle_cols[1]:
-        show_amazon_inbound = st.checkbox(
-            "입고 표시",
-            value=False,
-            key="amazon_show_inbound",
-        )
-    with toggle_cols[2]:
-        show_amazon_forecast = st.checkbox(
-            "재고 예측 표시",
-            value=True,
-            key="amazon_show_forecast",
-        )
-
-    render_amazon_sales_vs_inventory(
-        snapshot_df,
-        moves=data.moves,
-        centers=amazon_candidates,
+    
+    render_amazon_panel(
+        snap_long=snapshot_df,                               # v5에서 쓰는 스냅샷 DF 변수명에 맞춰 주세요
+        moves=(data.moves if 'data' in locals() and hasattr(data, 'moves') else moves),
+        centers=amazon_centers,                              # AMZ/amazon만 전달(없어도 내부에서 감지)
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
         lookback_days=lookback_days,
         today=today_norm,
-        show_ma7=show_amazon_ma7,
-        show_inbound=show_amazon_inbound,
-        show_inventory_forecast=show_amazon_forecast,
-        caption="판매 막대는 좌측 축, 재고 선은 우측 축 기준입니다.",
     )
+
+
 
     window_start = start_ts
     window_end = end_ts
