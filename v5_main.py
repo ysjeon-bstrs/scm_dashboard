@@ -213,15 +213,29 @@ def _plot_timeline(
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
-    for df in (actual_df, forecast_df):
-        if not df.empty:
-            df["label"] = df["resource_code"].astype(str) + " @ " + df["center"].astype(str)
+    if not actual_df.empty and {"resource_code", "center"} <= set(actual_df.columns):
+        actual_df = actual_df.copy()
+        actual_df["label"] = (
+            actual_df["resource_code"].astype(str) + " @ " + actual_df["center"].astype(str)
+        )
+
+    if not forecast_df.empty:
+        forecast_df = forecast_df.copy()
+        if {"resource_code", "center"} <= forecast_df.columns:
+            forecast_df["label"] = (
+                forecast_df["resource_code"].astype(str)
+                + " @ "
+                + forecast_df["center"].astype(str)
+            )
 
     actual_labels = (
         actual_df["label"].dropna().unique().tolist() if "label" in actual_df.columns else []
     )
+    forecast_label_series = forecast_df.get("label")
     forecast_labels = (
-        forecast_df["label"].dropna().unique().tolist() if "label" in forecast_df.columns else []
+        forecast_label_series.dropna().unique().tolist()
+        if forecast_label_series is not None
+        else []
     )
     labels = sorted(set(actual_labels) | set(forecast_labels))
     line_colors: dict[str, str] = {}
@@ -249,7 +263,10 @@ def _plot_timeline(
                 )
             )
 
-        fc = forecast_df[forecast_df["label"] == label].sort_values("date")
+        if forecast_label_series is not None:
+            fc = forecast_df[forecast_label_series == label].sort_values("date")
+        else:
+            fc = pd.DataFrame(columns=forecast_df.columns)
         if not fc.empty:
             fig.add_trace(
                 go.Scatter(
