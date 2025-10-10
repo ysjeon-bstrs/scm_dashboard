@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
+from typing import Optional, Tuple
 
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
-from scm_dashboard_v4.config import CENTER_COL, PALETTE
+from scm_dashboard_v4.config import CENTER_COL
 from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api, load_snapshot_raw
 from scm_dashboard_v4.processing import (
@@ -20,10 +18,56 @@ from scm_dashboard_v4.processing import (
     normalize_refined_snapshot,
 )
 
-from scm_dashboard_v5.analytics import prepare_amazon_daily_sales
-from scm_dashboard_v5.analytics.kpi import kpi_breakdown_per_sku
+from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
-from scm_dashboard_v5.pipeline import BuildInputs, build_timeline_bundle
+from scm_dashboard_v5.ui import (
+    render_amazon_sales_vs_inventory,
+    render_step_chart,
+    render_sku_summary_cards,
+)
+
+
+def _validate_timeline_inputs(
+    snapshot: object,
+    moves: object,
+    start: object,
+    end: object,
+) -> bool:
+    """Return True if the timeline inputs look structurally correct."""
+
+    if not isinstance(snapshot, pd.DataFrame):
+        st.error("스냅샷 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        return False
+    if not isinstance(moves, pd.DataFrame):
+        st.error("이동 원장 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        return False
+
+    required_snapshot_cols = {"center", "resource_code", "stock_qty"}
+    missing_snapshot = [col for col in required_snapshot_cols if col not in snapshot.columns]
+    if missing_snapshot:
+        st.error(
+            "스냅샷 데이터에 필요한 컬럼이 없습니다: "
+            + ", ".join(sorted(missing_snapshot))
+        )
+        return False
+
+    required_move_cols = {"from_center", "to_center", "resource_code"}
+    missing_moves = [col for col in required_move_cols if col not in moves.columns]
+    if missing_moves:
+        st.error(
+            "이동 원장 데이터에 필요한 컬럼이 없습니다: " + ", ".join(sorted(missing_moves))
+        )
+        return False
+
+    if not isinstance(start, pd.Timestamp) or not isinstance(end, pd.Timestamp):
+        st.error("기간 정보가 손상되었습니다. 기간 슬라이더를 다시 설정해 주세요.")
+        return False
+
+    if end < start:
+        st.error("기간의 종료일이 시작일보다 빠릅니다. 기간을 다시 선택하세요.")
+        return False
+
+    return True
 
 
 @dataclass
@@ -120,377 +164,6 @@ def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tupl
     return centers, skus
 
 
-def _date_bounds(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[pd.Timestamp, pd.Timestamp]:
-    """Compute a sensible default date window based on available data."""
-
-    dates = [
-        snapshot["date"].min() if not snapshot.empty else None,
-        snapshot["date"].max() if not snapshot.empty else None,
-        moves.get("onboard_date").min() if "onboard_date" in moves.columns else None,
-        moves.get("pred_inbound_date").min() if "pred_inbound_date" in moves.columns else None,
-        moves.get("pred_inbound_date").max() if "pred_inbound_date" in moves.columns else None,
-        moves.get("event_date").max() if "event_date" in moves.columns else None,
-    ]
-    dates = [pd.to_datetime(d).normalize() for d in dates if pd.notna(d)]
-    if not dates:
-        today = pd.Timestamp.today().normalize()
-        return today - pd.Timedelta(days=30), today + pd.Timedelta(days=30)
-
-    return min(dates), max(dates)
-
-
-def _build_timeline(
-    *,
-    data: LoadedData,
-    centers: list[str],
-    skus: list[str],
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    lag_days: int,
-) -> Optional[pd.DataFrame]:
-    """Run the v5 pipeline and return the concatenated timeline."""
-
-    today = pd.Timestamp.today().normalize()
-    bundle = build_timeline_bundle(
-        BuildInputs(snapshot=data.snapshot, moves=data.moves),
-        centers=centers,
-        skus=skus,
-        start=start,
-        end=end,
-        today=today,
-        lag_days=lag_days,
-    )
-    timeline = bundle.concat()
-    if timeline.empty:
-        return None
-    return timeline
-
-
-def _plot_timeline(
-    actual_timeline: pd.DataFrame,
-    *,
-    forecast_timeline: Optional[pd.DataFrame] = None,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    show_production: bool,
-    show_in_transit: bool,
-    selected_centers: Iterable[str],
-    snapshot: pd.DataFrame,
-    moves: pd.DataFrame,
-    selected_skus: Iterable[str],
-    lag_days: int,
-) -> None:
-    """Render the timeline using Plotly with styling borrowed from v4."""
-
-    if actual_timeline.empty and (forecast_timeline is None or forecast_timeline.empty):
-        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
-        return
-
-    def _prepare(frame: pd.DataFrame) -> pd.DataFrame:
-        if frame is None or frame.empty:
-            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-        df = frame.copy()
-        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
-        df = df[(df["date"] >= start) & (df["date"] <= end)]
-        df["center"] = df["center"].replace({"In-Transit": "이동중", "WIP": "생산중"})
-        return df
-
-    actual_df = _prepare(actual_timeline)
-    forecast_df = _prepare(forecast_timeline)
-
-    centers_set = {str(c) for c in selected_centers}
-    if ("태광KR" not in centers_set) or not show_production:
-        actual_df = actual_df[actual_df["center"] != "생산중"]
-        forecast_df = forecast_df[forecast_df["center"] != "생산중"]
-
-    # Respect 'show_in_transit' toggle like v4 (hide lines starting with 이동중)
-    if not show_in_transit:
-        actual_df = actual_df[~actual_df["center"].astype(str).str.startswith("이동중")]
-        forecast_df = forecast_df[~forecast_df["center"].astype(str).str.startswith("이동중")]
-
-    today = pd.Timestamp.today().normalize()
-    # Sanitize quantities: numeric, non-negative, and hide zeros
-    if not actual_df.empty and "stock_qty" in actual_df.columns:
-        actual_df["stock_qty"] = pd.to_numeric(actual_df["stock_qty"], errors="coerce").fillna(0)
-        actual_df["stock_qty"] = actual_df["stock_qty"].clip(lower=0)
-    actual_df = actual_df[actual_df["stock_qty"] > 0]
-    actual_df = actual_df[actual_df["date"] <= today]
-
-    if forecast_df is not None and not forecast_df.empty:
-        forecast_df["stock_qty"] = pd.to_numeric(forecast_df["stock_qty"], errors="coerce").fillna(0)
-        forecast_df["stock_qty"] = forecast_df["stock_qty"].clip(lower=0)
-        forecast_df = forecast_df[forecast_df["stock_qty"] > 0]
-        forecast_df = forecast_df[forecast_df["date"] >= today]
-    else:
-        forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-
-    if actual_df.empty and forecast_df.empty:
-        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
-        return
-
-    if not actual_df.empty and {"resource_code", "center"} <= set(actual_df.columns):
-        actual_df = actual_df.copy()
-        actual_df["label"] = (
-            actual_df["resource_code"].astype(str) + " @ " + actual_df["center"].astype(str)
-        )
-
-    if not forecast_df.empty:
-        forecast_df = forecast_df.copy()
-        if {"resource_code", "center"} <= forecast_df.columns:
-            forecast_df["label"] = (
-                forecast_df["resource_code"].astype(str)
-                + " @ "
-                + forecast_df["center"].astype(str)
-            )
-
-    actual_labels = (
-        actual_df["label"].dropna().unique().tolist() if "label" in actual_df.columns else []
-    )
-    forecast_label_series = forecast_df.get("label")
-    forecast_labels = (
-        forecast_label_series.dropna().unique().tolist()
-        if forecast_label_series is not None
-        else []
-    )
-    labels = sorted(set(actual_labels) | set(forecast_labels))
-    line_colors: dict[str, str] = {}
-    for idx, label in enumerate(labels):
-        line_colors[label] = PALETTE[idx % len(PALETTE)]
-
-    # Bridge actual -> forecast at 'today' to avoid visual gaps
-    if not actual_df.empty and not forecast_df.empty and labels:
-        bridge_rows: list[dict] = []
-        for label in labels:
-            act_lbl = actual_df[actual_df.get("label", pd.Series(dtype=str)) == label]
-            fc_lbl = forecast_df[forecast_df.get("label", pd.Series(dtype=str)) == label]
-            if act_lbl.empty or fc_lbl.empty:
-                continue
-            last_act_idx = act_lbl["date"].idxmax()
-            if pd.isna(last_act_idx):
-                continue
-            last_y = float(act_lbl.loc[last_act_idx, "stock_qty"])
-            # Parse label into resource_code and center
-            try:
-                resource_code, center = label.split(" @ ", 1)
-            except ValueError:
-                # Fallback: skip if unexpected label
-                continue
-            bridge_dt = today
-            if (start <= bridge_dt <= end):
-                bridge_rows.append({
-                    "date": bridge_dt,
-                    "center": center,
-                    "resource_code": resource_code,
-                    "stock_qty": last_y,
-                    "label": label,
-                })
-        if bridge_rows:
-            forecast_df = pd.concat([forecast_df, pd.DataFrame(bridge_rows)], ignore_index=True)
-
-    # Recompute for any added bridge rows
-    forecast_label_series = forecast_df.get("label")
-
-    fig = go.Figure()
-
-    hover_template = "날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
-
-    for label in labels:
-        color = line_colors[label]
-        act = actual_df[actual_df["label"] == label].sort_values("date")
-        if not act.empty:
-            # v4-like styling by center type for actual lines
-            center_kind = label.split(" @ ", 1)[1] if " @ " in label else ""
-            if center_kind == "이동중":
-                line_style = dict(color=color, dash="dot", width=1.2)
-                opacity = 0.9
-            elif center_kind == "생산중":
-                line_style = dict(color=color, dash="dash", width=1.0)
-                opacity = 0.8
-            else:
-                line_style = dict(color=color, dash="solid", width=1.5)
-                opacity = 1.0
-            fig.add_trace(
-                go.Scatter(
-                    x=act["date"],
-                    y=act["stock_qty"],
-                    mode="lines",
-                    line=line_style,
-                    name=f"{label} · 실데이터",
-                    legendgroup=label,
-                    line_shape="hv",
-                    opacity=opacity,
-                    hovertemplate=hover_template,
-                )
-            )
-
-        if forecast_label_series is not None:
-            fc = forecast_df[forecast_label_series == label].sort_values("date")
-        else:
-            fc = pd.DataFrame(columns=forecast_df.columns)
-        if not fc.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=fc["date"],
-                    y=fc["stock_qty"],
-                    mode="lines",
-                    line=dict(color=color, dash="dash", width=1.5),
-                    name=f"{label} · 추세 예측치",
-                    legendgroup=label,
-                    line_shape="hv",
-                    hovertemplate=hover_template,
-                )
-            )
-
-    fig.update_layout(
-        hovermode="x unified",
-        xaxis_title="날짜",
-        yaxis_title="재고량(EA)",
-        title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
-        legend_title_text="SKU @ Center · 실데이터/추세 예측치",
-        margin=dict(l=20, r=20, t=60, b=20),
-    )
-    fig.update_yaxes(tickformat=",.0f")
-
-    if start <= today <= end:
-        fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
-        fig.add_annotation(
-            x=today,
-            y=1.02,
-            xref="x",
-            yref="paper",
-            text="오늘",
-            showarrow=False,
-            font=dict(size=12, color="#555"),
-            align="center",
-            yanchor="bottom",
-        )
-
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-    st.caption("실데이터는 실선으로, 추세 예측치는 점선으로 표시됩니다.")
-
-    centers_list = [str(center) for center in selected_centers if str(center).strip()]
-    sku_list = [str(sku) for sku in selected_skus if str(sku).strip()]
-    if not centers_list or not sku_list or snapshot is None or snapshot.empty:
-        st.caption("※ KPI 데이터를 계산할 스냅샷이 없습니다.")
-        return
-
-    snapshot_view = snapshot.copy()
-    date_column = "date"
-    if date_column not in snapshot_view.columns and "snapshot_date" in snapshot_view.columns:
-        date_column = "snapshot_date"
-    if date_column not in snapshot_view.columns:
-        st.caption("※ 스냅샷에 날짜 정보가 없어 KPI를 계산할 수 없습니다.")
-        return
-
-    snapshot_view["date"] = pd.to_datetime(snapshot_view[date_column], errors="coerce").dt.normalize()
-    if "center" not in snapshot_view.columns or "resource_code" not in snapshot_view.columns:
-        st.caption("※ 스냅샷에 센터 또는 SKU 정보가 없어 KPI를 계산할 수 없습니다.")
-        return
-    snapshot_view["center"] = snapshot_view["center"].astype(str)
-    snapshot_view["resource_code"] = snapshot_view["resource_code"].astype(str)
-    snapshot_view = snapshot_view.dropna(subset=["date"])
-
-    start_dt = pd.to_datetime(start).normalize()
-    end_dt = pd.to_datetime(end).normalize()
-    filtered_snapshot = snapshot_view[
-        snapshot_view["center"].isin(centers_list)
-        & snapshot_view["resource_code"].isin(sku_list)
-        & (snapshot_view["date"] >= start_dt)
-        & (snapshot_view["date"] <= end_dt)
-    ].copy()
-
-    if filtered_snapshot.empty:
-        st.caption("※ 대표 시나리오 필터에 해당하는 KPI 데이터가 없습니다.")
-        return
-
-    latest_snapshot = filtered_snapshot["date"].max()
-    if pd.isna(latest_snapshot):
-        st.caption("※ 최신 스냅샷 일자를 확인할 수 없어 KPI를 계산할 수 없습니다.")
-        return
-
-    name_map: dict[str, str] = {}
-    if "resource_name" in filtered_snapshot.columns:
-        name_rows = filtered_snapshot.dropna(subset=["resource_code", "resource_name"]).copy()
-        if not name_rows.empty:
-            name_rows["resource_code"] = name_rows["resource_code"].astype(str)
-            name_rows["resource_name"] = name_rows["resource_name"].astype(str).str.strip()
-            name_rows = name_rows[name_rows["resource_name"] != ""]
-            if not name_rows.empty:
-                name_map = dict(
-                    name_rows.sort_values("date", ascending=False)[
-                        ["resource_code", "resource_name"]
-                    ]
-                    .drop_duplicates(subset=["resource_code"])
-                    .itertuples(index=False, name=None)
-                )
-
-    moves_view = moves.copy() if moves is not None else pd.DataFrame()
-    if not moves_view.empty:
-        moves_view = moves_view.copy()
-        if "carrier_mode" in moves_view.columns:
-            moves_view["carrier_mode"] = moves_view["carrier_mode"].astype(str).str.upper()
-        else:
-            moves_view["carrier_mode"] = ""
-        if "resource_code" in moves_view.columns:
-            moves_view["resource_code"] = moves_view["resource_code"].astype(str)
-        else:
-            moves_view["resource_code"] = ""
-        if "to_center" in moves_view.columns:
-            moves_view["to_center"] = moves_view["to_center"].astype(str)
-        else:
-            moves_view["to_center"] = ""
-        for col in ["inbound_date", "arrival_date", "onboard_date", "event_date"]:
-            if col in moves_view.columns:
-                moves_view[col] = pd.to_datetime(moves_view[col], errors="coerce")
-
-        if "resource_code" in moves_view.columns and not moves_view.empty:
-            moves_view = moves_view[moves_view["resource_code"].isin(sku_list) | (moves_view["resource_code"] == "")]
-        if "to_center" in moves_view.columns and not moves_view.empty:
-            moves_view = moves_view[moves_view["to_center"].isin(centers_list) | (moves_view["to_center"] == "")]
-
-    today_norm = pd.Timestamp.today().normalize()
-    kpi_df = kpi_breakdown_per_sku(
-        filtered_snapshot,
-        moves_view,
-        centers_list,
-        sku_list,
-        today_norm,
-        "date",
-        latest_snapshot,
-        int(lag_days),
-    )
-    if kpi_df.empty:
-        st.caption("※ KPI 계산 결과가 없습니다.")
-        return
-
-    kpi_df.index = kpi_df.index.astype(str)
-
-    def _chunked(seq: list[str], size: int) -> Iterable[list[str]]:
-        for idx in range(0, len(seq), size):
-            yield seq[idx : idx + size]
-
-    for group in _chunked(sku_list, 2):
-        cols = st.columns(len(group))
-        for idx, sku in enumerate(group):
-            with cols[idx].container(border=True):
-                display_name = name_map.get(sku, "")
-                if display_name:
-                    st.markdown(f"**{display_name}**  \\\n`{sku}`")
-                else:
-                    st.markdown(f"`{sku}`")
-                c1, c2, c3 = st.columns(3)
-                current_val = int(kpi_df.at[sku, "current"]) if sku in kpi_df.index else 0
-                transit_val = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
-                wip_val = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
-                c1.metric("현재 재고", f"{current_val:,}")
-                c2.metric("이동중", f"{transit_val:,}")
-                c3.metric("생산중", f"{wip_val:,}")
-
-    st.caption(
-        f"※ {latest_snapshot:%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다."
-    )
-
-
 def main() -> None:
     """Entrypoint for running the v5 dashboard in Streamlit."""
 
@@ -503,19 +176,74 @@ def main() -> None:
         st.info("데이터를 로드하면 차트와 테이블이 표시됩니다.")
         return
 
-    centers, skus = _center_and_sku_options(data.moves, data.snapshot)
+    snapshot_df = data.snapshot.copy()
+    if "date" in snapshot_df.columns:
+        snapshot_df["date"] = (
+            pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+        )
+    elif "snapshot_date" in snapshot_df.columns:
+        snapshot_df["date"] = (
+            pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
+        )
+    else:
+        snapshot_df["date"] = pd.NaT
+
+    centers, skus = _center_and_sku_options(data.moves, snapshot_df)
     if not centers or not skus:
         st.warning("센터 또는 SKU 정보를 찾을 수 없습니다.")
         return
 
-    min_dt, max_dt = _date_bounds(data.moves, data.snapshot)
     today = pd.Timestamp.today().normalize()
-    preset_start = today - pd.Timedelta(days=10)
-    preset_end = today + pd.Timedelta(days=30)
-    default_start = max(min_dt, preset_start)
-    default_end = min(max_dt, preset_end)
-    if default_start > default_end:
-        default_start, default_end = min_dt, max_dt
+    snap_dates = snapshot_df["date"].dropna()
+    latest_dt = snap_dates.max() if not snap_dates.empty else pd.NaT
+    latest_snapshot_dt = (
+        None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
+    )
+    past_days = 42
+    future_days = 60
+    if snap_dates.empty:
+        snap_min = today - pd.Timedelta(days=past_days)
+        snap_max = today
+    else:
+        snap_min = snap_dates.min().normalize()
+        snap_max = snap_dates.max().normalize()
+
+    bound_min = max(today - pd.Timedelta(days=past_days), snap_min)
+    bound_max = min(today + pd.Timedelta(days=future_days), snap_max + pd.Timedelta(days=60))
+    if bound_min > bound_max:
+        bound_min = bound_max
+
+    def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
+        start_val, end_val = range_value
+        start_val = pd.Timestamp(start_val).normalize()
+        end_val = pd.Timestamp(end_val).normalize()
+        start_val = max(min(start_val, bound_max), bound_min)
+        end_val = max(min(end_val, bound_max), bound_min)
+        if end_val < start_val:
+            end_val = start_val
+        return (start_val, end_val)
+
+    def _init_range() -> None:
+        if "date_range" not in st.session_state:
+            default_start = max(today - pd.Timedelta(days=20), bound_min)
+            default_end = min(today + pd.Timedelta(days=20), bound_max)
+            st.session_state.date_range = (default_start, default_end)
+        else:
+            st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
+        if "horizon_days" not in st.session_state:
+            st.session_state.horizon_days = 20
+        st.session_state.horizon_days = int(
+            max(0, min(int(st.session_state.horizon_days), future_days))
+        )
+
+    def _apply_horizon_to_range() -> None:
+        horizon = int(max(0, min(int(st.session_state.horizon_days), future_days)))
+        st.session_state.horizon_days = horizon
+        start_val = max(today - pd.Timedelta(days=horizon), bound_min)
+        end_val = min(today + pd.Timedelta(days=horizon), bound_max)
+        st.session_state.date_range = (start_val, end_val)
+
+    _init_range()
 
     with st.sidebar:
         st.header("필터")
@@ -533,18 +261,31 @@ def main() -> None:
         if not default_skus:
             default_skus = skus if len(skus) <= 10 else skus[:10]
         selected_skus = st.multiselect("SKU", skus, default=default_skus)
-        date_range = st.date_input(
-            "타임라인 범위",
-            value=(default_start.to_pydatetime(), default_end.to_pydatetime()),
-            min_value=min_dt.to_pydatetime(),
-            max_value=max_dt.to_pydatetime(),
+        st.subheader("기간 설정")
+        st.number_input(
+            "미래 전망 일수",
+            min_value=0,
+            max_value=future_days,
+            step=1,
+            key="horizon_days",
+            on_change=_apply_horizon_to_range,
         )
+        date_range_value = st.slider(
+            "기간",
+            min_value=bound_min.to_pydatetime(),
+            max_value=bound_max.to_pydatetime(),
+            value=tuple(
+                d.to_pydatetime() for d in _clamp_range(st.session_state.date_range)
+            ),
+            format="YYYY-MM-DD",
+        )
+        start_ts = pd.Timestamp(date_range_value[0]).normalize()
+        end_ts = pd.Timestamp(date_range_value[1]).normalize()
+        st.session_state.date_range = (start_ts, end_ts)
         st.header("표시 옵션")
         show_prod = st.checkbox("생산중 표시", value=True)
         show_transit = st.checkbox("이동중 표시", value=True)
-        st.caption(
-            "체크 해제 시 생산중(WIP) 및 이동중(In-Transit) 데이터가 그래프와 표에서 숨겨집니다."
-        )
+        st.caption("체크 해제 시 계단식 차트에서 해당 라인이 숨겨집니다.")
         use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
         lookback_days = int(
             st.number_input(
@@ -597,111 +338,54 @@ def main() -> None:
         st.warning("최소 한 개의 SKU를 선택하세요.")
         return
 
-    if isinstance(date_range, tuple):
-        start_date, end_date = date_range
-    else:
-        start_date = date_range
-        end_date = date_range
-
-    start_ts = pd.Timestamp(start_date).normalize()
-    end_ts = pd.Timestamp(end_date).normalize()
-    if end_ts < start_ts:
-        st.warning("종료일이 시작일보다 빠릅니다.")
-        return
-
-    snapshot_df = data.snapshot.copy()
-    if "date" in snapshot_df.columns:
-        snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
-        latest_dt = snapshot_df["date"].max()
-    else:
-        latest_dt = pd.NaT
+    selected_centers = [str(center) for center in selected_centers if str(center).strip()]
+    selected_skus = [str(sku) for sku in selected_skus if str(sku).strip()]
 
     st.subheader("요약 KPI")
-
-    if snapshot_df.empty or "date" not in snapshot_df.columns or pd.isna(latest_dt):
-        st.caption("스냅샷 데이터가 없어 KPI를 계산할 수 없습니다.")
-        kpi_df = pd.DataFrame()
-        selected_skus_str = [str(sku) for sku in selected_skus]
+    today_norm = pd.Timestamp.today().normalize()
+    if latest_snapshot_dt is not None:
+        proj_days_for_build = max(0, int((end_ts - latest_snapshot_dt).days))
     else:
-        selected_skus_str = [str(sku) for sku in selected_skus]
-        latest_snapshot_rows = snapshot_df[snapshot_df["date"] == latest_dt].copy()
-        kpi_name_map: dict[str, str] = {}
-        if "resource_name" in latest_snapshot_rows.columns:
-            name_rows = latest_snapshot_rows.dropna(
-                subset=["resource_code", "resource_name"]
-            ).copy()
-            if not name_rows.empty:
-                name_rows["resource_code"] = name_rows["resource_code"].astype(str)
-                name_rows["resource_name"] = (
-                    name_rows["resource_name"].astype(str).str.strip()
-                )
-                name_rows = name_rows[name_rows["resource_name"] != ""]
-                if not name_rows.empty:
-                    kpi_name_map = dict(
-                        zip(name_rows["resource_code"], name_rows["resource_name"])
-                    )
-        else:
-            kpi_name_map = {}
-
-        moves_for_kpi = data.moves.copy()
-        if not moves_for_kpi.empty:
-            moves_for_kpi["carrier_mode"] = moves_for_kpi["carrier_mode"].astype(str).str.upper()
-            moves_for_kpi["resource_code"] = moves_for_kpi["resource_code"].astype(str)
-
-        today_norm = pd.Timestamp.today().normalize()
-        kpi_df = kpi_breakdown_per_sku(
-            snapshot_df,
-            moves_for_kpi,
-            selected_centers,
-            selected_skus_str,
-            today_norm,
-            "date",
-            latest_dt,
-            int(lag_days),
-        )
-        if not kpi_df.empty:
-            kpi_df.index = kpi_df.index.astype(str)
-
-        def _chunked(seq: list[str], size: int) -> Iterable[list[str]]:
-            for idx in range(0, len(seq), size):
-                yield seq[idx : idx + size]
-
-        for group in _chunked(selected_skus_str, 2):
-            cols = st.columns(len(group))
-            for idx, sku in enumerate(group):
-                with cols[idx].container(border=True):
-                    display_name = kpi_name_map.get(sku, "")
-                    if display_name:
-                        st.markdown(f"**{display_name}**  \\n`{sku}`")
-                    else:
-                        st.markdown(f"`{sku}`")
-                    c1, c2, c3 = st.columns(3)
-                    current_val = int(kpi_df.at[sku, "current"]) if sku in kpi_df.index else 0
-                    transit_val = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
-                    wip_val = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
-                    c1.metric("현재 재고", f"{current_val:,}")
-                    c2.metric("이동중", f"{transit_val:,}")
-                    c3.metric("생산중", f"{wip_val:,}")
+        proj_days_for_build = max(0, int((end_ts - start_ts).days))
+    render_sku_summary_cards(
+        snapshot_df,
+        data.moves,
+        centers=selected_centers,
+        skus=selected_skus,
+        today=today_norm,
+        latest_snapshot=latest_dt,
+        lag_days=int(lag_days),
+    )
 
     st.divider()
 
-    timeline_actual = _build_timeline(
-        data=data,
+    if not _validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts):
+        return
+
+    timeline_actual = build_core_timeline(
+        snapshot_df,
+        data.moves,
         centers=selected_centers,
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
-        lag_days=lag_days,
+        today=today_norm,
+        lag_days=int(lag_days),
+        horizon_days=int(proj_days_for_build),
     )
 
-    if timeline_actual is None:
+    if timeline_actual is None or timeline_actual.empty:
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
+    timeline_for_chart = timeline_actual.copy()
     forecast_timeline: Optional[pd.DataFrame] = None
     if use_cons_forecast:
-        forecast_timeline = apply_consumption_with_events(
-            timeline_actual,
+        cons_start = None
+        if latest_snapshot_dt is not None:
+            cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
+        timeline_for_chart = apply_consumption_with_events(
+            timeline_for_chart,
             snapshot_df,
             centers=selected_centers,
             skus=selected_skus,
@@ -709,21 +393,20 @@ def main() -> None:
             end=end_ts,
             lookback_days=lookback_days,
             events=events,
+            cons_start=cons_start,
         )
+        forecast_timeline = timeline_for_chart
 
-    _plot_timeline(
-        timeline_actual,
+    render_step_chart(
+        timeline_for_chart,
         start=start_ts,
         end=end_ts,
+        centers=selected_centers,
+        skus=selected_skus,
         show_production=show_prod,
         show_in_transit=show_transit,
-        selected_centers=selected_centers,
-        snapshot=snapshot_df,
-        moves=data.moves,
-        selected_skus=selected_skus,
-        lag_days=lag_days,
+        today=today_norm,
     )
-
     # -------------------- Amazon US sales vs. inventory --------------------
     amazon_candidates = [
         center
@@ -735,183 +418,48 @@ def main() -> None:
         )
     ]
 
-    sales_result = prepare_amazon_daily_sales(
-        data.snapshot,
-        centers=amazon_candidates,
-        skus=selected_skus,
-        start_dt=start_ts,
-        end_dt=end_ts,
-        rolling_window=7,
-    )
-
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
-    sales_df = sales_result.data
-    if sales_df.empty:
-        st.caption("선택된 SKU/기간에 대한 Amazon US 판매 데이터가 없습니다.")
-    else:
-        sales_df = sales_df.copy()
-        sales_df["date"] = pd.to_datetime(sales_df["date"], errors="coerce")
-        sales_df = sales_df.sort_values("date")
 
-        sales_fig = make_subplots(specs=[[{"secondary_y": True}]])
-        sales_fig.add_trace(
-            go.Bar(
-                x=sales_df["date"],
-                y=sales_df["sales_qty"],
-                name="Daily Sales (EA)",
-                marker_color=PALETTE[0],
-                opacity=0.85,
-                offsetgroup="actual-sales",
-            ),
-            secondary_y=False,
+    toggle_cols = st.columns(3)
+    with toggle_cols[0]:
+        show_amazon_ma7 = st.checkbox(
+            "판매 7일 이동평균",
+            value=True,
+            key="amazon_show_ma7",
+        )
+    with toggle_cols[1]:
+        show_amazon_inbound = st.checkbox(
+            "입고 표시",
+            value=True,
+            key="amazon_show_inbound",
+        )
+    with toggle_cols[2]:
+        show_amazon_forecast = st.checkbox(
+            "재고 예측 표시",
+            value=forecast_timeline is not None,
+            key="amazon_show_forecast",
+            disabled=forecast_timeline is None,
+            help="사이드바에서 '추세 기반 재고 예측'을 켜면 사용할 수 있습니다.",
         )
 
-        forecast_inventory = pd.DataFrame()
-        forecast_sales = pd.DataFrame()
-        amazon_center_set = {str(c) for c in amazon_candidates}
-        actual_inventory_series = pd.Series(dtype=float)
-        if amazon_center_set:
-            timeline_amazon = timeline_actual.copy()
-            timeline_amazon["center"] = timeline_amazon["center"].astype(str)
-            timeline_amazon = timeline_amazon[
-                ~timeline_amazon["center"].isin(["In-Transit", "WIP"])
-            ]
-            timeline_amazon = timeline_amazon[
-                timeline_amazon["center"].isin(amazon_center_set)
-            ]
-            if not timeline_amazon.empty:
-                timeline_amazon["date"] = pd.to_datetime(
-                    timeline_amazon["date"], errors="coerce"
-                ).dt.normalize()
-                timeline_amazon = timeline_amazon.dropna(subset=["date"])
-                if not timeline_amazon.empty:
-                    actual_inventory_series = (
-                        timeline_amazon.groupby("date")["stock_qty"].sum().sort_index()
-                    )
+    if forecast_timeline is None:
+        show_amazon_forecast = False
 
-        forecast_start = None
-        if not pd.isna(latest_dt):
-            forecast_start = (latest_dt + pd.Timedelta(days=1)).normalize()
-        display_start = pd.Timestamp.today().normalize()
-        if forecast_start is not None:
-            display_start = max(display_start, forecast_start)
-
-        if (
-            forecast_timeline is not None
-            and not forecast_timeline.empty
-            and amazon_center_set
-        ):
-            forecast_view = forecast_timeline.copy()
-            forecast_view["center"] = forecast_view["center"].astype(str)
-            forecast_view = forecast_view[
-                ~forecast_view["center"].isin(["In-Transit", "WIP"])
-            ]
-            forecast_view = forecast_view[forecast_view["center"].isin(amazon_center_set)]
-            if not forecast_view.empty:
-                forecast_view["date"] = pd.to_datetime(
-                    forecast_view["date"], errors="coerce"
-                ).dt.normalize()
-                forecast_view = forecast_view.dropna(subset=["date"])
-                if not forecast_view.empty:
-                    forecast_grouped = (
-                        forecast_view.groupby("date", as_index=False)["stock_qty"].sum()
-                    ).sort_values("date")
-                    forecast_inventory = forecast_grouped[
-                        forecast_grouped["date"] >= display_start
-                    ]
-
-                    combined_inventory = pd.concat(
-                        [actual_inventory_series, forecast_grouped.set_index("date")["stock_qty"]]
-                    ).sort_index()
-                    if not combined_inventory.empty:
-                        combined_inventory = combined_inventory[~combined_inventory.index.duplicated(keep="last")]
-                        prev_inventory = combined_inventory.shift(1)
-                        consumption = (prev_inventory - combined_inventory).clip(lower=0)
-                        if forecast_start is not None:
-                            consumption = consumption[consumption.index >= forecast_start]
-                        else:
-                            consumption = consumption[consumption.index >= display_start]
-                        consumption = consumption.dropna()
-                        if not consumption.empty:
-                            forecast_sales = consumption.reset_index()
-                            forecast_sales.columns = ["date", "predicted_sales_qty"]
-                            forecast_sales = forecast_sales[
-                                forecast_sales["predicted_sales_qty"] > 0
-                            ]
-                            forecast_sales = forecast_sales[
-                                forecast_sales["date"] >= display_start
-                            ]
-
-        sales_fig.add_trace(
-            go.Scatter(
-                x=sales_df["date"],
-                y=sales_df["inventory_qty"],
-                mode="lines+markers",
-                name="Amazon Inventory (EA) · 실데이터",
-                line=dict(color=PALETTE[1], width=2),
-                marker=dict(size=4),
-            ),
-            secondary_y=True,
-        )
-        if not forecast_inventory.empty:
-            sales_fig.add_trace(
-                go.Scatter(
-                    x=forecast_inventory["date"],
-                    y=forecast_inventory["stock_qty"],
-                    mode="lines",
-                    name="Amazon Inventory (EA) · 추세 예측치",
-                    line=dict(color=PALETTE[1], dash="dash", width=1.6),
-                ),
-                secondary_y=True,
-            )
-        if not forecast_sales.empty:
-            sales_fig.add_trace(
-                go.Bar(
-                    x=forecast_sales["date"],
-                    y=forecast_sales["predicted_sales_qty"],
-                    name="Forecast Sales (EA)",
-                    marker_color=PALETTE[3 % len(PALETTE)],
-                    marker=dict(pattern=dict(shape="/")),
-                    opacity=0.6,
-                    offsetgroup="forecast-sales",
-                ),
-                secondary_y=False,
-            )
-        sales_fig.add_trace(
-            go.Scatter(
-                x=sales_df["date"],
-                y=sales_df["sales_roll_mean"],
-                name="Sales 7d Rolling Avg",
-                mode="lines",
-                line=dict(color=PALETTE[2], dash="dash"),
-                visible="legendonly",
-            ),
-            secondary_y=False,
-        )
-
-        sales_fig.update_layout(
-            hovermode="x unified",
-            legend_title_text="Amazon 판매/재고",
-            margin=dict(l=20, r=40, t=40, b=20),
-            barmode="group",
-        )
-        sales_fig.update_xaxes(title_text="날짜")
-        sales_fig.update_yaxes(
-            title_text="일일 판매량(EA)",
-            secondary_y=False,
-            tickformat=",.0f",
-        )
-        sales_fig.update_yaxes(
-            title_text="Amazon 재고(EA)",
-            secondary_y=True,
-            tickformat=",.0f",
-        )
-        st.plotly_chart(sales_fig, use_container_width=True, config={"displaylogo": False})
-        if not forecast_inventory.empty or not forecast_sales.empty:
-            st.caption(
-                "Amazon 재고 실데이터는 실선, 추세 예측치는 점선이며 예측 판매량은 패턴 막대로 표시됩니다."
-            )
+    render_amazon_sales_vs_inventory(
+        timeline_actual,
+        centers=amazon_candidates,
+        skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+        latest_snapshot=latest_snapshot_dt,
+        forecast_timeline=forecast_timeline,
+        moves=data.moves,
+        show_ma7=show_amazon_ma7,
+        show_inbound=show_amazon_inbound,
+        show_forecast=show_amazon_forecast,
+        caption="판매 막대는 좌측 축, 재고 선은 우측 축 기준입니다.",
+    )
 
     window_start = start_ts
     window_end = end_ts
@@ -1012,9 +560,7 @@ def main() -> None:
         confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
 
     st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
-    if not show_transit:
-        st.caption("'이동중 표시' 옵션을 끄면 이동중(In-Transit) 데이터가 숨겨집니다.")
-    elif confirmed_inbound.empty:
+    if confirmed_inbound.empty:
         st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
     else:
         confirmed_inbound["days_to_arrival"] = (
@@ -1049,9 +595,7 @@ def main() -> None:
         st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
 
     st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
-    if not show_prod:
-        st.caption("'생산중 표시' 옵션을 끄면 생산중(WIP) 데이터가 숨겨집니다.")
-    elif not arr_wip.empty:
+    if not arr_wip.empty:
         if resource_name_map:
             arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
         arr_wip = arr_wip.sort_values(
@@ -1265,7 +809,5 @@ def main() -> None:
                             use_container_width=True,
                             height=320,
                         )
-
-
 if __name__ == "__main__":
     main()
