@@ -1,372 +1,333 @@
-"""Plotting helpers for the Streamlit dashboard."""
-
+# charts.py
+# -----------------------------------------------
+# Amazon US 일별 판매 vs. 재고 차트 (v5용)
+# -----------------------------------------------
 from __future__ import annotations
 
-from typing import Optional, Sequence
-
+from typing import List, Optional, Tuple
+import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-import streamlit as st
-
-from scm_dashboard_v4.config import PALETTE
-from scm_dashboard_v4.consumption import estimate_daily_consumption
+from plotly.subplots import make_subplots
 
 
-def _apply_line_styles(fig) -> None:
-    """Apply v4-compatible styling to the traces in the step chart."""
+# ---------- 내부 유틸 ----------
 
-    line_colors: dict[str, str] = {}
-    color_idx = 0
-    for trace in fig.data:
-        name = trace.name or ""
-        if " @ " not in name:
-            continue
-        if name not in line_colors:
-            line_colors[name] = PALETTE[color_idx % len(PALETTE)]
-            color_idx += 1
-
-    for idx, trace in enumerate(fig.data):
-        name = trace.name or ""
-        if " @ " not in name:
-            continue
-        _, center_label = name.split(" @ ", 1)
-        color = line_colors.get(name, PALETTE[0])
-        if center_label == "이동중":
-            fig.data[idx].update(line=dict(color=color, dash="dot", width=1.2), opacity=0.9)
-        elif center_label == "생산중":
-            fig.data[idx].update(line=dict(color=color, dash="dash", width=1.0), opacity=0.8)
-        else:
-            fig.data[idx].update(line=dict(color=color, dash="solid", width=1.5), opacity=1.0)
+def _pick_date_col(df: pd.DataFrame) -> str:
+    for c in ["snapshot_date", "date"]:
+        if c in df.columns:
+            return c
+    raise KeyError("snap_long에는 'snapshot_date' 또는 'date' 컬럼이 필요합니다.")
 
 
-def render_step_chart(
-    timeline: pd.DataFrame,
-    *,
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    centers: Sequence[str],
-    skus: Sequence[str],
-    show_production: bool,
-    show_in_transit: bool,
-    today: pd.Timestamp | None = None,
-    caption: str | None = "실데이터는 실선으로, 추세 예측치는 점선으로 표시됩니다.",
-) -> None:
-    """Render the step chart using the proven v4 styling pipeline."""
+def _to_date(s) -> pd.Series:
+    return pd.to_datetime(s, errors="coerce").dt.normalize()
 
-    if timeline is None or timeline.empty:
-        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
-        return
 
-    today = (pd.to_datetime(today).normalize() if today is not None else pd.Timestamp.today().normalize())
-    centers = [str(center) for center in centers if str(center).strip()]
-    skus = [str(sku) for sku in skus if str(sku).strip()]
+def _series_daily_index(x: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
+    """Daily index로 리샘플해 forward-fill/fillna(0)하기 위한 헬퍼."""
+    # x는 이미 날짜 index를 가진 Series여야 함
+    idx = pd.date_range(start, end, freq="D")
+    # asfreq로 missing day 생성 후 ffill
+    x = x.sort_index().reindex(idx).ffill()
+    return x
 
-    vis_df = timeline.copy()
-    vis_df["date"] = pd.to_datetime(vis_df["date"], errors="coerce").dt.normalize()
-    vis_df = vis_df[
-        (vis_df["date"] >= pd.to_datetime(start).normalize())
-        & (vis_df["date"] <= pd.to_datetime(end).normalize())
+
+# ---------- A. 계산 유틸 ----------
+
+def compute_daily_sales_from_snapshot(
+    snap_long: pd.DataFrame,
+    skus_sel: List[str],
+    center: str = "AMZUS",
+) -> pd.DataFrame:
+    """
+    스냅샷 재고에서 전일 대비 감소분만 '판매량'으로 계산.
+    증가(입고)는 0으로 처리 → 입고가 판매로 튀는 현상 제거.
+    반환: date, sales_actual, sales_roll7
+    """
+    dcol = _pick_date_col(snap_long)
+    sub = snap_long.copy()
+    sub[dcol] = _to_date(sub[dcol])
+    sub["stock_qty"] = pd.to_numeric(sub["stock_qty"], errors="coerce").fillna(0)
+
+    sub = sub[(sub["center"] == center) & (sub["resource_code"].isin(skus_sel))]
+    if sub.empty:
+        return pd.DataFrame(columns=["date", "sales_actual", "sales_roll7"])
+
+    # 일자별 총 재고(선택 SKU 합계)
+    inv = (sub.groupby(dcol, as_index=True)["stock_qty"]
+              .sum()
+              .sort_index())
+
+    # 일일 판매량 = 전일재고 - 당일재고 (감소분만)
+    sales = (inv.shift(1) - inv).clip(lower=0).fillna(0)
+
+    # 7일 이동평균(실측 구간만)
+    roll7 = sales.rolling(7, min_periods=1).mean()
+
+    out = pd.DataFrame({
+        "date": sales.index,
+        "sales_actual": sales.values.astype(float),
+        "sales_roll7": roll7.values.astype(float),
+    })
+    return out
+
+
+def extract_inbound_schedule(
+    moves: pd.DataFrame,
+    skus_sel: List[str],
+    center: str,
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+) -> pd.Series:
+    """
+    예측 입고 스케줄(미래)을 날짜별 합으로 반환.
+    우선순위: pred_inbound_date > inbound_date > arrival_date
+    """
+    if moves is None or moves.empty:
+        return pd.Series(dtype=float)
+
+    df = moves.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # 날짜 후보 고르기
+    date_col = None
+    for cand in ["pred_inbound_date", "inbound_date", "arrival_date", "event_date"]:
+        if cand in df.columns:
+            date_col = cand
+            break
+    if date_col is None:
+        return pd.Series(dtype=float)
+
+    df[date_col] = _to_date(df[date_col])
+    df["qty_ea"] = pd.to_numeric(df.get("qty_ea", 0), errors="coerce").fillna(0)
+
+    sel = df[
+        (df["to_center"].astype(str) == str(center)) &
+        (df["resource_code"].astype(str).isin(skus_sel)) &
+        (df["qty_ea"] > 0) &
+        df[date_col].between(start_dt, end_dt)
     ]
 
-    if vis_df.empty:
-        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
-        return
+    if sel.empty:
+        return pd.Series(dtype=float)
 
-    vis_df["center"] = vis_df["center"].astype(str)
-    vis_df["center"] = vis_df["center"].str.replace(
-        r"^In-Transit.*$", "In-Transit", regex=True
-    )
+    g = sel.groupby(date_col)["qty_ea"].sum().astype(float)
+    return g
 
-    centers_set = set(centers)
-    if "태광KR" not in centers_set:
-        vis_df = vis_df[vis_df["center"] != "WIP"]
-    if not show_production:
-        vis_df = vis_df[vis_df["center"] != "WIP"]
-    if not show_in_transit:
-        vis_df = vis_df[vis_df["center"] != "In-Transit"]
 
-    vis_df["center"] = vis_df["center"].str.replace(
-        r"^In-Transit$", "이동중", regex=True
-    )
-    vis_df.loc[vis_df["center"] == "WIP", "center"] = "생산중"
+def forecast_sales_constant(
+    sales_df: pd.DataFrame,
+    start_forecast: pd.Timestamp,
+    end_forecast: pd.Timestamp,
+    w7: float = 0.7,
+) -> pd.Series:
+    """
+    최근 7일/28일 평균을 가중(0.7/0.3)해 오늘 이후를 '상수'로 예측.
+    """
+    if sales_df.empty or start_forecast > end_forecast:
+        return pd.Series(dtype=float)
 
-    vis_df = vis_df[pd.to_numeric(vis_df["stock_qty"], errors="coerce").fillna(0) > 0]
-    if vis_df.empty:
-        st.info("표시할 재고 데이터가 없습니다.")
-        return
+    s = sales_df.set_index("date")["sales_actual"].astype(float)
+    # 실측 구간이 없을 수 있음 → 0 처리
+    mean7 = float(s.tail(7).mean()) if len(s) else 0.0
+    mean28 = float(s.tail(28).mean()) if len(s) else 0.0
+    rate = max(0.0, w7 * mean7 + (1 - w7) * mean28)
 
-    vis_df["resource_code"] = vis_df["resource_code"].astype(str)
-    vis_df["label"] = vis_df["resource_code"] + " @ " + vis_df["center"]
+    idx = pd.date_range(start_forecast, end_forecast, freq="D")
+    return pd.Series(rate, index=idx)
 
-    fig = px.line(
-        vis_df,
-        x="date",
-        y="stock_qty",
-        color="label",
-        line_shape="hv",
-        title="선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
-        render_mode="svg",
-    )
-    fig.update_layout(
-        hovermode="x unified",
-        xaxis_title="날짜",
-        yaxis_title="재고량(EA)",
-        legend_title_text="SKU @ Center / 이동중(점선) / 생산중(점선)",
-        margin=dict(l=20, r=20, t=60, b=20),
-    )
-    fig.update_traces(
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>"
-    )
-    fig.update_yaxes(tickformat=",.0f")
 
-    if pd.to_datetime(start).normalize() <= today <= pd.to_datetime(end).normalize():
-        fig.add_vline(x=today, line_width=1, line_dash="solid", line_color="rgba(255, 0, 0, 0.4)")
-        fig.add_annotation(
-            x=today,
-            y=1.02,
-            xref="x",
-            yref="paper",
-            text="오늘",
-            showarrow=False,
-            font=dict(size=12, color="#555"),
-            align="center",
-            yanchor="bottom",
-        )
+def build_inventory_series(
+    snap_long: pd.DataFrame,
+    skus_sel: List[str],
+    center: str,
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+) -> pd.Series:
+    """실측 스냅샷 재고(선택 SKU 합계)를 일자 시계열로."""
+    dcol = _pick_date_col(snap_long)
+    sub = snap_long.copy()
+    sub[dcol] = _to_date(sub[dcol])
+    sub["stock_qty"] = pd.to_numeric(sub["stock_qty"], errors="coerce").fillna(0)
 
-    _apply_line_styles(fig)
+    sub = sub[(sub["center"] == center) & (sub["resource_code"].isin(skus_sel))]
+    if sub.empty:
+        return pd.Series(dtype=float)
 
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-    if caption:
-        st.caption(caption)
+    inv = (sub.groupby(dcol)["stock_qty"]
+              .sum()
+              .sort_index())
 
+    # 일자 전체 범위로 확장 + ffill
+    inv = _series_daily_index(inv, start_dt, end_dt).fillna(0)
+    return inv
+
+
+def project_inventory(
+    inv_today: float,
+    start_next_day: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    sales_forecast: pd.Series,   # 미래 날짜 index
+    inbound_future: pd.Series,   # 미래 날짜 index
+) -> pd.Series:
+    """오늘 다음 날부터 예측 재고를 생성."""
+    if start_next_day > end_dt:
+        return pd.Series(dtype=float)
+
+    idx = pd.date_range(start_next_day, end_dt, freq="D")
+    inv = np.zeros(len(idx), dtype=float)
+
+    cur = float(inv_today)
+    sales_f = sales_forecast.reindex(idx).fillna(0.0)
+    inbound_f = inbound_future.reindex(idx).fillna(0.0)
+
+    for i, d in enumerate(idx):
+        cur = max(0.0, cur - sales_f.iloc[i] + inbound_f.iloc[i])
+        inv[i] = cur
+
+    return pd.Series(inv, index=idx)
+
+
+# ---------- B. 렌더러 ----------
 
 def render_amazon_sales_vs_inventory(
-    snapshot: pd.DataFrame,
-    *,
-    moves: Optional[pd.DataFrame],
-    centers: Sequence[str],
-    skus: Sequence[str],
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    lookback_days: int = 28,
-    today: Optional[pd.Timestamp] = None,
-    show_ma7: bool = True,
-    show_inbound: bool = False,
-    show_inventory_forecast: bool = True,
-    caption: str | None = None,
-) -> None:
-    """Render the Amazon sales vs. inventory chart with improved UX."""
+    snap_long: pd.DataFrame,
+    moves: pd.DataFrame,
+    skus_sel: List[str],
+    start_dt: pd.Timestamp,
+    end_dt: pd.Timestamp,
+    center: str = "AMZUS",
+    show_roll7: bool = True,
+) -> go.Figure:
+    """
+    Amazon US 일별 판매 vs. 재고 복합 차트.
+      - 막대: 판매(실측, 오늘까지)
+      - 점선(좌축): 판매(예측, 오늘 이후)
+      - 실선(우축): 재고(실측, 오늘까지)
+      - 점선(우축): 재고(예측, 오늘 이후)  ← 판매 예측/입고 스케줄 반영
+    """
+    today = pd.Timestamp.today().normalize()
 
-    today = pd.to_datetime(today).normalize() if today is not None else pd.Timestamp.today().normalize()
-    start_norm = pd.to_datetime(start).normalize()
-    end_norm = pd.to_datetime(end).normalize()
-    if end_norm < start_norm:
-        st.warning("기간 설정이 올바르지 않아 Amazon 차트를 그릴 수 없습니다.")
-        return
+    # 판매 실측/롤링
+    sales_df = compute_daily_sales_from_snapshot(snap_long, skus_sel, center=center)
+    # 차트 표시 범위로 슬라이싱
+    sales_df = sales_df[(sales_df["date"] >= start_dt) & (sales_df["date"] <= end_dt)]
 
-    if snapshot is None or snapshot.empty:
-        st.caption("선택된 조건에 해당하는 Amazon 스냅샷 데이터가 없습니다.")
-        return
+    # 재고(실측)
+    inv_series = build_inventory_series(snap_long, skus_sel, center, start_dt, end_dt)
 
-    def _is_amazon_center(label: str) -> bool:
-        value = str(label or "").strip()
-        if not value:
-            return False
-        lowered = value.lower()
-        return "amazon" in lowered or value.upper().startswith("AMZ")
+    # 판매 예측: 오늘+1 ~ end_dt
+    fc_start = max(today + pd.Timedelta(days=1), start_dt)
+    sales_fc = forecast_sales_constant(sales_df, fc_start, end_dt)  # 상수 추세
 
-    center_list = [str(center).strip() for center in centers if str(center).strip()]
-    if not center_list:
-        center_list = [
-            str(center)
-            for center in snapshot.get("center", pd.Series(dtype=str)).dropna().astype(str).unique()
-            if _is_amazon_center(center)
-        ]
+    # 미래 입고 스케줄 (표시는 하지 않지만 예측 재고에 반영)
+    inbound_future = extract_inbound_schedule(moves, skus_sel, center, fc_start, end_dt)
 
-    center_list = [center for center in center_list if _is_amazon_center(center)]
-    if not center_list:
-        st.caption("Amazon 계열 센터가 선택되지 않았습니다.")
-        return
+    # 재고 예측(오늘 다음날부터)
+    inv_today = float(inv_series.reindex([today]).ffill().iloc[-1]) if not inv_series.empty else 0.0
+    inv_fc = project_inventory(inv_today, fc_start, end_dt, sales_fc, inbound_future)
 
-    sku_list = [str(sku).strip() for sku in skus if str(sku).strip()]
-    if not sku_list:
-        st.caption("표시할 SKU가 없습니다.")
-        return
-
-    work = snapshot.copy()
-    date_col = "date" if "date" in work.columns else "snapshot_date"
-    work[date_col] = pd.to_datetime(work[date_col], errors="coerce").dt.normalize()
-    work = work.dropna(subset=[date_col])
-    work["center"] = work["center"].astype(str)
-    work["resource_code"] = work["resource_code"].astype(str)
-    work = work[
-        work["center"].isin(center_list) & work["resource_code"].astype(str).isin(sku_list)
-    ]
-
-    if work.empty:
-        st.caption("선택된 조건에 해당하는 Amazon 스냅샷 데이터가 없습니다.")
-        return
-
-    work = work.rename(columns={date_col: "date"}).copy()
-    idx = pd.date_range(start_norm, end_norm, freq="D")
-    ts_inv = (
-        work.groupby("date")["stock_qty"].sum()
-        .sort_index()
-        .reindex(idx)
-        .ffill()
-        .fillna(0.0)
-    )
-    ts_inv = ts_inv.clip(lower=0.0)
-    ts_inv.name = "inventory_qty"
-
-    if ts_inv.empty:
-        st.caption("표시할 Amazon 재고 데이터가 없습니다.")
-        return
-
-    latest_snap = work["date"].max().normalize()
-
-    inbound = pd.Series(0.0, index=ts_inv.index, name="inbound_qty")
-    if moves is not None and not moves.empty:
-        required_cols = {"inbound_date", "qty_ea", "to_center", "resource_code"}
-        if required_cols.issubset(moves.columns):
-            inbound_work = moves.dropna(subset=["inbound_date"]).copy()
-            if not inbound_work.empty:
-                inbound_work["inbound_date"] = pd.to_datetime(
-                    inbound_work["inbound_date"], errors="coerce"
-                ).dt.normalize()
-                inbound_work = inbound_work.dropna(subset=["inbound_date"])
-                inbound_work["to_center"] = inbound_work["to_center"].astype(str)
-                inbound_work["resource_code"] = inbound_work["resource_code"].astype(str)
-                inbound_work = inbound_work[
-                    inbound_work["to_center"].isin(center_list)
-                    & inbound_work["resource_code"].isin(sku_list)
-                ]
-                if not inbound_work.empty:
-                    inbound = (
-                        inbound_work.groupby("inbound_date")["qty_ea"].sum().sort_index().reindex(idx)
-                    ).fillna(0.0)
-                    inbound.name = "inbound_qty"
-
-    prev = ts_inv.shift(1).fillna(ts_inv.iloc[0])
-    sales = ((prev + inbound) - ts_inv).clip(lower=0.0)
-    sales.name = "sales_qty"
-
-    sales_ma = sales.rolling(7, min_periods=1).mean() if show_ma7 else None
-
-    rates = estimate_daily_consumption(
-        snapshot.rename(columns={"date": "snapshot_date"}),
-        centers_sel=center_list,
-        skus_sel=sku_list,
-        asof_dt=latest_snap,
-        lookback_days=int(lookback_days),
-    )
-    daily_rate = sum(float(rates.get((center, sku), 0.0)) for center in center_list for sku in sku_list)
-
-    future_start = max(today + pd.Timedelta(days=1), latest_snap + pd.Timedelta(days=1))
-    if future_start > end_norm:
-        future_index = pd.DatetimeIndex([], name="date")
-    else:
-        future_index = pd.date_range(future_start, end_norm, freq="D")
-
-    sales_forecast = (
-        pd.Series(daily_rate, index=future_index, name="sales_forecast") if len(future_index) else pd.Series(dtype=float)
-    )
-
-    inv_pred: Optional[pd.Series] = None
-    if show_inventory_forecast and len(future_index):
-        inv_values = []
-        current = float(ts_inv.loc[ts_inv.index <= latest_snap].iloc[-1]) if (ts_inv.index <= latest_snap).any() else float(ts_inv.iloc[-1])
-        for _ in future_index:
-            current = max(0.0, current - daily_rate)
-            inv_values.append(current)
-        inv_pred = pd.Series(inv_values, index=future_index, name="inventory_forecast").round()
-
-    fig = go.Figure()
-
-    fig.add_bar(
-        x=sales.index,
-        y=sales.values,
-        name="판매(실측)",
-        marker_color="rgba(33, 150, 243, 0.85)",
-        yaxis="y",
-    )
-
-    if show_ma7 and sales_ma is not None:
-        fig.add_scatter(
-            x=sales_ma.index,
-            y=sales_ma.values,
-            mode="lines",
-            name="판매 7일 평균",
-            line=dict(color="rgba(33,150,243,0.6)", dash="dot", width=2),
-            yaxis="y",
+    # ---- Plotly Figure ----
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    # 바: 판매(실측, 오늘까지)
+    sales_actual = sales_df.set_index("date")["sales_actual"].clip(lower=0)
+    sales_actual_past = sales_actual[sales_actual.index <= today]
+    if not sales_actual_past.empty:
+        fig.add_bar(
+            x=sales_actual_past.index,
+            y=sales_actual_past.values,
+            name="판매(실측)",
+            marker_color="#4C78A8",
+            opacity=0.85,
+            hovertemplate="날짜 %{x|%Y-%m-%d}<br>판매 %{y:,.0f} EA<extra></extra>",
+            secondary_y=False,
         )
 
-    if len(sales_forecast):
-        fig.add_bar(
-            x=sales_forecast.index,
-            y=sales_forecast.values,
+    # 점선: 판매(예측, 오늘 이후)
+    if not sales_fc.empty:
+        fig.add_scatter(
+            x=sales_fc.index,
+            y=sales_fc.values,
             name="판매(예측)",
-            marker_color="rgba(33,150,243,0.25)",
-            marker_pattern_shape="/",
-            yaxis="y",
-        )
-
-    if show_inbound and inbound.sum() > 0:
-        fig.add_bar(
-            x=inbound.index,
-            y=inbound.values,
-            name="입고(실제)",
-            marker_color="rgba(200,200,200,0.45)",
-            marker_pattern_shape="\\",
-            opacity=0.6,
-            yaxis="y2",
-        )
-
-    fig.add_scatter(
-        x=ts_inv.index,
-        y=ts_inv.values,
-        mode="lines",
-        name="재고",
-        line=dict(color="#ff7f0e", width=2.2),
-        yaxis="y2",
-    )
-
-    if inv_pred is not None and len(inv_pred):
-        fig.add_scatter(
-            x=inv_pred.index,
-            y=inv_pred.values,
             mode="lines",
-            name="재고",
-            showlegend=False,
-            line=dict(color="#ff7f0e", width=2.2, dash="dot"),
-            yaxis="y2",
+            line=dict(color="#4C78A8", width=2, dash="dash"),
+            hovertemplate="예측 판매 %{y:,.0f} EA<br>%{x|%Y-%m-%d}<extra></extra>",
+            secondary_y=False,
         )
 
-    if start_norm <= today <= end_norm:
-        fig.add_vline(x=today, line_color="crimson", line_width=2, opacity=0.8)
+    # 실선: 재고(실측, 오늘까지)
+    inv_past = inv_series[inv_series.index <= today]
+    if not inv_past.empty:
+        fig.add_scatter(
+            x=inv_past.index,
+            y=inv_past.values,
+            name="재고(실측)",
+            mode="lines",
+            line=dict(color="#F58518", width=2.2),
+            hovertemplate="재고 %{y:,.0f} EA<br>%{x|%Y-%m-%d}<extra></extra>",
+            secondary_y=True,
+        )
 
+    # 점선: 재고(예측, 오늘 이후)
+    if not inv_fc.empty:
+        fig.add_scatter(
+            x=inv_fc.index,
+            y=inv_fc.values,
+            name="재고(예측)",
+            mode="lines",
+            line=dict(color="#F58518", width=2.2, dash="dash"),
+            hovertemplate="예측 재고 %{y:,.0f} EA<br>%{x|%Y-%m-%d}<extra></extra>",
+            secondary_y=True,
+        )
+
+    # 7일 이동평균(실측 구간)
+    if show_roll7:
+        roll7 = sales_df.set_index("date")["sales_roll7"]
+        roll7_past = roll7[roll7.index <= today]
+        if not roll7_past.empty:
+            fig.add_scatter(
+                x=roll7_past.index,
+                y=roll7_past.values,
+                name="판매 7일 평균",
+                mode="lines",
+                line=dict(color="#72B7B2", width=2, dash="dot"),
+                hovertemplate="7일 평균 %{y:,.0f} EA<br>%{x|%Y-%m-%d}<extra></extra>",
+                secondary_y=False,
+            )
+
+    # 오늘 수직선
+    if start_dt <= today <= end_dt:
+        fig.add_vline(
+            x=today,
+            line_width=1.6,
+            line_dash="solid",
+            line_color="crimson",
+            annotation_text="오늘",
+            annotation_position="top",
+            annotation_font_color="crimson",
+        )
+
+    # 레이아웃/축
     fig.update_layout(
-        barmode="overlay",
-        hovermode="x unified",
         margin=dict(l=10, r=10, t=10, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
-        xaxis=dict(title=None),
-        yaxis=dict(
-            title="판매량 (EA/Day)",
-            rangemode="tozero",
-            gridcolor="rgba(0,0,0,0.06)",
-            zeroline=False,
-        ),
-        yaxis2=dict(
-            title="재고 (EA)",
-            overlaying="y",
-            side="right",
-            showgrid=False,
-            zeroline=False,
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        bargap=0.25,
+    )
+    fig.update_xaxes(
+        showgrid=True, gridcolor="rgba(0,0,0,0.05)",
+        tickformat="%b %d", ticklabelmode="period",
+    )
+    fig.update_yaxes(
+        title_text="판매량 (EA/Day)",
+        showgrid=True, gridcolor="rgba(0,0,0,0.05)",
+        secondary_y=False,
+    )
+    fig.update_yaxes(
+        title_text="재고 (EA)",
+        showgrid=False,
+        secondary_y=True,
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-    if caption:
-        st.caption(caption)
+    return fig
