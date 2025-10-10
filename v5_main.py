@@ -121,6 +121,25 @@ def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tupl
     return centers, skus
 
 
+def _date_bounds(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    """Compute a sensible default date window based on available data."""
+
+    dates = [
+        snapshot["date"].min() if not snapshot.empty else None,
+        snapshot["date"].max() if not snapshot.empty else None,
+        moves.get("onboard_date").min() if "onboard_date" in moves.columns else None,
+        moves.get("pred_inbound_date").min() if "pred_inbound_date" in moves.columns else None,
+        moves.get("pred_inbound_date").max() if "pred_inbound_date" in moves.columns else None,
+        moves.get("event_date").max() if "event_date" in moves.columns else None,
+    ]
+    dates = [pd.to_datetime(d).normalize() for d in dates if pd.notna(d)]
+    if not dates:
+        today = pd.Timestamp.today().normalize()
+        return today - pd.Timedelta(days=30), today + pd.Timedelta(days=30)
+
+    return min(dates), max(dates)
+
+
 def main() -> None:
     """Entrypoint for running the v5 dashboard in Streamlit."""
 
