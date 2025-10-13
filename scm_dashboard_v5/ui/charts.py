@@ -337,6 +337,7 @@ def render_amazon_sales_vs_inventory(
     use_consumption_forecast: bool = False,
     lookback_days: int = 28,
     timeline: Optional[pd.DataFrame] = None,
+    show_wip: bool = True,
 ) -> None:
     """
     Amazon US 일별 판매(누적 막대) vs. 재고(라인) 패널.
@@ -344,6 +345,7 @@ def render_amazon_sales_vs_inventory(
     - 판매(예측): 최근 7일(옵션) 평균을 오늘 다음 날부터 적용 (막대 색상 동일)
     - 재고(실측): 실선, 재고(예측): 오늘 이후 점선
     - SKU별 색상 고정, 계단형 라인(hv), 오늘 세로 기준선 추가
+    - show_wip=True 시 타임라인 데이터의 WIP(생산중) 재고를 점선으로 추가 표시
     """
     if not _ensure_plotly_available():
         return
@@ -404,6 +406,15 @@ def render_amazon_sales_vs_inventory(
         timeline_pivot = _safe_dataframe(timeline_pivot, columns=skus)
     anchor_date: Optional[pd.Timestamp] = None
     start_vector: Optional[pd.DataFrame] = None
+
+    wip_pivot: Optional[pd.DataFrame] = None
+    if show_wip:
+        wip_pivot = _timeline_inventory_matrix(timeline, ["WIP"], skus, start, end)
+        if wip_pivot is not None and not wip_pivot.empty:
+            wip_pivot.index = _ensure_naive_index(wip_pivot.index)
+            wip_pivot = _safe_dataframe(wip_pivot, columns=skus)
+        else:
+            wip_pivot = None
 
     if show_inventory_forecast:
         if use_consumption_forecast and timeline_pivot is not None and not timeline_pivot.empty:
@@ -612,6 +623,28 @@ def render_amazon_sales_vs_inventory(
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
             )
 
+    if show_wip and wip_pivot is not None:
+        wip_plot = _safe_dataframe(wip_pivot.round(0), columns=skus)
+        if not wip_plot.empty:
+            wip_plot.index = _ensure_naive_index(wip_plot.index)
+            for sku in skus:
+                series = wip_plot.get(sku)
+                if series is None:
+                    continue
+                series_nonzero = pd.Series(series).fillna(0.0)
+                if not series_nonzero.any():
+                    continue
+                color = cmap.get(sku)
+                _safe_add_scatter(
+                    fig,
+                    x=wip_plot.index,
+                    y=series,
+                    name=f"{sku} 생산중(WIP)",
+                    line=dict(color=color, width=1.8, dash="dot") if color else None,
+                    yaxis="y2",
+                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
+                )
+
     # (3) 오늘 기준선
     fig.add_vline(x=today, line_color="red", line_dash="dot", line_width=2)
 
@@ -632,6 +665,9 @@ def render_amazon_sales_vs_inventory(
 
 def render_amazon_panel(*args: object, **kwargs: object) -> None:
     """Backward-compatible alias for :func:`render_amazon_sales_vs_inventory`."""
+
+    if "show_production" in kwargs and "show_wip" not in kwargs:
+        kwargs["show_wip"] = kwargs.pop("show_production")
 
     render_amazon_sales_vs_inventory(*args, **kwargs)
 
