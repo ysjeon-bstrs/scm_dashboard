@@ -9,11 +9,22 @@ import streamlit as st
 
 from .kpi import render_sku_summary_cards
 
+# scm_dashboard_v5/ui/__init__.py
+from .charts import (
+    render_step_chart,
+    render_amazon_sales_vs_inventory,
+    render_amazon_panel,
+    render_sku_summary_cards,   # ← 추가
+)
+
 __all__ = [
-    "render_amazon_sales_vs_inventory",
     "render_step_chart",
-    "render_sku_summary_cards",
+    "render_amazon_sales_vs_inventory",
+    "render_amazon_panel",
+    "render_sku_summary_cards",  # ← 추가
 ]
+
+
 
 
 def _load_charts_module() -> Any | None:
