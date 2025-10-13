@@ -11,26 +11,67 @@ from .kpi import render_sku_summary_cards
 
 __all__ = [
     "render_amazon_sales_vs_inventory",
+    "render_amazon_panel",
     "render_step_chart",
     "render_sku_summary_cards",
 ]
+
+_CHARTS_MODULE: Any | None = None
+_CHARTS_IMPORT_ERROR: ImportError | None = None
+
+
+def _is_plotly_import_error(exc: ImportError) -> bool:
+    """Return True when the ImportError is triggered by Plotly or its extras."""
+
+    message = str(exc).lower()
+    if "plotly" in message:
+        return True
+
+    # 일부 런타임에서는 ModuleNotFoundError.name 속성이 설정되지 않는 경우가 있다.
+    missing = getattr(exc, "name", "")
+    return bool(missing and missing.split(".")[0] == "plotly")
 
 
 def _load_charts_module() -> Any | None:
     """Return the charts module if its optional dependencies are available."""
 
+    global _CHARTS_MODULE, _CHARTS_IMPORT_ERROR
+
+    if _CHARTS_MODULE is not None:
+        return _CHARTS_MODULE
+
+    if _CHARTS_IMPORT_ERROR is not None:
+        _show_plotly_error(_CHARTS_IMPORT_ERROR)
+        return None
+
     try:
-        return import_module("scm_dashboard_v5.ui.charts")
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on runtime env
-        missing = getattr(exc, "name", "")
-        if missing and missing.split(".")[0] == "plotly":
-            st.error(
-                "Plotly 라이브러리가 설치되어야 Amazon 판매/재고 및 계단식 차트를 표시할 수 있습니다. "
-                "requirements.txt에 'plotly>=5.0.0' 항목이 포함되어 있는지 확인해주세요.",
-                icon="⚠️",
-            )
+        _CHARTS_MODULE = import_module("scm_dashboard_v5.ui.charts")
+    except ImportError as exc:  # pragma: no cover - depends on runtime env
+        if _is_plotly_import_error(exc):
+            _CHARTS_IMPORT_ERROR = exc
+            _show_plotly_error(exc)
             return None
         raise
+
+    return _CHARTS_MODULE
+
+
+def _show_plotly_error(exc: ImportError) -> None:
+    """Display a user-friendly warning about missing Plotly dependencies."""
+
+    message = str(exc)
+    if message:
+        detail = f"<details><summary>오류 세부정보</summary><pre>{message}</pre></details>"
+    else:
+        detail = ""
+
+    guidance = (
+        "Plotly 라이브러리가 설치되어야 Amazon 판매/재고 및 계단식 차트를 표시할 수 있습니다. "
+        "requirements.txt에 'plotly>=5.0.0' 항목이 포함되어 있는지 확인해주세요.\n"
+        "Plotly 관련 확장 모듈을 불러오지 못했습니다. Plotly 및 관련 의존성이 올바르게 설치되었는지 확인해주세요."
+    )
+
+    st.error(f"{guidance}{detail}", icon="⚠️")
 
 
 def render_step_chart(*args: Any, **kwargs: Any) -> None:
@@ -49,3 +90,12 @@ def render_amazon_sales_vs_inventory(*args: Any, **kwargs: Any) -> None:
     if charts is None:
         return
     charts.render_amazon_sales_vs_inventory(*args, **kwargs)
+
+
+def render_amazon_panel(*args: Any, **kwargs: Any) -> None:
+    """Proxy to the Amazon summary panel renderer."""
+
+    charts = _load_charts_module()
+    if charts is None:
+        return
+    charts.render_amazon_panel(*args, **kwargs)
