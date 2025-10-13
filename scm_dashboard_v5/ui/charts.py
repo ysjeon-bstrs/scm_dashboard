@@ -359,10 +359,25 @@ def render_step_chart(
         # TypeError가 발생할 수 있다. 이를 방지하기 위해
         # Python datetime 객체로 변환해 전달한다.
         t_dt = t.to_pydatetime()
-        fig.add_vline(
-            x=t_dt, line_color="crimson", line_dash="dot", line_width=1.5,
-            annotation_text="오늘", annotation_position="top",
-            annotation=dict(font=dict(color="crimson"))
+        fig.add_shape(
+            type="line",
+            x0=t_dt,
+            x1=t_dt,
+            xref="x",
+            y0=0,
+            y1=1,
+            yref="paper",
+            line=dict(color="crimson", dash="dot", width=1.5),
+        )
+        fig.add_annotation(
+            x=t_dt,
+            xref="x",
+            y=1.0,
+            yref="paper",
+            yshift=8,
+            text="오늘",
+            showarrow=False,
+            font=dict(color="crimson"),
         )
 
     fig.update_layout(
