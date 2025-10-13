@@ -425,6 +425,202 @@ def _movement_breakdown_per_center(
     return in_transit_series, wip_series
 
 
+def _format_number(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float) and pd.isna(value):
+        return "-"
+    try:
+        return f"{int(round(float(value))):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_days(value: float | None) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "-"
+    if value < 0:
+        value = 0.0
+    if value >= 100:
+        return f"{int(round(value))}일"
+    return f"{value:.1f}일"
+
+
+def _format_date(value: pd.Timestamp | None) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "-"
+    if pd.isna(value):
+        return "-"
+    return f"{pd.to_datetime(value):%Y-%m-%d}"
+
+
+def _calculate_coverage_days(current_qty: float | int | None, daily_demand: float | int | None) -> float | None:
+    if current_qty is None:
+        return None
+    if isinstance(current_qty, float) and pd.isna(current_qty):
+        return None
+    if daily_demand is None or (isinstance(daily_demand, float) and pd.isna(daily_demand)):
+        return None
+    try:
+        current_val = float(current_qty)
+        demand_val = float(daily_demand)
+    except (TypeError, ValueError):
+        return None
+    if demand_val <= 0:
+        return None
+    if current_val <= 0:
+        return 0.0
+    return current_val / demand_val
+
+
+def _calculate_sellout_date(today: pd.Timestamp, coverage_days: float | None) -> pd.Timestamp | None:
+    if coverage_days is None or (isinstance(coverage_days, float) and pd.isna(coverage_days)):
+        return None
+    coverage = max(float(coverage_days), 0.0)
+    return pd.to_datetime(today) + pd.to_timedelta(coverage, unit="D")
+
+
+def _should_show_in_transit(center: str, in_transit_value: int) -> bool:
+    center_name = str(center).replace(" ", "").lower()
+    if any(keyword in center_name for keyword in ["태광", "taekwang", "tae-kwang"]):
+        return in_transit_value > 0
+    return True
+
+
+def _extract_daily_demand(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if frame.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    candidates = [
+        "forecast_daily_qty",
+        "forecast_daily_sales",
+        "expected_daily_sales",
+        "daily_sales",
+        "daily_demand",
+        "avg_daily_sales",
+        "average_daily_sales",
+        "sales_avg_daily",
+    ]
+
+    for column in candidates:
+        if column not in frame.columns:
+            continue
+        demand_values = pd.to_numeric(frame[column], errors="coerce")
+        if demand_values.notna().any():
+            demand_frame = frame.assign(_demand=demand_values)
+            demand_series = (
+                demand_frame.dropna(subset=["_demand"])
+                .groupby(["resource_code", "center"])["_demand"]
+                .mean()
+            )
+            total_series = demand_series.groupby(level=0).sum()
+            return demand_series, total_series
+
+    empty = pd.Series(dtype=float)
+    return empty, empty
+
+
+def _movement_breakdown_per_center(
+    moves: pd.DataFrame,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    today: pd.Timestamp,
+    lag_days: int,
+) -> tuple[pd.Series, pd.Series]:
+    if moves is None or moves.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    required_columns = {"resource_code", "to_center", "qty_ea"}
+    if not required_columns.issubset(moves.columns):
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    mv = moves.copy()
+    mv["qty_ea"] = pd.to_numeric(mv["qty_ea"], errors="coerce").fillna(0)
+    mv = mv[mv["qty_ea"] != 0]
+
+    if mv.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    centers_set = {str(center) for center in centers}
+    skus_set = {str(sku) for sku in skus}
+    mv = mv[mv["to_center"].isin(centers_set) & mv["resource_code"].isin(skus_set)]
+
+    if mv.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    pred_end = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+    if "inbound_date" in mv.columns:
+        inbound_mask = mv["inbound_date"].notna()
+        pred_end.loc[inbound_mask] = mv.loc[inbound_mask, "inbound_date"]
+    else:
+        inbound_mask = pd.Series(False, index=mv.index)
+
+    if "arrival_date" in mv.columns:
+        arrival_mask = (~inbound_mask) & mv["arrival_date"].notna()
+        if arrival_mask.any():
+            past_arrival = arrival_mask & (mv["arrival_date"] <= today)
+            pred_end.loc[past_arrival] = mv.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=lag_days)
+
+            future_arrival = arrival_mask & (mv["arrival_date"] > today)
+            pred_end.loc[future_arrival] = mv.loc[future_arrival, "arrival_date"]
+
+    pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
+    mv["pred_end_date"] = pred_end
+
+    carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else ""
+
+    in_transit_series = pd.Series(dtype=float)
+    if "onboard_date" in mv.columns:
+        in_transit_mask = mv["onboard_date"].notna() & (mv["onboard_date"] <= today) & (today < mv["pred_end_date"])
+        if "carrier_mode" in mv.columns:
+            in_transit_mask &= carrier_mode != "WIP"
+        if in_transit_mask.any():
+            in_transit_series = (
+                mv[in_transit_mask]
+                .groupby(["resource_code", "to_center"], as_index=True)["qty_ea"]
+                .sum()
+            )
+
+    wip_series = pd.Series(dtype=float)
+    if "carrier_mode" in mv.columns and (carrier_mode == "WIP").any():
+        wip_frame = mv[carrier_mode == "WIP"].copy()
+        if not wip_frame.empty and "onboard_date" in wip_frame.columns:
+            add = (
+                wip_frame.dropna(subset=["onboard_date"])
+                .set_index(["resource_code", "to_center", "onboard_date"])["qty_ea"]
+            )
+            rem = pd.Series(dtype=float)
+            if "event_date" in wip_frame.columns:
+                rem = (
+                    wip_frame.dropna(subset=["event_date"])
+                    .set_index(["resource_code", "to_center", "event_date"])["qty_ea"]
+                    * -1
+                )
+            flow = pd.concat([add, rem]) if not rem.empty else add
+            flow = flow.groupby(level=[0, 1, 2]).sum()
+            flow = flow[flow.index.get_level_values(2) <= today]
+            if not flow.empty:
+                wip_series = (
+                    flow.groupby(level=[0, 1])
+                    .cumsum()
+                    .groupby(level=[0, 1])
+                    .last()
+                    .clip(lower=0)
+                )
+
+    if not in_transit_series.empty:
+        in_transit_series = in_transit_series.clip(lower=0).round().astype(int)
+    if not wip_series.empty:
+        wip_series = wip_series.clip(lower=0).round().astype(int)
+
+    return in_transit_series, wip_series
+
+
 def render_sku_summary_cards(
     snapshot: pd.DataFrame,
     moves: pd.DataFrame,

@@ -433,6 +433,7 @@ def main() -> None:
         use_consumption_forecast=use_cons_forecast,
         lookback_days=lookback_days,
         timeline=timeline_for_chart,
+        show_wip=show_prod,
     )
 
 

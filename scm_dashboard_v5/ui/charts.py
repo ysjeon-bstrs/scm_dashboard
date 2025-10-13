@@ -337,6 +337,7 @@ def render_amazon_sales_vs_inventory(
     use_consumption_forecast: bool = False,
     lookback_days: int = 28,
     timeline: Optional[pd.DataFrame] = None,
+    show_wip: bool = True,
 ) -> None:
     """
     Amazon US 일별 판매(누적 막대) vs. 재고(라인) 패널.
@@ -344,6 +345,7 @@ def render_amazon_sales_vs_inventory(
     - 판매(예측): 최근 7일(옵션) 평균을 오늘 다음 날부터 적용 (막대 색상 동일)
     - 재고(실측): 실선, 재고(예측): 오늘 이후 점선
     - SKU별 색상 고정, 계단형 라인(hv), 오늘 세로 기준선 추가
+    - show_wip=True 시 타임라인 데이터의 WIP(생산중) 재고를 점선으로 추가 표시
     """
     if not _ensure_plotly_available():
         return
@@ -404,6 +406,15 @@ def render_amazon_sales_vs_inventory(
         timeline_pivot = _safe_dataframe(timeline_pivot, columns=skus)
     anchor_date: Optional[pd.Timestamp] = None
     start_vector: Optional[pd.DataFrame] = None
+
+    wip_pivot: Optional[pd.DataFrame] = None
+    if show_wip:
+        wip_pivot = _timeline_inventory_matrix(timeline, ["WIP"], skus, start, end)
+        if wip_pivot is not None and not wip_pivot.empty:
+            wip_pivot.index = _ensure_naive_index(wip_pivot.index)
+            wip_pivot = _safe_dataframe(wip_pivot, columns=skus)
+        else:
+            wip_pivot = None
 
     if show_inventory_forecast:
         if use_consumption_forecast and timeline_pivot is not None and not timeline_pivot.empty:
@@ -612,6 +623,40 @@ def render_amazon_sales_vs_inventory(
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
             )
 
+    if show_wip and wip_pivot is not None:
+        wip_plot = _safe_dataframe(wip_pivot.round(0), columns=skus)
+        if not wip_plot.empty:
+            wip_plot.index = _ensure_naive_index(wip_plot.index)
+            for sku in skus:
+                series = wip_plot.get(sku)
+                if series is None:
+                    continue
+                if isinstance(series, pd.DataFrame):
+                    if series.empty:
+                        continue
+                    # Duplicate columns for the same SKU can appear when the
+                    # selection contains repeated labels. Use the first column
+                    # to keep a 1‑dimensional series for plotting.
+                    series = series.iloc[:, 0]
+                if not isinstance(series, pd.Series):
+                    series = pd.Series(series, index=wip_plot.index)
+
+                series_numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+                values = series_numeric.to_numpy(dtype=float, copy=False)
+                if not np.isfinite(values).any() or not np.any(np.abs(values) > 0):
+                    continue
+
+                color = cmap.get(sku)
+                _safe_add_scatter(
+                    fig,
+                    x=wip_plot.index,
+                    y=series_numeric,
+                    name=f"{sku} 생산중(WIP)",
+                    line=dict(color=color, width=1.8, dash="dot") if color else None,
+                    yaxis="y2",
+                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
+                )
+
     # (3) 오늘 기준선
     fig.add_vline(x=today, line_color="red", line_dash="dot", line_width=2)
 
@@ -632,6 +677,9 @@ def render_amazon_sales_vs_inventory(
 
 def render_amazon_panel(*args: object, **kwargs: object) -> None:
     """Backward-compatible alias for :func:`render_amazon_sales_vs_inventory`."""
+
+    if "show_production" in kwargs and "show_wip" not in kwargs:
+        kwargs["show_wip"] = kwargs.pop("show_production")
 
     render_amazon_sales_vs_inventory(*args, **kwargs)
 
@@ -667,9 +715,9 @@ def render_step_chart(
     today: pd.Timestamp | None = None,
     horizon_days: int = 0,
     show_in_transit: bool = True,
-    show_wip: bool = True,
+    show_wip: bool | None = None,
     title: str = "선택한 SKU × 센터(및 In‑Transit/WIP) 계단식 재고 흐름",
-    **_
+    **kwargs
 ) -> None:
     """
     v5_main에서 그대로 호출하는 공개 API.
@@ -685,6 +733,12 @@ def render_step_chart(
     df = timeline.copy()
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
 
+    show_production = kwargs.pop("show_production", None)
+    if show_wip is None:
+        show_wip = True if show_production is None else bool(show_production)
+    else:
+        show_wip = bool(show_wip)
+
     # 기간 슬라이스
     df = df[(df["date"] >= pd.to_datetime(start).normalize()) &
             (df["date"] <= pd.to_datetime(end).normalize())]
@@ -692,36 +746,57 @@ def render_step_chart(
     # In‑Transit / WIP 노출 옵션
     if not show_in_transit:
         df = df[df["center"] != "In-Transit"]
-    if not show_wip:
-        df = df[df["center"] != "WIP"]
 
     if centers:
         df = df[df["center"].astype(str).isin(centers)]
     if skus:
         df = df[df["resource_code"].astype(str).isin(skus)]
 
-    if df.empty:
+    wip_source = pd.DataFrame()
+    if show_wip:
+        wip_source = df[df["center"] == "WIP"].copy()
+
+    base_df = df[df["center"] != "WIP"].copy()
+
+    if base_df.empty and (not show_wip or wip_source.empty):
         st.info("선택 조건에 해당하는 라인이 없습니다.")
         return
 
     # 라벨 생성: SKU @ Center
-    df = df.copy()
-    df["label"] = df["resource_code"] + " @ " + df["center"].astype(str)
+    plot_df = base_df.copy()
+    if not plot_df.empty:
+        plot_df["label"] = plot_df["resource_code"] + " @ " + plot_df["center"].astype(str)
+    else:
+        plot_df = pd.DataFrame(columns=["date", "stock_qty", "label"])
 
     # 기본 step line
-    fig = px.line(
-        df.sort_values(["label","date"]),
-        x="date", y="stock_qty", color="label",
-        line_shape="hv", render_mode="svg",
-        title=title
-    )
-    fig.update_traces(
-        mode="lines",
-        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>"
-    )
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+    else:
+        fig = px.line(
+            plot_df.sort_values(["label", "date"]),
+            x="date",
+            y="stock_qty",
+            color="label",
+            line_shape="hv",
+            render_mode="svg",
+            title=title,
+        )
+        fig.update_traces(
+            mode="lines",
+            hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>",
+        )
 
     # SKU별 고정 색, 상태(In‑Transit/WIP) 별 스타일
-    sku_colors = _sku_color_map([t.name for t in fig.data])
+    color_labels: list[str] = []
+    if not plot_df.empty:
+        color_labels.extend(plot_df["label"].unique().tolist())
+    if show_wip and not wip_source.empty:
+        wip_skus_for_colors = sorted({str(v) for v in wip_source["resource_code"].unique()})
+        color_labels.extend([f"{sku} @ WIP" for sku in wip_skus_for_colors])
+
+    sku_colors = _sku_color_map(color_labels)
     for tr in fig.data:
         name = tr.name or ""
         sku, center = (name.split(" @ ", 1) + [""])[:2]
@@ -732,6 +807,44 @@ def render_step_chart(
             tr.update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
         else:
             tr.update(line=dict(color=color, dash="solid", width=2.2), opacity=0.95)
+
+    wip_plot: Optional[pd.DataFrame] = None
+    if show_wip and not wip_source.empty:
+        wip_skus = list(dict.fromkeys([str(v) for v in (skus or [])]))
+        if not wip_skus:
+            wip_skus = sorted({str(v) for v in wip_source["resource_code"].unique()})
+        wip_pivot = (
+            wip_source.groupby(["date", "resource_code"])["stock_qty"].sum().unstack("resource_code")
+        )
+        wip_pivot = wip_pivot.reindex(columns=wip_skus, fill_value=0.0).sort_index()
+        if not wip_pivot.empty:
+            wip_plot = _safe_dataframe(wip_pivot.round(0), columns=wip_skus)
+            if not wip_plot.empty:
+                wip_plot.index = _ensure_naive_index(wip_plot.index)
+
+    if wip_plot is not None and not wip_plot.empty:
+        for sku in wip_plot.columns:
+            series = wip_plot.get(sku)
+            if series is None:
+                continue
+            if isinstance(series, pd.DataFrame):
+                if series.empty:
+                    continue
+                series = series.iloc[:, 0]
+            if not isinstance(series, pd.Series):
+                series = pd.Series(series, index=wip_plot.index)
+            numeric = pd.to_numeric(series, errors="coerce").dropna()
+            if numeric.empty:
+                continue
+            color = sku_colors.get(sku, _STEP_PALETTE[0])
+            fig.add_scatter(
+                x=numeric.index,
+                y=numeric,
+                mode="lines",
+                name=f"{sku} 생산중(WIP)",
+                line=dict(color=color, dash="dot", width=2.0),
+                hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>",
+            )
 
     # 오늘 세로선
     if today is not None:
