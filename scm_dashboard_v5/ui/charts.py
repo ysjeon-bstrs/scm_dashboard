@@ -31,6 +31,27 @@ _AMAZON_PALETTE = [
 _PLOTLY_WARNING_EMITTED = False
 
 
+def _as_naive_timestamp(value: pd.Timestamp | str | None) -> pd.Timestamp:
+    """Return a timezone-naive timestamp for consistent comparisons."""
+
+    ts = pd.Timestamp(value) if value is not None else pd.Timestamp.today()
+    try:
+        return ts.tz_localize(None)  # handles tz-aware values
+    except TypeError:
+        return ts  # already naive
+
+
+def _ensure_naive_index(idx: pd.Index) -> pd.DatetimeIndex:
+    """Coerce an index to a timezone-naive DatetimeIndex."""
+
+    dt_idx = pd.to_datetime(idx, errors="coerce")
+    if not isinstance(dt_idx, pd.DatetimeIndex):
+        dt_idx = pd.DatetimeIndex(dt_idx)
+    if dt_idx.tz is not None:
+        dt_idx = dt_idx.tz_localize(None)
+    return dt_idx
+
+
 def _ensure_plotly_available() -> bool:
     """Plotly 미설치 환경에서도 ImportError 없이 경고만 띄우도록 보조."""
 
@@ -199,6 +220,10 @@ def render_amazon_sales_vs_inventory(
     if not _ensure_plotly_available():
         return
 
+    start = _as_naive_timestamp(start)
+    end = _as_naive_timestamp(end)
+    today = _as_naive_timestamp(today)
+
     skus = [str(s) for s in skus]
     if not skus:
         st.info("선택된 SKU가 없습니다.")
@@ -218,17 +243,30 @@ def render_amazon_sales_vs_inventory(
 
     # 판매(실측) 및 이동평균 (필터 lookback_days 반영)
     sales = _sales_from_snapshot(snap_long, amz_centers, skus, start, end)
+    if not sales.empty:
+        sales.index = _ensure_naive_index(sales.index)
+    sales = sales.reindex(columns=skus, fill_value=0.0)
     ma_window = max(1, int(lookback_days))
     ma7 = sales.rolling(ma_window, min_periods=1).mean() if show_ma7 else None
+    if ma7 is not None and not ma7.empty:
+        ma7.index = _ensure_naive_index(ma7.index)
+        ma7 = ma7.reindex(columns=skus, fill_value=0.0)
 
     # 재고(실측)
     inv = _inventory_matrix(snap_long, amz_centers, skus, start, end)
+    if not inv.empty:
+        inv.index = _ensure_naive_index(inv.index)
+        inv = inv.reindex(columns=skus, fill_value=0.0)
 
     future_idx = pd.date_range(today + pd.Timedelta(days=1), end, freq="D")
+    if len(future_idx) > 0:
+        future_idx = _ensure_naive_index(future_idx)
 
     inv_future: Optional[pd.DataFrame] = None
     future_sales_from_inventory: Optional[pd.DataFrame] = None
     timeline_pivot = _timeline_inventory_matrix(timeline, amz_centers, skus, start, end)
+    if timeline_pivot is not None and not timeline_pivot.empty:
+        timeline_pivot.index = _ensure_naive_index(timeline_pivot.index)
     anchor_date: Optional[pd.Timestamp] = None
     start_vector: Optional[pd.DataFrame] = None
 
@@ -317,13 +355,18 @@ def render_amazon_sales_vs_inventory(
             inv_future = None
 
     if inv_future is not None and not inv_future.empty:
+        inv_future.index = _ensure_naive_index(inv_future.index)
+        inv_future = inv_future.reindex(columns=skus, fill_value=0.0)
         inv_future = inv_future.sort_index()
         future_sales_from_inventory = (-inv_future.diff()).iloc[1:]
         if future_sales_from_inventory is not None and not future_sales_from_inventory.empty:
+            future_sales_from_inventory.index = _ensure_naive_index(future_sales_from_inventory.index)
             future_sales_from_inventory = future_sales_from_inventory.reindex(future_idx).fillna(0.0)
+            future_sales_from_inventory = future_sales_from_inventory.reindex(columns=skus, fill_value=0.0)
             future_sales_from_inventory = future_sales_from_inventory.clip(lower=0.0)
 
         inv_future_plot = inv_future.round(0)
+        inv_future_plot.index = _ensure_naive_index(inv_future_plot.index)
     else:
         inv_future_plot = None
 
@@ -334,13 +377,14 @@ def render_amazon_sales_vs_inventory(
     past_sales = sales.loc[sales.index <= today]
     # 실측 막대
     for sku in skus:
-        if sku not in past_sales.columns:
+        color = cmap.get(sku)
+        if color is None:
             continue
         fig.add_bar(
             name=f"{sku} 판매",
             x=past_sales.index,
             y=past_sales[sku],
-            marker_color=cmap[sku],
+            marker_color=color,
             opacity=0.95,
             hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
             yaxis="y",
@@ -354,12 +398,20 @@ def render_amazon_sales_vs_inventory(
             future_sales = pd.DataFrame(0.0, index=future_idx, columns=skus)
         else:
             future_sales = ma7.reindex(future_idx).fillna(method="ffill").fillna(0.0)
+        if not future_sales.empty:
+            future_sales.index = _ensure_naive_index(future_sales.index)
+            future_sales = future_sales.reindex(columns=skus, fill_value=0.0)
         for sku in skus:
+            if sku not in future_sales.columns:
+                continue
+            color = cmap.get(sku)
+            if color is None:
+                continue
             fig.add_bar(
                 name=f"{sku} 판매(예측)",
                 x=future_sales.index,
                 y=future_sales[sku],
-                marker_color=cmap[sku],
+                marker_color=color,
                 opacity=0.25,     # 같은 색, 낮은 불투명도
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
                 yaxis="y",
@@ -368,6 +420,8 @@ def render_amazon_sales_vs_inventory(
     # (2) 재고: SKU별 선(실선), 오늘 이후는 점선
     inv_past = inv.loc[inv.index <= today]
     inv_past_plot = inv_past.round(0)
+    if not inv_past_plot.empty:
+        inv_past_plot.index = _ensure_naive_index(inv_past_plot.index)
     for sku in skus:
         if sku in inv_past.columns:
             fig.add_trace(
@@ -384,13 +438,16 @@ def render_amazon_sales_vs_inventory(
     if inv_future_plot is not None and not inv_future_plot.empty:
         for sku in skus:
             if sku in inv_future_plot.columns:
+                color = cmap.get(sku)
+                if color is None:
+                    continue
                 fig.add_trace(
                     go.Scatter(
                         x=inv_future_plot.index,
                         y=inv_future_plot[sku],
                         name=f"{sku} 재고(예측)",
                         mode="lines",
-                        line=dict(color=cmap[sku], width=2, dash="dash", shape="hv"),
+                        line=dict(color=color, width=2, dash="dash", shape="hv"),
                         yaxis="y2",
                         hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
                     )
