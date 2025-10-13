@@ -323,7 +323,7 @@ def render_amazon_panel(
 
     # 1-1) 7일 MA 라인(선택)
     if ma7 is not None:
-        m_show = ma7.reindex(pd.date_range(start, end, freq="D")).fillna(None)
+        m_show = ma7.reindex(pd.date_range(start, end, freq="D")).astype(float)
         fig.add_trace(
             go.Scatter(
                 x=m_show.index, y=m_show.values,
