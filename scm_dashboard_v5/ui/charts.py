@@ -31,6 +31,134 @@ _AMAZON_PALETTE = [
 _PLOTLY_WARNING_EMITTED = False
 
 
+def _safe_dataframe(
+    df: Optional[pd.DataFrame],
+    *,
+    index: Optional[Sequence[pd.Timestamp]] = None,
+    columns: Optional[Sequence[str]] = None,
+    fill_value: float = 0.0,
+    dtype: type = float,
+) -> pd.DataFrame:
+    """Return a DataFrame that is always usable for downstream math/plotting."""
+
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame(dtype=dtype)
+
+    result = df.copy()
+
+    if columns is not None:
+        result = result.reindex(columns=list(columns), fill_value=fill_value)
+
+    if index is not None:
+        if not isinstance(index, pd.Index):
+            index = pd.Index(index)
+        result = result.reindex(index, fill_value=fill_value)
+
+    if result.empty and columns is not None:
+        result = pd.DataFrame([], columns=list(columns), dtype=dtype)
+
+    return result
+
+
+def _safe_series(obj: Optional[pd.Series | Iterable[float]], *, length_hint: int | None = None) -> pd.Series:
+    """Coerce arbitrary iterables into a Pandas Series for plotting."""
+
+    if isinstance(obj, pd.Series):
+        return obj
+
+    if obj is None:
+        data: List[float] = []
+    elif isinstance(obj, (pd.Index, np.ndarray)):
+        data = list(obj)
+    elif hasattr(obj, "tolist"):
+        data = list(obj.tolist())  # type: ignore[arg-type]
+    elif isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        data = list(obj)
+    else:
+        data = [obj] if obj is not None else []
+
+    if length_hint is not None and len(data) > length_hint:
+        data = data[:length_hint]
+
+    return pd.Series(data)
+
+
+def _to_plot_list(values: Optional[Iterable]) -> List:
+    """Convert arbitrary iterable values into a clean list for Plotly APIs."""
+
+    if values is None:
+        return []
+
+    if isinstance(values, (pd.Index, pd.Series)):
+        cleaned = values.dropna().tolist()
+    elif isinstance(values, np.ndarray):
+        cleaned = [v for v in values.tolist() if not pd.isna(v)]
+    elif isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        cleaned = [v for v in values if not pd.isna(v)]
+    else:
+        cleaned = [] if pd.isna(values) else [values]
+
+    return cleaned
+
+
+def _safe_add_bar(
+    fig: "go.Figure",
+    *,
+    x: Optional[Iterable],
+    y: Optional[Iterable],
+    name: str,
+    marker_color: Optional[str],
+    **kwargs: object,
+) -> None:
+    """Add a bar trace only when data is valid, preventing runtime TypeErrors."""
+
+    xs = _to_plot_list(x)
+    ys = _to_plot_list(y)
+
+    if not xs or not ys:
+        return
+
+    if marker_color is None:
+        return
+
+    if len(xs) != len(ys):
+        limit = min(len(xs), len(ys))
+        xs = xs[:limit]
+        ys = ys[:limit]
+
+    try:
+        fig.add_bar(x=xs, y=ys, name=name, marker_color=marker_color, **kwargs)
+    except Exception:  # pragma: no cover - plotting defensive guard
+        return
+
+
+def _safe_add_scatter(
+    fig: "go.Figure",
+    *,
+    x: Optional[Iterable],
+    y: Optional[Iterable],
+    name: str,
+    line: Optional[Dict[str, object]] = None,
+    yaxis: str = "y",
+    mode: str = "lines",
+    **kwargs: object,
+) -> None:
+    """Add a scatter trace only when data is valid."""
+
+    xs = _to_plot_list(x)
+    ys = _to_plot_list(y)
+
+    if not xs or not ys:
+        return
+
+    try:
+        fig.add_trace(
+            go.Scatter(x=xs, y=ys, name=name, mode=mode, line=line, yaxis=yaxis, **kwargs)
+        )
+    except Exception:  # pragma: no cover - plotting defensive guard
+        return
+
+
 def _as_naive_timestamp(value: pd.Timestamp | str | None) -> pd.Timestamp:
     """Return a timezone-naive timestamp for consistent comparisons."""
 
@@ -242,21 +370,27 @@ def render_amazon_sales_vs_inventory(
     cmap = _sku_colors(skus, base=color_map)
 
     # 판매(실측) 및 이동평균 (필터 lookback_days 반영)
-    sales = _sales_from_snapshot(snap_long, amz_centers, skus, start, end)
+    sales = _safe_dataframe(
+        _sales_from_snapshot(snap_long, amz_centers, skus, start, end),
+        columns=skus,
+    )
     if not sales.empty:
         sales.index = _ensure_naive_index(sales.index)
-    sales = sales.reindex(columns=skus, fill_value=0.0)
     ma_window = max(1, int(lookback_days))
     ma7 = sales.rolling(ma_window, min_periods=1).mean() if show_ma7 else None
-    if ma7 is not None and not ma7.empty:
-        ma7.index = _ensure_naive_index(ma7.index)
-        ma7 = ma7.reindex(columns=skus, fill_value=0.0)
+    if ma7 is not None:
+        ma7 = _safe_dataframe(ma7, columns=skus)
+        if not ma7.empty:
+            ma7.index = _ensure_naive_index(ma7.index)
+        else:
+            ma7 = None
 
     # 재고(실측)
-    inv = _inventory_matrix(snap_long, amz_centers, skus, start, end)
+    inv = _safe_dataframe(
+        _inventory_matrix(snap_long, amz_centers, skus, start, end), columns=skus
+    )
     if not inv.empty:
         inv.index = _ensure_naive_index(inv.index)
-        inv = inv.reindex(columns=skus, fill_value=0.0)
 
     future_idx = pd.date_range(today + pd.Timedelta(days=1), end, freq="D")
     if len(future_idx) > 0:
@@ -267,6 +401,7 @@ def render_amazon_sales_vs_inventory(
     timeline_pivot = _timeline_inventory_matrix(timeline, amz_centers, skus, start, end)
     if timeline_pivot is not None and not timeline_pivot.empty:
         timeline_pivot.index = _ensure_naive_index(timeline_pivot.index)
+        timeline_pivot = _safe_dataframe(timeline_pivot, columns=skus)
     anchor_date: Optional[pd.Timestamp] = None
     start_vector: Optional[pd.DataFrame] = None
 
@@ -292,41 +427,43 @@ def render_amazon_sales_vs_inventory(
                         trimmed = pd.concat([prev_row, trimmed])
 
                 if not trimmed.empty:
-                    inv_future = trimmed
+                    inv_future = _safe_dataframe(trimmed, columns=skus)
         if inv_future is None:
             # 오늘을 포함한 마지막 실측 값을 기준으로 이후 구간을 잇는다.
             if (inv.index <= today).any():
                 start_vector = inv.loc[inv.index <= today].iloc[[-1]].copy()
+                start_vector = _safe_dataframe(start_vector, columns=skus)
                 anchor_date = pd.Timestamp(start_vector.index[-1]).normalize()
                 start_vector.index = pd.DatetimeIndex([anchor_date])
         else:
             if anchor_date is None:
                 anchor_date = pd.Timestamp(today).normalize()
             if start_vector is None and inv_future is not None and not inv_future.empty:
-                inv_future = inv_future.copy()
+                inv_future = _safe_dataframe(inv_future.copy(), columns=skus)
                 inv_future.index = pd.to_datetime(inv_future.index).normalize()
                 if anchor_date in inv_future.index:
                     start_vector = inv_future.loc[[anchor_date]].copy()
                 else:
                     first_row = inv_future.iloc[[0]].copy()
+                    first_row = _safe_dataframe(first_row, columns=skus)
                     anchor_date = pd.Timestamp(first_row.index[0]).normalize()
                     first_row.index = pd.DatetimeIndex([anchor_date])
                     start_vector = first_row
-            if start_vector is None:
+            if start_vector is None and anchor_date is not None:
                 start_vector = pd.DataFrame(
                     [np.zeros(len(skus))],
                     columns=skus,
                     index=pd.DatetimeIndex([anchor_date]),
                 )
+            elif start_vector is None:
+                start_vector = _safe_dataframe(None, columns=skus)
 
         if anchor_date is not None and start_vector is not None:
             # 1) 데이터에 이미 미래 재고가 존재한다면 그대로 사용
             future_actual = inv.loc[inv.index > anchor_date]
             if not future_actual.empty:
-                inv_future = (
-                    pd.concat([start_vector, future_actual])
-                    .loc[anchor_date:]
-                    .reindex(columns=skus, fill_value=0.0)
+                inv_future = _safe_dataframe(
+                    pd.concat([start_vector, future_actual]).loc[anchor_date:], columns=skus
                 )
             else:
                 # 2) 미래 데이터가 없으면 MA7 소비량을 기반으로 점선 예측을 생성
@@ -348,25 +485,38 @@ def render_amazon_sales_vs_inventory(
                         forecast_step = daily.loc[d].reindex(skus, fill_value=0.0).values
                         cur = np.maximum(0.0, cur - forecast_step)
                         vals.append(cur.copy())
-                    inv_future = pd.concat(
-                        [start_vector, pd.DataFrame(vals, index=forecast_idx, columns=skus)]
+                    forecast_df = pd.DataFrame(vals, index=forecast_idx, columns=skus)
+                    inv_future = _safe_dataframe(
+                        pd.concat([start_vector, forecast_df]), columns=skus
                     )
         else:
             inv_future = None
+
+    if isinstance(inv_future, pd.DataFrame):
+        inv_future = _safe_dataframe(inv_future, columns=skus)
 
     if inv_future is not None and not inv_future.empty:
         inv_future.index = _ensure_naive_index(inv_future.index)
         inv_future = inv_future.reindex(columns=skus, fill_value=0.0)
         inv_future = inv_future.sort_index()
         future_sales_from_inventory = (-inv_future.diff()).iloc[1:]
-        if future_sales_from_inventory is not None and not future_sales_from_inventory.empty:
-            future_sales_from_inventory.index = _ensure_naive_index(future_sales_from_inventory.index)
-            future_sales_from_inventory = future_sales_from_inventory.reindex(future_idx).fillna(0.0)
-            future_sales_from_inventory = future_sales_from_inventory.reindex(columns=skus, fill_value=0.0)
-            future_sales_from_inventory = future_sales_from_inventory.clip(lower=0.0)
+        if future_sales_from_inventory is not None:
+            future_sales_from_inventory = _safe_dataframe(
+                future_sales_from_inventory, columns=skus, index=future_idx
+            )
+            if not future_sales_from_inventory.empty:
+                future_sales_from_inventory.index = _ensure_naive_index(
+                    future_sales_from_inventory.index
+                )
+                future_sales_from_inventory = future_sales_from_inventory.clip(lower=0.0)
+            else:
+                future_sales_from_inventory = None
 
-        inv_future_plot = inv_future.round(0)
-        inv_future_plot.index = _ensure_naive_index(inv_future_plot.index)
+        inv_future_plot = _safe_dataframe(inv_future.round(0), columns=skus)
+        if not inv_future_plot.empty:
+            inv_future_plot.index = _ensure_naive_index(inv_future_plot.index)
+        else:
+            inv_future_plot = None
     else:
         inv_future_plot = None
 
@@ -374,16 +524,19 @@ def render_amazon_sales_vs_inventory(
     fig = go.Figure()
 
     # (1) 판매: SKU별로 누적(bar)
-    past_sales = sales.loc[sales.index <= today]
+    past_sales = _safe_dataframe(sales.loc[sales.index <= today], columns=skus)
+    if not past_sales.empty:
+        past_sales.index = _ensure_naive_index(past_sales.index)
+
     # 실측 막대
     for sku in skus:
+        series = past_sales.get(sku)
         color = cmap.get(sku)
-        if color is None:
-            continue
-        fig.add_bar(
+        _safe_add_bar(
+            fig,
             name=f"{sku} 판매",
-            x=past_sales.index,
-            y=past_sales[sku],
+            x=past_sales.index if not past_sales.empty else None,
+            y=series,
             marker_color=color,
             opacity=0.95,
             hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
@@ -391,67 +544,73 @@ def render_amazon_sales_vs_inventory(
         )
     # 예측 막대(색상 동일, 투명도만 낮춤)
     if len(future_idx) > 0:
-        future_sales: pd.DataFrame
-        if future_sales_from_inventory is not None and not future_sales_from_inventory.empty:
-            future_sales = future_sales_from_inventory.reindex(future_idx).fillna(0.0)
-        elif ma7 is None:
-            future_sales = pd.DataFrame(0.0, index=future_idx, columns=skus)
-        else:
-            future_sales = ma7.reindex(future_idx).fillna(method="ffill").fillna(0.0)
-        if not future_sales.empty:
-            future_sales.index = _ensure_naive_index(future_sales.index)
-            future_sales = future_sales.reindex(columns=skus, fill_value=0.0)
-        for sku in skus:
-            if sku not in future_sales.columns:
-                continue
-            color = cmap.get(sku)
-            if color is None:
-                continue
-            fig.add_bar(
-                name=f"{sku} 판매(예측)",
-                x=future_sales.index,
-                y=future_sales[sku],
-                marker_color=color,
-                opacity=0.25,     # 같은 색, 낮은 불투명도
-                hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
-                yaxis="y",
+        future_sales: Optional[pd.DataFrame]
+        if future_sales_from_inventory is not None:
+            future_sales = _safe_dataframe(
+                future_sales_from_inventory, columns=skus, index=future_idx
             )
+        elif ma7 is not None:
+            future_sales = _safe_dataframe(
+                ma7.reindex(future_idx).ffill().fillna(0.0), columns=skus, index=future_idx
+            )
+        else:
+            future_sales = pd.DataFrame(0.0, index=future_idx, columns=skus)
+
+        future_sales = _safe_dataframe(future_sales, columns=skus, index=future_idx)
+        if future_sales.empty:
+            future_sales = None
+        else:
+            future_sales.index = _ensure_naive_index(future_sales.index)
+
+        if future_sales is not None:
+            for sku in skus:
+                series = future_sales.get(sku)
+                color = cmap.get(sku)
+                _safe_add_bar(
+                    fig,
+                    name=f"{sku} 판매(예측)",
+                    x=future_sales.index,
+                    y=series,
+                    marker_color=color,
+                    opacity=0.25,
+                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
+                    yaxis="y",
+                )
 
     # (2) 재고: SKU별 선(실선), 오늘 이후는 점선
-    inv_past = inv.loc[inv.index <= today]
-    inv_past_plot = inv_past.round(0)
-    if not inv_past_plot.empty:
+    inv_past = _safe_dataframe(inv.loc[inv.index <= today], columns=skus)
+    inv_past_plot = _safe_dataframe(inv_past.round(0), columns=skus)
+    if inv_past_plot.empty:
+        inv_past_plot = None
+    else:
         inv_past_plot.index = _ensure_naive_index(inv_past_plot.index)
+
     for sku in skus:
-        if sku in inv_past.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=inv_past_plot.index,
-                    y=inv_past_plot[sku],
-                    name=f"{sku} 재고(실측)",
-                    mode="lines",
-                    line=dict(color=cmap[sku], width=2, shape="hv"),
-                    yaxis="y2",
-                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
-                )
-            )
-    if inv_future_plot is not None and not inv_future_plot.empty:
+        color = cmap.get(sku)
+        series = inv_past_plot.get(sku) if inv_past_plot is not None else None
+        _safe_add_scatter(
+            fig,
+            x=inv_past_plot.index if inv_past_plot is not None else None,
+            y=series,
+            name=f"{sku} 재고(실측)",
+            line=dict(color=color, width=2, shape="hv") if color else None,
+            yaxis="y2",
+            hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
+        )
+
+    if inv_future_plot is not None:
         for sku in skus:
-            if sku in inv_future_plot.columns:
-                color = cmap.get(sku)
-                if color is None:
-                    continue
-                fig.add_trace(
-                    go.Scatter(
-                        x=inv_future_plot.index,
-                        y=inv_future_plot[sku],
-                        name=f"{sku} 재고(예측)",
-                        mode="lines",
-                        line=dict(color=color, width=2, dash="dash", shape="hv"),
-                        yaxis="y2",
-                        hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
-                    )
-                )
+            color = cmap.get(sku)
+            series = inv_future_plot.get(sku) if sku in inv_future_plot.columns else None
+            _safe_add_scatter(
+                fig,
+                x=inv_future_plot.index,
+                y=series,
+                name=f"{sku} 재고(예측)",
+                line=dict(color=color, width=2, dash="dash", shape="hv") if color else None,
+                yaxis="y2",
+                hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
+            )
 
     # (3) 오늘 기준선
     fig.add_vline(x=today, line_color="red", line_dash="dot", line_width=2)
