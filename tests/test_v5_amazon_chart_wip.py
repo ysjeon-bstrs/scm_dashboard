@@ -61,7 +61,28 @@ def test_render_amazon_sales_vs_inventory_adds_wip_trace(monkeypatch):
     assert "SKU1 생산중(WIP)" in trace_names
 
     wip_trace = next(tr for tr in fig.data if tr.name == "SKU1 생산중(WIP)")
-    assert list(wip_trace.y) == [20, 30, 10]
+    assert [round(v) for v in wip_trace.y] == [20, 30, 10]
+
+
+def test_render_amazon_sales_vs_inventory_handles_duplicate_sku_for_wip(monkeypatch):
+    captured = _capture_plot(monkeypatch)
+
+    charts.render_amazon_sales_vs_inventory(
+        snap_long=_sample_snapshot(),
+        centers=["AMZUS"],
+        skus=["SKU1", "SKU1"],
+        start=pd.Timestamp("2023-01-01"),
+        end=pd.Timestamp("2023-01-03"),
+        today=pd.Timestamp("2023-01-02"),
+        color_map={"SKU1": "#123456"},
+        show_ma7=False,
+        show_inventory_forecast=False,
+        timeline=_sample_timeline(),
+        show_wip=True,
+    )
+
+    fig = captured["fig"]
+    assert any(tr.name == "SKU1 생산중(WIP)" for tr in fig.data)
 
 
 def test_render_amazon_sales_vs_inventory_hides_wip_trace(monkeypatch):

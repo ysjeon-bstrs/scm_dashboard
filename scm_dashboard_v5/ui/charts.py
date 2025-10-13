@@ -631,14 +631,26 @@ def render_amazon_sales_vs_inventory(
                 series = wip_plot.get(sku)
                 if series is None:
                     continue
-                series_nonzero = pd.Series(series).fillna(0.0)
-                if not series_nonzero.any():
+                if isinstance(series, pd.DataFrame):
+                    if series.empty:
+                        continue
+                    # Duplicate columns for the same SKU can appear when the
+                    # selection contains repeated labels. Use the first column
+                    # to keep a 1‑dimensional series for plotting.
+                    series = series.iloc[:, 0]
+                if not isinstance(series, pd.Series):
+                    series = pd.Series(series, index=wip_plot.index)
+
+                series_numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+                values = series_numeric.to_numpy(dtype=float, copy=False)
+                if not np.isfinite(values).any() or not np.any(np.abs(values) > 0):
                     continue
+
                 color = cmap.get(sku)
                 _safe_add_scatter(
                     fig,
                     x=wip_plot.index,
-                    y=series,
+                    y=series_numeric,
                     name=f"{sku} 생산중(WIP)",
                     line=dict(color=color, width=1.8, dash="dot") if color else None,
                     yaxis="y2",
