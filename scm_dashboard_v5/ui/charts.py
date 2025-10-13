@@ -393,3 +393,99 @@ def render_step_chart(
     import streamlit as st
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
+# ===================== SKU Summary KPI Cards =====================
+import math
+from typing import List, Optional
+import pandas as pd
+import streamlit as st
+
+def _chunk_list(lst: List, n: int):
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
+
+def render_sku_summary_cards(
+    snap_long: pd.DataFrame,
+    centers_sel: List[str],
+    skus_sel: List[str],
+    title: Optional[str] = "요약 KPI",
+    cards_per_row: int = 4,
+):
+    """
+    최신 스냅샷 날짜의 '선택 센터×선택 SKU' 현재 재고를 카드로 표시.
+    - snap_long: long 형태 스냅샷 (date|snapshot_date, center, resource_code, stock_qty[, resource_name])
+    - centers_sel, skus_sel: 좌측 필터에서 넘어온 선택 목록
+    - title: 섹션 제목
+    """
+    if snap_long is None or snap_long.empty or not centers_sel or not skus_sel:
+        return
+
+    # --- 컬럼 정규화: date/snapshot_date 둘 다 지원 ---
+    cols = {str(c).strip().lower(): c for c in snap_long.columns}
+    date_col = cols.get("date") or cols.get("snapshot_date")
+    center_col = cols.get("center")
+    sku_col = cols.get("resource_code") or cols.get("sku")
+    qty_col = cols.get("stock_qty") or cols.get("qty") or cols.get("quantity")
+    name_col = cols.get("resource_name")  # 있을 수도/없을 수도
+
+    if not all([date_col, center_col, sku_col, qty_col]):
+        # 필수 컬럼이 없으면 조용히 빠져나감
+        return
+
+    df = snap_long.rename(columns={date_col: "date"}).copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df["center"] = df[center_col].astype(str)
+    df["resource_code"] = df[sku_col].astype(str)
+    df["stock_qty"] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
+    if name_col:
+        df["resource_name"] = df[name_col].astype(str).replace({"nan": ""}).str.strip()
+
+    # 최신 스냅샷 날짜 산출
+    latest_dt: pd.Timestamp = df["date"].max()
+    latest_dt_str = f"{latest_dt:%Y-%m-%d}" if pd.notna(latest_dt) else ""
+
+    # 선택 필터 적용 (센터/스쿠)
+    latest_rows = df[
+        (df["date"] == latest_dt) &
+        (df["center"].isin(centers_sel)) &
+        (df["resource_code"].isin(skus_sel))
+    ].copy()
+
+    # SKU별 합계(센터 합산)
+    sku_totals = (
+        latest_rows.groupby("resource_code", as_index=False)["stock_qty"].sum()
+        .set_index("resource_code")["stock_qty"]
+        .to_dict()
+    )
+
+    # SKU별 최신 품명(있으면)
+    sku_names = {}
+    if "resource_name" in df.columns:
+        # 날짜 최신 우선으로 이름 채택
+        tmp = (
+            df[df["resource_code"].isin(skus_sel)]
+            .sort_values(["resource_code", "date"])
+            .dropna(subset=["resource_code"])
+        )
+        sku_names = (
+            tmp.dropna(subset=["resource_name"])
+               .groupby("resource_code")["resource_name"]
+               .last()
+               .to_dict()
+        )
+
+    # --- 렌더링 ---
+    if title:
+        st.subheader(title)
+
+    # 4개씩 카드 행 구성
+    for block in _chunk_list(skus_sel, cards_per_row):
+        cols = st.columns(len(block))
+        for i, sku in enumerate(block):
+            val = int(sku_totals.get(sku, 0))
+            nm  = sku_names.get(sku, "").strip()
+            # 라벨: (품명 있으면 위, 그 아래 SKU+스냅샷일)
+            if nm:
+                label = f"{nm}\n{sku} 현재 재고(스냅샷 {latest_dt_str})"
+            else:
+                label = f"{sku} 현재 재고(스냅샷 {latest_dt_str})"
+            cols[i].metric(label, f"{val:,}")
