@@ -69,3 +69,12 @@ def render_amazon_sales_vs_inventory(*args: Any, **kwargs: Any) -> None:
     if charts is None:
         return
     charts.render_amazon_sales_vs_inventory(*args, **kwargs)
+
+
+def render_amazon_panel(*args: Any, **kwargs: Any) -> None:
+    """Proxy to the Amazon summary panel renderer."""
+
+    charts = _load_charts_module()
+    if charts is None:
+        return
+    charts.render_amazon_panel(*args, **kwargs)
