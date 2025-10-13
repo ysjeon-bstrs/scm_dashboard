@@ -1,8 +1,40 @@
-"""KPI rendering helpers for the Streamlit dashboard."""
+"""KPI rendering helpers for the Streamlit dashboard.
+
+This module now renders KPI cards with a responsive grid layout so that
+metrics automatically wrap when the available width becomes narrow.  The
+``render_sku_summary_cards`` helper can be called directly in a Streamlit app:
+
+.. code-block:: python
+
+    import pandas as pd
+    import streamlit as st
+
+    from scm_dashboard_v5.ui.kpi import render_sku_summary_cards
+
+    st.set_page_config(layout="wide")
+
+    snapshot_df = pd.read_csv("snapshot.csv")
+    moves_df = pd.read_csv("moves.csv")
+    today = pd.Timestamp.today()
+
+    render_sku_summary_cards(
+        snapshot_df,
+        moves_df,
+        centers=["Amazon US", "태광KR"],
+        skus=["BA00021"],
+        today=today,
+        lag_days=7,
+        chunk_size=3,
+    )
+
+The responsive layout removes the need to manually adjust column counts for
+different viewport sizes.
+"""
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Sequence
+import html
+from typing import Mapping, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -10,9 +42,387 @@ import streamlit as st
 from scm_dashboard_v5.analytics import kpi_breakdown_per_sku
 
 
-def _chunked(items: Sequence[str], size: int) -> Iterable[Sequence[str]]:
-    for idx in range(0, len(items), size):
-        yield items[idx : idx + size]
+def _escape(value: object) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def _format_number(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float) and pd.isna(value):
+        return "-"
+    try:
+        return f"{int(round(float(value))):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_days(value: float | None) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "-"
+    if value < 0:
+        value = 0.0
+    if value >= 100:
+        return f"{int(round(value))}일"
+    return f"{value:.1f}일"
+
+
+def _format_date(value: pd.Timestamp | None) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "-"
+    if pd.isna(value):
+        return "-"
+    return f"{pd.to_datetime(value):%Y-%m-%d}"
+
+
+def _calculate_coverage_days(current_qty: float | int | None, daily_demand: float | int | None) -> float | None:
+    if current_qty is None:
+        return None
+    if isinstance(current_qty, float) and pd.isna(current_qty):
+        return None
+    if daily_demand is None or (isinstance(daily_demand, float) and pd.isna(daily_demand)):
+        return None
+    try:
+        current_val = float(current_qty)
+        demand_val = float(daily_demand)
+    except (TypeError, ValueError):
+        return None
+    if demand_val <= 0:
+        return None
+    if current_val <= 0:
+        return 0.0
+    return current_val / demand_val
+
+
+def _calculate_sellout_date(today: pd.Timestamp, coverage_days: float | None) -> pd.Timestamp | None:
+    if coverage_days is None or (isinstance(coverage_days, float) and pd.isna(coverage_days)):
+        return None
+    coverage = max(float(coverage_days), 0.0)
+    return pd.to_datetime(today) + pd.to_timedelta(coverage, unit="D")
+
+
+def _should_show_in_transit(center: str, in_transit_value: int) -> bool:
+    center_name = str(center).replace(" ", "").lower()
+    if any(keyword in center_name for keyword in ["태광", "taekwang", "tae-kwang"]):
+        return in_transit_value > 0
+    return True
+
+
+def _inject_responsive_styles() -> None:
+    """Inject shared CSS styles for responsive KPI cards."""
+
+    style_key = "_kpi_responsive_styles"
+    if st.session_state.get(style_key):
+        return
+
+    st.markdown(
+        """
+        <style>
+        :root {
+            --kpi-card-border: rgba(49, 51, 63, 0.2);
+            --kpi-card-radius: 0.75rem;
+            --kpi-card-padding: 0.85rem 1rem;
+        }
+
+        .kpi-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(var(--min-card-width, 280px), 1fr));
+            gap: 0.75rem;
+            align-items: stretch;
+        }
+
+        .kpi-sku-card {
+            border: 1px solid var(--kpi-card-border);
+            border-radius: var(--kpi-card-radius);
+            padding: var(--kpi-card-padding);
+            background-color: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 8px 16px rgba(49, 51, 63, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 0.9rem;
+        }
+
+        .kpi-sku-title {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem 0.75rem;
+            align-items: baseline;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .kpi-sku-code {
+            font-family: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                "Liberation Mono", "Courier New", monospace;
+            font-size: 0.85rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 0.4rem;
+            background-color: rgba(49, 51, 63, 0.08);
+        }
+
+        .kpi-section-title {
+            font-weight: 600;
+            margin-top: 0.25rem;
+        }
+
+        .kpi-metric-card {
+            border: 1px solid var(--kpi-card-border);
+            border-radius: 0.65rem;
+            padding: 0.75rem 0.85rem;
+            background: rgba(250, 250, 251, 0.9);
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            min-height: 100%;
+        }
+
+        .kpi-metric-card--compact {
+            padding: 0.6rem 0.75rem;
+        }
+
+        .kpi-metric-label {
+            font-size: 0.85rem;
+            color: rgba(49, 51, 63, 0.75);
+            white-space: normal;
+        }
+
+        .kpi-metric-value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            white-space: normal;
+            word-break: keep-all;
+        }
+
+        .kpi-center-card {
+            border: 1px solid var(--kpi-card-border);
+            border-radius: 0.65rem;
+            padding: 0.8rem 0.9rem;
+            background-color: rgba(255, 255, 255, 0.85);
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+        }
+
+        .kpi-center-title {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .kpi-grid--summary {
+            --min-card-width: 180px;
+        }
+
+        .kpi-grid--centers {
+            --min-card-width: 260px;
+        }
+
+        .kpi-grid--sku {
+            --min-card-width: 320px;
+        }
+
+        .kpi-grid--compact {
+            --min-card-width: 150px;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .kpi-sku-card,
+            .kpi-center-card,
+            .kpi-metric-card {
+                background-color: rgba(13, 17, 23, 0.55);
+                border-color: rgba(250, 250, 251, 0.15);
+            }
+
+            .kpi-metric-label {
+                color: rgba(250, 250, 251, 0.75);
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state[style_key] = True
+
+
+def _build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
+    classes = ["kpi-metric-card"]
+    if compact:
+        classes.append("kpi-metric-card--compact")
+    return (
+        f'<div class="{" ".join(classes)}">'
+        f'<div class="kpi-metric-label">{_escape(label)}</div>'
+        f'<div class="kpi-metric-value">{_escape(value)}</div>'
+        "</div>"
+    )
+
+
+def _build_grid(items: Sequence[str], *, min_width: int | None = None, extra_class: str = "") -> str:
+    if not items:
+        return ""
+    classes = ["kpi-card-grid"]
+    if extra_class:
+        classes.append(extra_class)
+    style = ""
+    if min_width is not None:
+        style = f' style="--min-card-width: {int(min_width)}px;"'
+    return f'<div class="{" ".join(classes)}"{style}>' + "".join(items) + "</div>"
+
+
+def _build_center_card(center_info: Mapping[str, object]) -> str:
+    inventory_cards = [
+        _build_metric_card("재고", _format_number(center_info["current"]), compact=True),
+        _build_metric_card(
+            "이동중",
+            _format_number(center_info["in_transit"]) if center_info["show_in_transit"] else "-",
+            compact=True,
+        ),
+        _build_metric_card("생산중", _format_number(center_info["wip"]), compact=True),
+    ]
+    coverage_cards = [
+        _build_metric_card("예상 소진일수", _format_days(center_info["coverage"]), compact=True),
+        _build_metric_card("소진 예상일", _format_date(center_info["sellout_date"]), compact=True),
+    ]
+    inventory_html = _build_grid(inventory_cards, extra_class="kpi-grid--compact")
+    coverage_html = _build_grid(coverage_cards, extra_class="kpi-grid--compact")
+    return (
+        '<div class="kpi-center-card">'
+        f'<div class="kpi-center-title">{_escape(center_info["center"])}</div>'
+        f"{inventory_html}{coverage_html}"
+        "</div>"
+    )
+
+
+def _extract_daily_demand(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    if frame.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    candidates = [
+        "forecast_daily_qty",
+        "forecast_daily_sales",
+        "expected_daily_sales",
+        "daily_sales",
+        "daily_demand",
+        "avg_daily_sales",
+        "average_daily_sales",
+        "sales_avg_daily",
+    ]
+
+    for column in candidates:
+        if column not in frame.columns:
+            continue
+        demand_values = pd.to_numeric(frame[column], errors="coerce")
+        if demand_values.notna().any():
+            demand_frame = frame.assign(_demand=demand_values)
+            demand_series = (
+                demand_frame.dropna(subset=["_demand"])
+                .groupby(["resource_code", "center"])["_demand"]
+                .mean()
+            )
+            total_series = demand_series.groupby(level=0).sum()
+            return demand_series, total_series
+
+    empty = pd.Series(dtype=float)
+    return empty, empty
+
+
+def _movement_breakdown_per_center(
+    moves: pd.DataFrame,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    today: pd.Timestamp,
+    lag_days: int,
+) -> tuple[pd.Series, pd.Series]:
+    if moves is None or moves.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    required_columns = {"resource_code", "to_center", "qty_ea"}
+    if not required_columns.issubset(moves.columns):
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    mv = moves.copy()
+    mv["qty_ea"] = pd.to_numeric(mv["qty_ea"], errors="coerce").fillna(0)
+    mv = mv[mv["qty_ea"] != 0]
+
+    if mv.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    centers_set = {str(center) for center in centers}
+    skus_set = {str(sku) for sku in skus}
+    mv = mv[mv["to_center"].isin(centers_set) & mv["resource_code"].isin(skus_set)]
+
+    if mv.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+
+    pred_end = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+    if "inbound_date" in mv.columns:
+        inbound_mask = mv["inbound_date"].notna()
+        pred_end.loc[inbound_mask] = mv.loc[inbound_mask, "inbound_date"]
+    else:
+        inbound_mask = pd.Series(False, index=mv.index)
+
+    if "arrival_date" in mv.columns:
+        arrival_mask = (~inbound_mask) & mv["arrival_date"].notna()
+        if arrival_mask.any():
+            past_arrival = arrival_mask & (mv["arrival_date"] <= today)
+            pred_end.loc[past_arrival] = mv.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=lag_days)
+
+            future_arrival = arrival_mask & (mv["arrival_date"] > today)
+            pred_end.loc[future_arrival] = mv.loc[future_arrival, "arrival_date"]
+
+    pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
+    mv["pred_end_date"] = pred_end
+
+    carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else ""
+
+    in_transit_series = pd.Series(dtype=float)
+    if "onboard_date" in mv.columns:
+        in_transit_mask = mv["onboard_date"].notna() & (mv["onboard_date"] <= today) & (today < mv["pred_end_date"])
+        if "carrier_mode" in mv.columns:
+            in_transit_mask &= carrier_mode != "WIP"
+        if in_transit_mask.any():
+            in_transit_series = (
+                mv[in_transit_mask]
+                .groupby(["resource_code", "to_center"], as_index=True)["qty_ea"]
+                .sum()
+            )
+
+    wip_series = pd.Series(dtype=float)
+    if "carrier_mode" in mv.columns and (carrier_mode == "WIP").any():
+        wip_frame = mv[carrier_mode == "WIP"].copy()
+        if not wip_frame.empty and "onboard_date" in wip_frame.columns:
+            add = (
+                wip_frame.dropna(subset=["onboard_date"])
+                .set_index(["resource_code", "to_center", "onboard_date"])["qty_ea"]
+            )
+            rem = pd.Series(dtype=float)
+            if "event_date" in wip_frame.columns:
+                rem = (
+                    wip_frame.dropna(subset=["event_date"])
+                    .set_index(["resource_code", "to_center", "event_date"])["qty_ea"]
+                    * -1
+                )
+            flow = pd.concat([add, rem]) if not rem.empty else add
+            flow = flow.groupby(level=[0, 1, 2]).sum()
+            flow = flow[flow.index.get_level_values(2) <= today]
+            if not flow.empty:
+                wip_series = (
+                    flow.groupby(level=[0, 1])
+                    .cumsum()
+                    .groupby(level=[0, 1])
+                    .last()
+                    .clip(lower=0)
+                )
+
+    if not in_transit_series.empty:
+        in_transit_series = in_transit_series.clip(lower=0).round().astype(int)
+    if not wip_series.empty:
+        wip_series = wip_series.clip(lower=0).round().astype(int)
+
+    return in_transit_series, wip_series
 
 
 def render_sku_summary_cards(
@@ -121,23 +531,117 @@ def render_sku_summary_cards(
 
     kpi_df.index = kpi_df.index.astype(str)
 
-    for group in _chunked(sku_list, max(1, chunk_size)):
-        cols = st.columns(len(group))
-        for idx, sku in enumerate(group):
-            with cols[idx].container(border=True):
-                display_name = name_map.get(sku, "") if isinstance(name_map, Mapping) else ""
-                if display_name:
-                    st.markdown(f"**{display_name}**  \\\n`{sku}`")
-                else:
-                    st.markdown(f"`{sku}`")
-                c1, c2, c3 = st.columns(3)
-                current_val = int(kpi_df.at[sku, "current"]) if sku in kpi_df.index else 0
-                transit_val = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
-                wip_val = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
-                c1.metric("현재 재고", f"{current_val:,}")
-                c2.metric("이동중", f"{transit_val:,}")
-                c3.metric("생산중", f"{wip_val:,}")
+    latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
+    today_dt = pd.to_datetime(today).normalize()
 
+    latest_snapshot_rows = filtered_snapshot[filtered_snapshot["date"] == latest_snapshot_dt].copy()
+    if "stock_qty" in latest_snapshot_rows.columns:
+        latest_snapshot_rows["stock_qty"] = pd.to_numeric(
+            latest_snapshot_rows["stock_qty"], errors="coerce"
+        )
+
+    current_by_center = (
+        latest_snapshot_rows.groupby(["resource_code", "center"])["stock_qty"].sum()
+        if "stock_qty" in latest_snapshot_rows.columns
+        else pd.Series(dtype=float)
+    )
+    current_totals = (
+        current_by_center.groupby(level=0).sum()
+        if not current_by_center.empty
+        else pd.Series(dtype=float)
+    )
+
+    daily_demand_series, total_demand_series = _extract_daily_demand(latest_snapshot_rows)
+
+    in_transit_series, wip_series = _movement_breakdown_per_center(
+        moves_view,
+        centers_list,
+        sku_list,
+        today_dt,
+        int(lag_days),
+    )
+
+    _inject_responsive_styles()
+
+    sku_cards_html: list[str] = []
+    sku_min_width = max(280, int(1024 / max(chunk_size, 1))) if chunk_size else 320
+
+    for sku in sku_list:
+        display_name = name_map.get(sku, "") if isinstance(name_map, Mapping) else ""
+
+        base_current = kpi_df.at[sku, "current"] if sku in kpi_df.index else 0
+        total_current = int(current_totals.get(sku, base_current) or base_current)
+        total_transit = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
+        total_wip = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
+        total_demand = float(total_demand_series.get(sku, 0.0))
+        total_coverage = _calculate_coverage_days(total_current, total_demand)
+        total_sellout_date = _calculate_sellout_date(today_dt, total_coverage)
+
+        summary_cards = [
+            _build_metric_card("전체 센터 재고", _format_number(total_current)),
+            _build_metric_card("전체 이동중", _format_number(total_transit)),
+            _build_metric_card("전체 생산중", _format_number(total_wip)),
+            _build_metric_card("예상 소진일수", _format_days(total_coverage)),
+            _build_metric_card("소진 예상일", _format_date(total_sellout_date)),
+        ]
+        summary_html = _build_grid(summary_cards, extra_class="kpi-grid--summary")
+
+        center_cards: list[str] = []
+        for center in centers_list:
+            center_current = (
+                int(current_by_center.get((sku, center), 0)) if not current_by_center.empty else 0
+            )
+            center_transit = (
+                int(in_transit_series.get((sku, center), 0)) if not in_transit_series.empty else 0
+            )
+            center_wip = int(wip_series.get((sku, center), 0)) if not wip_series.empty else 0
+            center_demand = float(daily_demand_series.get((sku, center), float("nan")))
+            center_coverage = _calculate_coverage_days(center_current, center_demand)
+            center_sellout_date = _calculate_sellout_date(today_dt, center_coverage)
+            center_cards.append(
+                _build_center_card(
+                    {
+                        "center": center,
+                        "current": center_current,
+                        "in_transit": center_transit,
+                        "wip": center_wip,
+                        "coverage": center_coverage,
+                        "sellout_date": center_sellout_date,
+                        "show_in_transit": _should_show_in_transit(center, center_transit),
+                    }
+                )
+            )
+
+        centers_html = _build_grid(center_cards, extra_class="kpi-grid--centers")
+
+        if display_name:
+            title_html = (
+                '<div class="kpi-sku-title">'
+                f"{_escape(display_name)} "
+                f'<span class="kpi-sku-code">{_escape(sku)}</span>'
+                "</div>"
+            )
+        else:
+            title_html = (
+                '<div class="kpi-sku-title">'
+                f'<span class="kpi-sku-code">{_escape(sku)}</span>'
+                "</div>"
+            )
+
+        centers_section = (
+            '<div class="kpi-section-title">센터별 상세</div>' + centers_html if centers_html else ""
+        )
+
+        sku_cards_html.append(
+            '<div class="kpi-sku-card">'
+            + title_html
+            + summary_html
+            + centers_section
+            + "</div>"
+        )
+
+    cards_html = _build_grid(sku_cards_html, min_width=sku_min_width, extra_class="kpi-grid--sku")
+    st.markdown(cards_html, unsafe_allow_html=True)
     st.caption(
         f"※ {pd.to_datetime(latest_snapshot).normalize():%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다."
     )
