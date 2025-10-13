@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Sequence
+
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from scm_dashboard_v5.ui.kpi import render_sku_summary_cards as _render_sku_summary_cards
+
 # ---------------- Palette (SKU -> Color) ----------------
 # 계단식 차트와 최대한 비슷한 톤(20+색)
-_PALETTE = [
+_AMAZON_PALETTE = [
     "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
     "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
     "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
@@ -22,7 +26,7 @@ def _sku_colors(skus: Sequence[str], base: Optional[Dict[str, str]] = None) -> D
     i = 0
     for s in skus:
         if s not in cmap:
-            cmap[s] = _PALETTE[i % len(_PALETTE)]
+            cmap[s] = _AMAZON_PALETTE[i % len(_AMAZON_PALETTE)]
             i += 1
     return cmap
 
@@ -108,7 +112,7 @@ def _inventory_matrix(
     return pv
 
 # ---------------- Public renderer ----------------
-def render_amazon_panel(
+def render_amazon_sales_vs_inventory(
     snap_long: pd.DataFrame,
     centers: Sequence[str],
     skus: Sequence[str],
@@ -154,7 +158,11 @@ def render_amazon_panel(
     future_idx = pd.date_range(today + pd.Timedelta(days=1), end, freq="D")
     inv_future = None
     if len(future_idx) > 0:
-        start_vector = inv.loc[inv.index <= today].iloc[[-1]].copy() if (inv.index <= today).any() else pd.DataFrame([np.zeros(len(skus))], columns=skus)
+        start_vector = (
+            inv.loc[inv.index <= today].iloc[[-1]].copy()
+            if (inv.index <= today).any()
+            else pd.DataFrame([np.zeros(len(skus))], columns=skus)
+        )
         if ma7 is None or ma7.empty:
             daily = pd.DataFrame(0, index=future_idx, columns=skus)
         else:
@@ -249,14 +257,15 @@ def render_amazon_panel(
     # 안내문(상단 설명을 그림 안에 넣지 않아 제목 겹침 방지)
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
-# --- STEP CHART (v5_main이 호출하는 공개 API) ---------------------------------
-import numpy as np
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 
+def render_amazon_panel(*args: object, **kwargs: object) -> None:
+    """Backward-compatible alias for :func:`render_amazon_sales_vs_inventory`."""
+
+    render_amazon_sales_vs_inventory(*args, **kwargs)
+
+# --- STEP CHART (v5_main이 호출하는 공개 API) ---------------------------------
 # 충분히 긴 팔레트 (SKU별 고정색)
-_PALETTE = [
+_STEP_PALETTE = [
     "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
     "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
     "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
@@ -272,7 +281,7 @@ def _sku_color_map(labels: list[str]) -> dict[str, str]:
     for lb in labels:
         sku = lb.split(" @ ", 1)[0] if " @ " in lb else lb
         if sku not in m:
-            m[sku] = _PALETTE[i % len(_PALETTE)]
+            m[sku] = _STEP_PALETTE[i % len(_STEP_PALETTE)]
             i += 1
     return m
 
@@ -295,7 +304,6 @@ def render_step_chart(
     timeline: columns=[date, center, resource_code, stock_qty] (apply_consumption_with_events 반영 가능)
     """
     if timeline is None or timeline.empty:
-        import streamlit as st
         st.info("타임라인 데이터가 없습니다.")
         return
 
@@ -318,7 +326,6 @@ def render_step_chart(
         df = df[df["resource_code"].astype(str).isin(skus)]
 
     if df.empty:
-        import streamlit as st
         st.info("선택 조건에 해당하는 라인이 없습니다.")
         return
 
@@ -343,7 +350,7 @@ def render_step_chart(
     for tr in fig.data:
         name = tr.name or ""
         sku, center = (name.split(" @ ", 1) + [""])[:2]
-        color = sku_colors.get(sku, _PALETTE[0])
+        color = sku_colors.get(sku, _STEP_PALETTE[0])
 
         # 상태/센터별 선 스타일
         if center in ("In-Transit", "WIP"):
@@ -390,102 +397,11 @@ def render_step_chart(
     )
 
     # 라벨 겹침 완화: 상단 캡션으로 설명 이동 (Streamlit UI에서 처리)
-    import streamlit as st
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
-# ===================== SKU Summary KPI Cards =====================
-import math
-from typing import List, Optional
-import pandas as pd
-import streamlit as st
 
-def _chunk_list(lst: List, n: int):
-    for i in range(0, len(lst), n):
-        yield lst[i:i+n]
+def render_sku_summary_cards(*args: object, **kwargs: object):
+    """Expose the KPI card renderer via this module for compatibility."""
 
-def render_sku_summary_cards(
-    snap_long: pd.DataFrame,
-    centers_sel: List[str],
-    skus_sel: List[str],
-    title: Optional[str] = "요약 KPI",
-    cards_per_row: int = 4,
-):
-    """
-    최신 스냅샷 날짜의 '선택 센터×선택 SKU' 현재 재고를 카드로 표시.
-    - snap_long: long 형태 스냅샷 (date|snapshot_date, center, resource_code, stock_qty[, resource_name])
-    - centers_sel, skus_sel: 좌측 필터에서 넘어온 선택 목록
-    - title: 섹션 제목
-    """
-    if snap_long is None or snap_long.empty or not centers_sel or not skus_sel:
-        return
+    return _render_sku_summary_cards(*args, **kwargs)
 
-    # --- 컬럼 정규화: date/snapshot_date 둘 다 지원 ---
-    cols = {str(c).strip().lower(): c for c in snap_long.columns}
-    date_col = cols.get("date") or cols.get("snapshot_date")
-    center_col = cols.get("center")
-    sku_col = cols.get("resource_code") or cols.get("sku")
-    qty_col = cols.get("stock_qty") or cols.get("qty") or cols.get("quantity")
-    name_col = cols.get("resource_name")  # 있을 수도/없을 수도
-
-    if not all([date_col, center_col, sku_col, qty_col]):
-        # 필수 컬럼이 없으면 조용히 빠져나감
-        return
-
-    df = snap_long.rename(columns={date_col: "date"}).copy()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
-    df["center"] = df[center_col].astype(str)
-    df["resource_code"] = df[sku_col].astype(str)
-    df["stock_qty"] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
-    if name_col:
-        df["resource_name"] = df[name_col].astype(str).replace({"nan": ""}).str.strip()
-
-    # 최신 스냅샷 날짜 산출
-    latest_dt: pd.Timestamp = df["date"].max()
-    latest_dt_str = f"{latest_dt:%Y-%m-%d}" if pd.notna(latest_dt) else ""
-
-    # 선택 필터 적용 (센터/스쿠)
-    latest_rows = df[
-        (df["date"] == latest_dt) &
-        (df["center"].isin(centers_sel)) &
-        (df["resource_code"].isin(skus_sel))
-    ].copy()
-
-    # SKU별 합계(센터 합산)
-    sku_totals = (
-        latest_rows.groupby("resource_code", as_index=False)["stock_qty"].sum()
-        .set_index("resource_code")["stock_qty"]
-        .to_dict()
-    )
-
-    # SKU별 최신 품명(있으면)
-    sku_names = {}
-    if "resource_name" in df.columns:
-        # 날짜 최신 우선으로 이름 채택
-        tmp = (
-            df[df["resource_code"].isin(skus_sel)]
-            .sort_values(["resource_code", "date"])
-            .dropna(subset=["resource_code"])
-        )
-        sku_names = (
-            tmp.dropna(subset=["resource_name"])
-               .groupby("resource_code")["resource_name"]
-               .last()
-               .to_dict()
-        )
-
-    # --- 렌더링 ---
-    if title:
-        st.subheader(title)
-
-    # 4개씩 카드 행 구성
-    for block in _chunk_list(skus_sel, cards_per_row):
-        cols = st.columns(len(block))
-        for i, sku in enumerate(block):
-            val = int(sku_totals.get(sku, 0))
-            nm  = sku_names.get(sku, "").strip()
-            # 라벨: (품명 있으면 위, 그 아래 SKU+스냅샷일)
-            if nm:
-                label = f"{nm}\n{sku} 현재 재고(스냅샷 {latest_dt_str})"
-            else:
-                label = f"{sku} 현재 재고(스냅샷 {latest_dt_str})"
-            cols[i].metric(label, f"{val:,}")
