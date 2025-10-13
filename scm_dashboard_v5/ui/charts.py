@@ -248,3 +248,128 @@ def render_amazon_panel(
 
     # 안내문(상단 설명을 그림 안에 넣지 않아 제목 겹침 방지)
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+
+# --- STEP CHART (v5_main이 호출하는 공개 API) ---------------------------------
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+# 충분히 긴 팔레트 (SKU별 고정색)
+_PALETTE = [
+    "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
+    "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
+    "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
+    "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
+    "#8DD3C7","#FFFFB3","#BEBADA","#FB8072","#80B1D3",
+    "#FDB462","#B3DE69","#FCCDE5","#D9D9D9","#BC80BD",
+    "#CCEBC5","#FFED6F"
+]
+
+def _sku_color_map(labels: list[str]) -> dict[str, str]:
+    """'SKU @ Center' 라벨들에서 SKU만 뽑아 SKU별 색을 고정 매핑."""
+    m, i = {}, 0
+    for lb in labels:
+        sku = lb.split(" @ ", 1)[0] if " @ " in lb else lb
+        if sku not in m:
+            m[sku] = _PALETTE[i % len(_PALETTE)]
+            i += 1
+    return m
+
+def render_step_chart(
+    timeline: pd.DataFrame,
+    *,
+    centers: list[str] | None = None,
+    skus: list[str] | None = None,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp | None = None,
+    horizon_days: int = 0,
+    show_in_transit: bool = True,
+    show_wip: bool = True,
+    title: str = "선택한 SKU × 센터(및 In‑Transit/WIP) 계단식 재고 흐름",
+    **_
+) -> None:
+    """
+    v5_main에서 그대로 호출하는 공개 API.
+    timeline: columns=[date, center, resource_code, stock_qty] (apply_consumption_with_events 반영 가능)
+    """
+    if timeline is None or timeline.empty:
+        import streamlit as st
+        st.info("타임라인 데이터가 없습니다.")
+        return
+
+    df = timeline.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+
+    # 기간 슬라이스
+    df = df[(df["date"] >= pd.to_datetime(start).normalize()) &
+            (df["date"] <= pd.to_datetime(end).normalize())]
+
+    # In‑Transit / WIP 노출 옵션
+    if not show_in_transit:
+        df = df[df["center"] != "In-Transit"]
+    if not show_wip:
+        df = df[df["center"] != "WIP"]
+
+    if centers:
+        df = df[df["center"].astype(str).isin(centers)]
+    if skus:
+        df = df[df["resource_code"].astype(str).isin(skus)]
+
+    if df.empty:
+        import streamlit as st
+        st.info("선택 조건에 해당하는 라인이 없습니다.")
+        return
+
+    # 라벨 생성: SKU @ Center
+    df = df.copy()
+    df["label"] = df["resource_code"] + " @ " + df["center"].astype(str)
+
+    # 기본 step line
+    fig = px.line(
+        df.sort_values(["label","date"]),
+        x="date", y="stock_qty", color="label",
+        line_shape="hv", render_mode="svg",
+        title=title
+    )
+    fig.update_traces(
+        mode="lines",
+        hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>"
+    )
+
+    # SKU별 고정 색, 상태(In‑Transit/WIP) 별 스타일
+    sku_colors = _sku_color_map([t.name for t in fig.data])
+    for tr in fig.data:
+        name = tr.name or ""
+        sku, center = (name.split(" @ ", 1) + [""])[:2]
+        color = sku_colors.get(sku, _PALETTE[0])
+
+        # 상태/센터별 선 스타일
+        if center in ("In-Transit", "WIP"):
+            tr.update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
+        else:
+            tr.update(line=dict(color=color, dash="solid", width=2.2), opacity=0.95)
+
+    # 오늘 세로선
+    if today is not None:
+        t = pd.to_datetime(today).normalize()
+        fig.add_vline(
+            x=t, line_color="crimson", line_dash="dot", line_width=1.5,
+            annotation_text="오늘", annotation_position="top",
+            annotation=dict(font=dict(color="crimson"))
+        )
+
+    fig.update_layout(
+        hovermode="x unified",
+        xaxis_title="날짜",
+        yaxis_title="재고 (EA)",
+        legend_title_text="SKU @ Center / In‑Transit / WIP",
+        margin=dict(l=10, r=10, t=60, b=10),
+        height=520,
+    )
+
+    # 라벨 겹침 완화: 상단 캡션으로 설명 이동 (Streamlit UI에서 처리)
+    import streamlit as st
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+
