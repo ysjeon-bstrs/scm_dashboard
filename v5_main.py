@@ -20,8 +20,11 @@ from scm_dashboard_v4.processing import (
 
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
-from scm_dashboard_v5.ui import render_step_chart, render_sku_summary_cards
-from scm_dashboard_v5.ui.charts import render_amazon_panel
+from scm_dashboard_v5.ui import (
+    render_amazon_sales_vs_inventory,
+    render_step_chart,
+    render_sku_summary_cards,
+)
 
 
 def _validate_timeline_inputs(
