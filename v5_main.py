@@ -402,25 +402,30 @@ def main() -> None:
         show_in_transit=show_transit,
         today=today_norm,
     )
-# -------------------- Amazon US sales vs. inventory --------------------
+    # -------------------- Amazon US sales vs. inventory --------------------
+    # 선택한 센터 중 AMZ/AMAZON만 추출 (없으면 스냅샷에서 자동 감지)
     amazon_candidates = [
         c for c in selected_centers
-        if isinstance(c, str) and ("amazon" in c.lower() or c.upper().startswith("AMZ"))
+        if isinstance(c, str) and (c.upper().startswith("AMZ") or "AMAZON" in c.upper())
     ]
     
+    st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
-    show_amazon_ma7 = st.checkbox("판매 7일 이동평균", value=True, key="amazon_show_ma7")
     
-    render_amazon_sales_vs_inventory(
-        snapshot_df,
-        moves=data.moves,
-        centers=amazon_candidates,                 # 비어 있으면 charts.py 내부에서 자동 감지
+    # 계단식 차트와 색을 맞추고 싶으면 render_step_chart 결과에서
+    # sku->color 매핑을 만들어 color_map 인자로 넘겨도 됩니다.
+    # (당장 매핑이 없으면 생략 가능)
+    sku_color_map = None  # 혹은 {'BA00021':'#4E79A7', 'BA00022':'#F28E2B', ...}
+    
+    render_amazon_panel(
+        snap_long=snapshot_df if 'snapshot_df' in locals() else snap_long,  # v5/v4 호환
+        centers=amazon_candidates if amazon_candidates else list(snapshot_df['center'].unique()),
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
-        lookback_days=lookback_days,
         today=today_norm,
-        show_ma7=show_amazon_ma7
+        color_map=sku_color_map,  # 없으면 None
+        show_ma7=True,            # 7일 이동평균 기반 예측
     )
 
 
