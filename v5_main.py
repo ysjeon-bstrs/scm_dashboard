@@ -20,8 +20,11 @@ from scm_dashboard_v4.processing import (
 
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
-from scm_dashboard_v5.ui import render_step_chart, render_sku_summary_cards
-from scm_dashboard_v5.ui.charts import render_amazon_panel
+from scm_dashboard_v5.ui import (
+    render_amazon_panel,
+    render_step_chart,
+    render_sku_summary_cards,
+)
 
 
 def _validate_timeline_inputs(
@@ -426,6 +429,10 @@ def main() -> None:
         today=today_norm,
         color_map=sku_color_map,  # 없으면 None
         show_ma7=True,            # 7일 이동평균 기반 예측
+        show_inventory_forecast=use_cons_forecast,
+        use_consumption_forecast=use_cons_forecast,
+        lookback_days=lookback_days,
+        timeline=timeline_for_chart,
     )
 
 
