@@ -5,9 +5,17 @@ from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
+
+try:  # Plotly는 선택적 의존성이므로 임포트 실패를 허용한다.
+    import plotly.express as px  # type: ignore
+    import plotly.graph_objects as go  # type: ignore
+except ImportError as _plotly_err:  # pragma: no cover - 의존성 결손 환경만 재현 가능
+    px = None  # type: ignore[assignment]
+    go = None  # type: ignore[assignment]
+    _PLOTLY_IMPORT_ERROR = _plotly_err
+else:
+    _PLOTLY_IMPORT_ERROR = None
 
 from scm_dashboard_v5.ui.kpi import render_sku_summary_cards as _render_sku_summary_cards
 
@@ -19,6 +27,24 @@ _AMAZON_PALETTE = [
     "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
     "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
 ]
+
+_PLOTLY_WARNING_EMITTED = False
+
+
+def _ensure_plotly_available() -> bool:
+    """Plotly 미설치 환경에서도 ImportError 없이 경고만 띄우도록 보조."""
+
+    global _PLOTLY_WARNING_EMITTED
+    if _PLOTLY_IMPORT_ERROR is None:
+        return True
+    if not _PLOTLY_WARNING_EMITTED:
+        st.warning(
+            "Plotly가 설치되어 있지 않아 차트를 렌더링할 수 없습니다. "
+            "관리자에게 Plotly 설치를 요청하거나 requirements를 확인하세요.\n"
+            f"원인: {_PLOTLY_IMPORT_ERROR}"
+        )
+        _PLOTLY_WARNING_EMITTED = True
+    return False
 
 def _sku_colors(skus: Sequence[str], base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """SKU 별 고정 색상 매핑을 만든다. (기존 매핑을 넘기면 그대로 존중)"""
@@ -130,6 +156,9 @@ def render_amazon_sales_vs_inventory(
     - 재고(실측): 실선, 재고(예측): 오늘 이후 점선
     - SKU별 색상 고정, 계단형 라인(hv), 오늘 세로 기준선 추가
     """
+    if not _ensure_plotly_available():
+        return
+
     skus = [str(s) for s in skus]
     if not skus:
         st.info("선택된 SKU가 없습니다.")
@@ -303,6 +332,9 @@ def render_step_chart(
     v5_main에서 그대로 호출하는 공개 API.
     timeline: columns=[date, center, resource_code, stock_qty] (apply_consumption_with_events 반영 가능)
     """
+    if not _ensure_plotly_available():
+        return
+
     if timeline is None or timeline.empty:
         st.info("타임라인 데이터가 없습니다.")
         return
