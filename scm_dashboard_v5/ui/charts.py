@@ -187,6 +187,7 @@ def render_amazon_sales_vs_inventory(
     future_idx = pd.date_range(today + pd.Timedelta(days=1), end, freq="D")
 
     inv_future: Optional[pd.DataFrame] = None
+    future_sales_from_inventory: Optional[pd.DataFrame] = None
     if show_inventory_forecast:
         # 오늘을 포함한 마지막 실측 값을 기준으로 이후 구간을 잇는다.
         if (inv.index <= today).any():
@@ -233,6 +234,17 @@ def render_amazon_sales_vs_inventory(
                     [start_vector, pd.DataFrame(vals, index=forecast_idx, columns=skus)]
                 )
 
+    if inv_future is not None and not inv_future.empty:
+        inv_future = inv_future.sort_index()
+        future_sales_from_inventory = (-inv_future.diff()).iloc[1:]
+        if future_sales_from_inventory is not None and not future_sales_from_inventory.empty:
+            future_sales_from_inventory = future_sales_from_inventory.reindex(future_idx).fillna(0.0)
+            future_sales_from_inventory = future_sales_from_inventory.clip(lower=0.0)
+
+        inv_future_plot = inv_future.round(0)
+    else:
+        inv_future_plot = None
+
     # ---------- Figure ----------
     fig = go.Figure()
 
@@ -253,10 +265,13 @@ def render_amazon_sales_vs_inventory(
         )
     # 예측 막대(색상 동일, 투명도만 낮춤)
     if len(future_idx) > 0:
-        if ma7 is None:
-            future_sales = pd.DataFrame(0, index=future_idx, columns=skus)
+        future_sales: pd.DataFrame
+        if future_sales_from_inventory is not None and not future_sales_from_inventory.empty:
+            future_sales = future_sales_from_inventory.reindex(future_idx).fillna(0.0)
+        elif ma7 is None:
+            future_sales = pd.DataFrame(0.0, index=future_idx, columns=skus)
         else:
-            future_sales = ma7.reindex(future_idx).fillna(method="ffill").fillna(0)
+            future_sales = ma7.reindex(future_idx).fillna(method="ffill").fillna(0.0)
         for sku in skus:
             fig.add_bar(
                 name=f"{sku} 판매(예측)",
@@ -270,32 +285,32 @@ def render_amazon_sales_vs_inventory(
 
     # (2) 재고: SKU별 선(실선), 오늘 이후는 점선
     inv_past = inv.loc[inv.index <= today]
+    inv_past_plot = inv_past.round(0)
     for sku in skus:
         if sku in inv_past.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=inv_past.index,
-                    y=inv_past[sku],
+                    x=inv_past_plot.index,
+                    y=inv_past_plot[sku],
                     name=f"{sku} 재고(실측)",
                     mode="lines",
                     line=dict(color=cmap[sku], width=2, shape="hv"),
                     yaxis="y2",
-                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
+                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
                 )
             )
-    if inv_future is not None and not inv_future.empty:
-        inv_future = inv_future.sort_index()
+    if inv_future_plot is not None and not inv_future_plot.empty:
         for sku in skus:
-            if sku in inv_future.columns:
+            if sku in inv_future_plot.columns:
                 fig.add_trace(
                     go.Scatter(
-                        x=inv_future.index,
-                        y=inv_future[sku],
+                        x=inv_future_plot.index,
+                        y=inv_future_plot[sku],
                         name=f"{sku} 재고(예측)",
                         mode="lines",
                         line=dict(color=cmap[sku], width=2, dash="dash", shape="hv"),
                         yaxis="y2",
-                        hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,} EA<extra></extra>",
+                        hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
                     )
                 )
 
@@ -310,7 +325,7 @@ def render_amazon_sales_vs_inventory(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         xaxis=dict(title="Date"),
         yaxis=dict(title="판매량 (EA/Day)"),
-        yaxis2=dict(title="재고 (EA)", overlaying="y", side="right"),
+        yaxis2=dict(title="재고 (EA)", overlaying="y", side="right", tickformat=",d"),
     )
 
     # 안내문(상단 설명을 그림 안에 넣지 않아 제목 겹침 방지)
