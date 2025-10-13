@@ -137,6 +137,42 @@ def _inventory_matrix(
     pv = pv.loc[(pv.index >= start) & (pv.index <= end)]
     return pv
 
+
+def _timeline_inventory_matrix(
+    timeline: Optional[pd.DataFrame],
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> Optional[pd.DataFrame]:
+    """Pivot the step-chart timeline into a date×SKU inventory matrix."""
+
+    if timeline is None or timeline.empty:
+        return None
+
+    required_cols = {"date", "center", "resource_code", "stock_qty"}
+    if not required_cols.issubset(timeline.columns):
+        return None
+
+    df = timeline.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df = df[df["date"].notna()]
+    df = df[df["center"].astype(str).isin(centers)]
+    df = df[df["resource_code"].astype(str).isin(skus)]
+
+    if df.empty:
+        return None
+
+    pivot = (
+        df.groupby(["date", "resource_code"])["stock_qty"].sum()
+        .unstack("resource_code")
+        .reindex(columns=list(skus), fill_value=0.0)
+        .sort_index()
+    )
+
+    pivot = pivot.loc[(pivot.index >= start) & (pivot.index <= end)]
+    return pivot
+
 # ---------------- Public renderer ----------------
 def render_amazon_sales_vs_inventory(
     snap_long: pd.DataFrame,
@@ -149,6 +185,9 @@ def render_amazon_sales_vs_inventory(
     color_map: Optional[Dict[str, str]] = None,
     show_ma7: bool = True,
     show_inventory_forecast: bool = True,
+    use_consumption_forecast: bool = False,
+    lookback_days: int = 28,
+    timeline: Optional[pd.DataFrame] = None,
 ) -> None:
     """
     Amazon US 일별 판매(누적 막대) vs. 재고(라인) 패널.
@@ -177,9 +216,10 @@ def render_amazon_sales_vs_inventory(
     # 색상 고정
     cmap = _sku_colors(skus, base=color_map)
 
-    # 판매(실측) 및 7일 평균
+    # 판매(실측) 및 이동평균 (필터 lookback_days 반영)
     sales = _sales_from_snapshot(snap_long, amz_centers, skus, start, end)
-    ma7   = sales.rolling(7, min_periods=1).mean() if show_ma7 else None
+    ma_window = max(1, int(lookback_days))
+    ma7 = sales.rolling(ma_window, min_periods=1).mean() if show_ma7 else None
 
     # 재고(실측)
     inv = _inventory_matrix(snap_long, amz_centers, skus, start, end)
@@ -188,12 +228,37 @@ def render_amazon_sales_vs_inventory(
 
     inv_future: Optional[pd.DataFrame] = None
     future_sales_from_inventory: Optional[pd.DataFrame] = None
+    timeline_pivot = _timeline_inventory_matrix(timeline, amz_centers, skus, start, end)
+
     if show_inventory_forecast:
-        # 오늘을 포함한 마지막 실측 값을 기준으로 이후 구간을 잇는다.
-        if (inv.index <= today).any():
-            start_vector = inv.loc[inv.index <= today].iloc[[-1]].copy()
-            anchor_date = pd.Timestamp(start_vector.index[-1]).normalize()
-            start_vector.index = pd.DatetimeIndex([anchor_date])
+        if use_consumption_forecast and timeline_pivot is not None and not timeline_pivot.empty:
+            anchor_date = None
+            if not inv.empty:
+                past_idx = inv.index[inv.index <= today]
+                if len(past_idx) > 0:
+                    anchor_date = past_idx.max()
+            if anchor_date is None:
+                timeline_past = timeline_pivot.index[timeline_pivot.index <= today]
+                if len(timeline_past) > 0:
+                    anchor_date = timeline_past.max()
+
+            if anchor_date is not None:
+                anchor_date = pd.Timestamp(anchor_date).normalize()
+                trimmed = timeline_pivot.loc[timeline_pivot.index >= anchor_date]
+                if anchor_date not in trimmed.index:
+                    prev = timeline_pivot.loc[timeline_pivot.index <= anchor_date]
+                    if not prev.empty:
+                        prev_row = prev.tail(1)
+                        trimmed = pd.concat([prev_row, trimmed])
+
+                if not trimmed.empty:
+                    inv_future = trimmed
+        if inv_future is None:
+            # 오늘을 포함한 마지막 실측 값을 기준으로 이후 구간을 잇는다.
+            if (inv.index <= today).any():
+                start_vector = inv.loc[inv.index <= today].iloc[[-1]].copy()
+                anchor_date = pd.Timestamp(start_vector.index[-1]).normalize()
+                start_vector.index = pd.DatetimeIndex([anchor_date])
         else:
             anchor_date = pd.Timestamp(today).normalize()
             start_vector = pd.DataFrame(

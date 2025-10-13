@@ -429,6 +429,10 @@ def main() -> None:
         today=today_norm,
         color_map=sku_color_map,  # 없으면 None
         show_ma7=True,            # 7일 이동평균 기반 예측
+        show_inventory_forecast=use_cons_forecast,
+        use_consumption_forecast=use_cons_forecast,
+        lookback_days=lookback_days,
+        timeline=timeline_for_chart,
     )
 
 
