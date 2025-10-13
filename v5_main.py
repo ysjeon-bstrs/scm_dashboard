@@ -402,25 +402,27 @@ def main() -> None:
         show_in_transit=show_transit,
         today=today_norm,
     )
-    # -------------------- Amazon US sales vs. inventory --------------------
-    # 선택 센터 중 Amazon 계열만 추출 (없으면 패널 내부에서 자동 감지)
-    amazon_centers = [
+# -------------------- Amazon US sales vs. inventory --------------------
+    amazon_candidates = [
         c for c in selected_centers
-        if isinstance(c, str) and (c.upper().startswith("AMZ") or "amazon" in c.lower())
+        if isinstance(c, str) and ("amazon" in c.lower() or c.upper().startswith("AMZ"))
     ]
     
-    st.divider()
+    st.subheader("Amazon US 일별 판매 vs. 재고")
+    show_amazon_ma7 = st.checkbox("판매 7일 이동평균", value=True, key="amazon_show_ma7")
     
-    render_amazon_panel(
-        snap_long=snapshot_df,                               # v5에서 쓰는 스냅샷 DF 변수명에 맞춰 주세요
-        moves=(data.moves if 'data' in locals() and hasattr(data, 'moves') else moves),
-        centers=amazon_centers,                              # AMZ/amazon만 전달(없어도 내부에서 감지)
+    render_amazon_sales_vs_inventory(
+        snapshot_df,
+        moves=data.moves,
+        centers=amazon_candidates,                 # 비어 있으면 charts.py 내부에서 자동 감지
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
         lookback_days=lookback_days,
         today=today_norm,
+        show_ma7=show_amazon_ma7
     )
+
 
 
 
