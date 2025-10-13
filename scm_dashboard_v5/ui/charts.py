@@ -7,6 +7,20 @@ import plotly.graph_objects as go
 import streamlit as st
 from typing import Iterable, Optional, Sequence
 
+
+PALETTE = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+]
+
 def _ensure_date_column(df: pd.DataFrame) -> pd.DataFrame:
     """snap_long의 날짜 컬럼을 'date'로 통일."""
     df = df.copy()
@@ -67,7 +81,7 @@ def _daily_sales_from_snapshot(snap: pd.DataFrame,
         return pd.Series(dtype=float)
 
     sales_parts = []
-    for (_, _ct, _sku), g in snap_f.groupby(["resource_code", "center"]):
+    for (_sku, _ct), g in snap_f.groupby(["resource_code", "center"]):
         g = g.sort_values("date")
         s = g.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
         # 일별 변화량 (오늘 - 어제)
@@ -83,6 +97,146 @@ def _daily_sales_from_snapshot(snap: pd.DataFrame,
     sales = sales[(sales.index >= start) & (sales.index <= end)]
     sales = sales.fillna(0.0)
     return sales
+
+
+def _normalise_timeline_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a normalised copy of the timeline frame for plotting."""
+
+    required = {"date", "center", "resource_code", "stock_qty"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise KeyError(
+            "타임라인 데이터에 필요한 컬럼이 없습니다: " + ", ".join(sorted(missing))
+        )
+
+    df = frame.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df["center"] = df["center"].astype(str)
+    df["resource_code"] = df["resource_code"].astype(str)
+    df["stock_qty"] = pd.to_numeric(df["stock_qty"], errors="coerce").fillna(0.0)
+    df = df[df["date"].notna()]
+    return df
+
+
+def _format_center(center: str) -> str:
+    mapping = {"WIP": "생산중", "In-Transit": "이동중"}
+    return mapping.get(center, center)
+
+
+def render_step_chart(
+    timeline: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    show_production: bool = True,
+    show_in_transit: bool = True,
+    today: Optional[pd.Timestamp] = None,
+    title: str = "선택한 SKU × 센터(및 이동중/생산중) 계단식 재고 흐름",
+    caption: str = "WIP/이동중 라인은 점선으로 표시됩니다.",
+) -> None:
+    """Render the consolidated inventory step chart using Plotly."""
+
+    if timeline is None or timeline.empty:
+        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
+        return
+
+    try:
+        df = _normalise_timeline_frame(timeline)
+    except KeyError as exc:  # pragma: no cover - guardrail for misconfigured data
+        st.error(str(exc))
+        return
+
+    start_dt = pd.to_datetime(start).normalize()
+    end_dt = pd.to_datetime(end).normalize()
+    df = df[(df["date"] >= start_dt) & (df["date"] <= end_dt)]
+
+    if df.empty:
+        st.info("선택한 기간 내에 표시할 타임라인 데이터가 없습니다.")
+        return
+
+    centers_set = {str(c) for c in centers}
+    if centers_set:
+        df = df[df["center"].isin(centers_set | {"WIP", "In-Transit"})]
+
+    if skus:
+        df = df[df["resource_code"].isin({str(s) for s in skus})]
+
+    if not show_production:
+        df = df[df["center"] != "WIP"]
+    if not show_in_transit:
+        df = df[df["center"] != "In-Transit"]
+
+    df = df[df["stock_qty"] > 0]
+
+    if df.empty:
+        st.info("선택한 조건에서 표시할 센터/생산중 데이터가 없습니다.")
+        return
+
+    df = df.sort_values(["resource_code", "center", "date"])
+    df["center_label"] = df["center"].map(_format_center)
+    df["label"] = df["resource_code"] + " @ " + df["center_label"]
+
+    fig = go.Figure()
+    colour_map: dict[str, str] = {}
+    palette_iter = iter(PALETTE * ((len(df["label"].unique()) // len(PALETTE)) + 1))
+
+    for label, group in df.groupby("label", sort=False):
+        center_label = group["center_label"].iloc[0]
+        try:
+            colour = colour_map[label]
+        except KeyError:
+            colour = next(palette_iter)
+            colour_map[label] = colour
+
+        line_style = {"color": colour, "width": 1.6}
+        if center_label == "생산중":
+            line_style.update(dash="dash", width=1.2)
+        elif center_label == "이동중":
+            line_style.update(dash="dot", width=1.2)
+
+        fig.add_trace(
+            go.Scatter(
+                x=group["date"],
+                y=group["stock_qty"],
+                mode="lines",
+                name=label,
+                line=line_style,
+                line_shape="hv",
+                hovertemplate=(
+                    "날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<extra>" + label + "</extra>"
+                ),
+            )
+        )
+
+    if today is not None:
+        today_dt = pd.to_datetime(today).normalize()
+        if start_dt <= today_dt <= end_dt:
+            fig.add_vline(x=today_dt, line_color="rgba(255,0,0,0.5)", line_width=1)
+            fig.add_annotation(
+                x=today_dt,
+                y=1.02,
+                xref="x",
+                yref="paper",
+                text="오늘",
+                showarrow=False,
+                font=dict(color="#d62728", size=11),
+                align="center",
+            )
+
+    fig.update_layout(
+        title=title,
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=60, b=20),
+        xaxis=dict(title="날짜", range=[start_dt, end_dt], showgrid=True),
+        yaxis=dict(title="재고량 (EA)", rangemode="tozero", tickformat=",.0f"),
+        legend=dict(orientation="h", y=1.1, x=0),
+    )
+
+    if caption:
+        st.caption(caption)
+    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
 def render_amazon_panel(
     snap_long: pd.DataFrame,
@@ -169,7 +323,7 @@ def render_amazon_panel(
 
     # 1-1) 7일 MA 라인(선택)
     if ma7 is not None:
-        m_show = ma7.reindex(pd.date_range(start, end, freq="D")).fillna(None)
+        m_show = ma7.reindex(pd.date_range(start, end, freq="D")).astype(float)
         fig.add_trace(
             go.Scatter(
                 x=m_show.index, y=m_show.values,
