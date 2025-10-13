@@ -9,11 +9,19 @@ import streamlit as st
 
 from .kpi import render_sku_summary_cards
 
+# scm_dashboard_v5/ui/__init__.py
+from .charts import (
+    render_step_chart,
+    render_amazon_sales_vs_inventory,
+    render_amazon_panel,
+    render_sku_summary_cards,   # ← 추가
+)
+
 __all__ = [
     "render_amazon_sales_vs_inventory",
     "render_amazon_panel",
     "render_step_chart",
-    "render_sku_summary_cards",
+    "render_sku_summary_cards",  # ← 추가
 ]
 
 _CHARTS_MODULE: Any | None = None
@@ -30,6 +38,8 @@ def _is_plotly_import_error(exc: ImportError) -> bool:
     # 일부 런타임에서는 ModuleNotFoundError.name 속성이 설정되지 않는 경우가 있다.
     missing = getattr(exc, "name", "")
     return bool(missing and missing.split(".")[0] == "plotly")
+
+
 
 
 def _load_charts_module() -> Any | None:
@@ -50,6 +60,15 @@ def _load_charts_module() -> Any | None:
         if _is_plotly_import_error(exc):
             _CHARTS_IMPORT_ERROR = exc
             _show_plotly_error(exc)
+            return None
+        raise
+    except ImportError as exc:  # pragma: no cover - depends on runtime env
+        # Plotly가 부분 설치되어 있을 때 ImportError("cannot import ...")가 발생할 수 있다.
+        if "plotly" in str(exc).lower():
+            st.error(
+                "Plotly 관련 확장 모듈을 불러오지 못했습니다. Plotly 및 관련 의존성이 올바르게 설치되었는지 확인해주세요.",
+                icon="⚠️",
+            )
             return None
         raise
 
