@@ -733,6 +733,13 @@ def render_step_chart(
     df = timeline.copy()
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
 
+    # "WIP" 센터를 태광KR 소속 생산중 상태로 통합한다.
+    df["center"] = df["center"].astype(str)
+    df["resource_code"] = df["resource_code"].astype(str)
+    wip_mask = df["center"] == "WIP"
+    df["is_wip"] = wip_mask
+    df.loc[wip_mask, "center"] = "태광KR"
+
     show_production = kwargs.pop("show_production", None)
     if show_wip is None:
         show_wip = True if show_production is None else bool(show_production)
@@ -748,15 +755,19 @@ def render_step_chart(
         df = df[df["center"] != "In-Transit"]
 
     if centers:
-        df = df[df["center"].astype(str).isin(centers)]
+        normalized_centers = [
+            "태광KR" if str(center) == "WIP" else str(center)
+            for center in centers
+        ]
+        df = df[df["center"].isin(normalized_centers)]
     if skus:
-        df = df[df["resource_code"].astype(str).isin(skus)]
+        df = df[df["resource_code"].isin([str(sku) for sku in skus])]
 
     wip_source = pd.DataFrame()
     if show_wip:
-        wip_source = df[df["center"] == "WIP"].copy()
+        wip_source = df[df["is_wip"]].copy()
 
-    base_df = df[df["center"] != "WIP"].copy()
+    base_df = df[~df["is_wip"]].copy()
 
     if base_df.empty and (not show_wip or wip_source.empty):
         st.info("선택 조건에 해당하는 라인이 없습니다.")
@@ -794,7 +805,7 @@ def render_step_chart(
         color_labels.extend(plot_df["label"].unique().tolist())
     if show_wip and not wip_source.empty:
         wip_skus_for_colors = sorted({str(v) for v in wip_source["resource_code"].unique()})
-        color_labels.extend([f"{sku} @ WIP" for sku in wip_skus_for_colors])
+        color_labels.extend([f"{sku} @ 태광KR" for sku in wip_skus_for_colors])
 
     sku_colors = _sku_color_map(color_labels)
     for tr in fig.data:
@@ -803,7 +814,7 @@ def render_step_chart(
         color = sku_colors.get(sku, _STEP_PALETTE[0])
 
         # 상태/센터별 선 스타일
-        if center in ("In-Transit", "WIP"):
+        if center == "In-Transit":
             tr.update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
         else:
             tr.update(line=dict(color=color, dash="solid", width=2.2), opacity=0.95)
@@ -841,7 +852,7 @@ def render_step_chart(
                 x=numeric.index,
                 y=numeric,
                 mode="lines",
-                name=f"{sku} 생산중(WIP)",
+                name=f"{sku} 태광KR 생산중",
                 line=dict(color=color, dash="dot", width=2.0),
                 hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>",
             )
@@ -879,7 +890,7 @@ def render_step_chart(
         hovermode="x unified",
         xaxis_title="날짜",
         yaxis_title="재고 (EA)",
-        legend_title_text="SKU @ Center / In‑Transit / WIP",
+        legend_title_text="SKU @ Center / 생산중",
         margin=dict(l=10, r=10, t=60, b=10),
         height=520,
     )
