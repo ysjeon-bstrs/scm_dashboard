@@ -81,7 +81,7 @@ def _daily_sales_from_snapshot(snap: pd.DataFrame,
         return pd.Series(dtype=float)
 
     sales_parts = []
-    for (_, _ct, _sku), g in snap_f.groupby(["resource_code", "center"]):
+    for (_sku, _ct), g in snap_f.groupby(["resource_code", "center"]):
         g = g.sort_values("date")
         s = g.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
         # 일별 변화량 (오늘 - 어제)
