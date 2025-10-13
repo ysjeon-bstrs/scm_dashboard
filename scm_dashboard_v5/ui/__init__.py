@@ -1,15 +1,8 @@
-"""UI rendering helpers for the Streamlit dashboard."""
+"""
+UI 레이어의 공개 API만 간단히 재내보내기(re-export).
+임포트 시점 에러를 줄이기 위해 래퍼/우회 호출 없이 함수 객체 자체를 노출합니다.
+"""
 
-from __future__ import annotations
-
-from importlib import import_module
-from typing import Any
-
-import streamlit as st
-
-from .kpi import render_sku_summary_cards
-
-# scm_dashboard_v5/ui/__init__.py
 from .charts import (
     render_step_chart,
     render_amazon_sales_vs_inventory,

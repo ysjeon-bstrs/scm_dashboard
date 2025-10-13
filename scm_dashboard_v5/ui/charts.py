@@ -148,6 +148,7 @@ def render_amazon_sales_vs_inventory(
     *,
     color_map: Optional[Dict[str, str]] = None,
     show_ma7: bool = True,
+    show_inventory_forecast: bool = True,
 ) -> None:
     """
     Amazon US 일별 판매(누적 막대) vs. 재고(라인) 패널.
@@ -183,26 +184,54 @@ def render_amazon_sales_vs_inventory(
     # 재고(실측)
     inv = _inventory_matrix(snap_long, amz_centers, skus, start, end)
 
-    # 재고 예측(오늘 이후): MA7로 일일 차감하여 선형으로 감소
     future_idx = pd.date_range(today + pd.Timedelta(days=1), end, freq="D")
-    inv_future = None
-    if len(future_idx) > 0:
-        start_vector = (
-            inv.loc[inv.index <= today].iloc[[-1]].copy()
-            if (inv.index <= today).any()
-            else pd.DataFrame([np.zeros(len(skus))], columns=skus)
-        )
-        if ma7 is None or ma7.empty:
-            daily = pd.DataFrame(0, index=future_idx, columns=skus)
+
+    inv_future: Optional[pd.DataFrame] = None
+    if show_inventory_forecast:
+        # 오늘을 포함한 마지막 실측 값을 기준으로 이후 구간을 잇는다.
+        if (inv.index <= today).any():
+            start_vector = inv.loc[inv.index <= today].iloc[[-1]].copy()
+            anchor_date = pd.Timestamp(start_vector.index[-1]).normalize()
+            start_vector.index = pd.DatetimeIndex([anchor_date])
         else:
-            daily = ma7.reindex(future_idx).fillna(method="ffill").fillna(0)
-        # 누적 차감
-        cur = start_vector.iloc[0].astype(float).values
-        vals = []
-        for d in future_idx:
-            cur = np.maximum(0.0, cur - daily.loc[d].reindex(skus, fill_value=0).values)
-            vals.append(cur.copy())
-        inv_future = pd.DataFrame(vals, index=future_idx, columns=skus)
+            anchor_date = pd.Timestamp(today).normalize()
+            start_vector = pd.DataFrame(
+                [np.zeros(len(skus))],
+                columns=skus,
+                index=pd.DatetimeIndex([anchor_date]),
+            )
+
+        # 1) 데이터에 이미 미래 재고가 존재한다면 그대로 사용
+        future_actual = inv.loc[inv.index > anchor_date]
+        if not future_actual.empty:
+            inv_future = (
+                pd.concat([start_vector, future_actual])
+                .loc[anchor_date:]
+                .reindex(columns=skus, fill_value=0.0)
+            )
+        else:
+            # 2) 미래 데이터가 없으면 MA7 소비량을 기반으로 점선 예측을 생성
+            forecast_idx = pd.date_range(anchor_date + pd.Timedelta(days=1), end, freq="D")
+            if len(forecast_idx) > 0:
+                if ma7 is None or ma7.empty:
+                    daily = pd.DataFrame(0.0, index=forecast_idx, columns=skus)
+                else:
+                    extended = (
+                        ma7.reindex(ma7.index.union(forecast_idx))
+                        .sort_index()
+                        .ffill()
+                    )
+                    daily = extended.reindex(forecast_idx).fillna(0.0)
+
+                cur = start_vector.iloc[0].astype(float).values
+                vals = []
+                for d in forecast_idx:
+                    forecast_step = daily.loc[d].reindex(skus, fill_value=0.0).values
+                    cur = np.maximum(0.0, cur - forecast_step)
+                    vals.append(cur.copy())
+                inv_future = pd.concat(
+                    [start_vector, pd.DataFrame(vals, index=forecast_idx, columns=skus)]
+                )
 
     # ---------- Figure ----------
     fig = go.Figure()
@@ -255,6 +284,7 @@ def render_amazon_sales_vs_inventory(
                 )
             )
     if inv_future is not None and not inv_future.empty:
+        inv_future = inv_future.sort_index()
         for sku in skus:
             if sku in inv_future.columns:
                 fig.add_trace(
