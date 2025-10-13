@@ -229,6 +229,8 @@ def render_amazon_sales_vs_inventory(
     inv_future: Optional[pd.DataFrame] = None
     future_sales_from_inventory: Optional[pd.DataFrame] = None
     timeline_pivot = _timeline_inventory_matrix(timeline, amz_centers, skus, start, end)
+    anchor_date: Optional[pd.Timestamp] = None
+    start_vector: Optional[pd.DataFrame] = None
 
     if show_inventory_forecast:
         if use_consumption_forecast and timeline_pivot is not None and not timeline_pivot.empty:
@@ -260,44 +262,59 @@ def render_amazon_sales_vs_inventory(
                 anchor_date = pd.Timestamp(start_vector.index[-1]).normalize()
                 start_vector.index = pd.DatetimeIndex([anchor_date])
         else:
-            anchor_date = pd.Timestamp(today).normalize()
-            start_vector = pd.DataFrame(
-                [np.zeros(len(skus))],
-                columns=skus,
-                index=pd.DatetimeIndex([anchor_date]),
-            )
-
-        # 1) 데이터에 이미 미래 재고가 존재한다면 그대로 사용
-        future_actual = inv.loc[inv.index > anchor_date]
-        if not future_actual.empty:
-            inv_future = (
-                pd.concat([start_vector, future_actual])
-                .loc[anchor_date:]
-                .reindex(columns=skus, fill_value=0.0)
-            )
-        else:
-            # 2) 미래 데이터가 없으면 MA7 소비량을 기반으로 점선 예측을 생성
-            forecast_idx = pd.date_range(anchor_date + pd.Timedelta(days=1), end, freq="D")
-            if len(forecast_idx) > 0:
-                if ma7 is None or ma7.empty:
-                    daily = pd.DataFrame(0.0, index=forecast_idx, columns=skus)
+            if anchor_date is None:
+                anchor_date = pd.Timestamp(today).normalize()
+            if start_vector is None and inv_future is not None and not inv_future.empty:
+                inv_future = inv_future.copy()
+                inv_future.index = pd.to_datetime(inv_future.index).normalize()
+                if anchor_date in inv_future.index:
+                    start_vector = inv_future.loc[[anchor_date]].copy()
                 else:
-                    extended = (
-                        ma7.reindex(ma7.index.union(forecast_idx))
-                        .sort_index()
-                        .ffill()
-                    )
-                    daily = extended.reindex(forecast_idx).fillna(0.0)
-
-                cur = start_vector.iloc[0].astype(float).values
-                vals = []
-                for d in forecast_idx:
-                    forecast_step = daily.loc[d].reindex(skus, fill_value=0.0).values
-                    cur = np.maximum(0.0, cur - forecast_step)
-                    vals.append(cur.copy())
-                inv_future = pd.concat(
-                    [start_vector, pd.DataFrame(vals, index=forecast_idx, columns=skus)]
+                    first_row = inv_future.iloc[[0]].copy()
+                    anchor_date = pd.Timestamp(first_row.index[0]).normalize()
+                    first_row.index = pd.DatetimeIndex([anchor_date])
+                    start_vector = first_row
+            if start_vector is None:
+                start_vector = pd.DataFrame(
+                    [np.zeros(len(skus))],
+                    columns=skus,
+                    index=pd.DatetimeIndex([anchor_date]),
                 )
+
+        if anchor_date is not None and start_vector is not None:
+            # 1) 데이터에 이미 미래 재고가 존재한다면 그대로 사용
+            future_actual = inv.loc[inv.index > anchor_date]
+            if not future_actual.empty:
+                inv_future = (
+                    pd.concat([start_vector, future_actual])
+                    .loc[anchor_date:]
+                    .reindex(columns=skus, fill_value=0.0)
+                )
+            else:
+                # 2) 미래 데이터가 없으면 MA7 소비량을 기반으로 점선 예측을 생성
+                forecast_idx = pd.date_range(anchor_date + pd.Timedelta(days=1), end, freq="D")
+                if len(forecast_idx) > 0:
+                    if ma7 is None or ma7.empty:
+                        daily = pd.DataFrame(0.0, index=forecast_idx, columns=skus)
+                    else:
+                        extended = (
+                            ma7.reindex(ma7.index.union(forecast_idx))
+                            .sort_index()
+                            .ffill()
+                        )
+                        daily = extended.reindex(forecast_idx).fillna(0.0)
+
+                    cur = start_vector.iloc[0].astype(float).values
+                    vals = []
+                    for d in forecast_idx:
+                        forecast_step = daily.loc[d].reindex(skus, fill_value=0.0).values
+                        cur = np.maximum(0.0, cur - forecast_step)
+                        vals.append(cur.copy())
+                    inv_future = pd.concat(
+                        [start_vector, pd.DataFrame(vals, index=forecast_idx, columns=skus)]
+                    )
+        else:
+            inv_future = None
 
     if inv_future is not None and not inv_future.empty:
         inv_future = inv_future.sort_index()
