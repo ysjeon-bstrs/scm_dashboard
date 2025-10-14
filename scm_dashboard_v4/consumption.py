@@ -97,10 +97,19 @@ def apply_consumption_with_events(
             continue
 
         g = g.sort_values("date").copy()
+        g["stock_qty"] = pd.to_numeric(g["stock_qty"], errors="coerce")
         mask = g["date"] >= cons_start
         if not mask.any():
             chunks.append(g)
             continue
+
+        last_real = (
+            g.loc[~mask, "stock_qty"].dropna().iloc[-1]
+            if (~mask).any() and g.loc[~mask, "stock_qty"].notna().any()
+            else 0.0
+        )
+        future_stock = pd.to_numeric(g.loc[mask, "stock_qty"], errors="coerce")
+        g.loc[mask, "stock_qty"] = future_stock.fillna(last_real)
 
         daily = g.loc[mask, "date"].map(uplift).fillna(1.0).values * rate
         stk = g.loc[mask, "stock_qty"].astype(float).values
