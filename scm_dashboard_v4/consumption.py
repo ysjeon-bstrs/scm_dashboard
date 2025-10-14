@@ -91,23 +91,14 @@ def apply_consumption_with_events(
             chunks.append(g)
             continue
 
-        g = g.sort_values("date").copy()
-        g["stock_qty"] = pd.to_numeric(g["stock_qty"], errors="coerce")
-        mask = g["date"] >= cons_start
-        if not mask.any():
+        rate = float(rates.get((ct, sku), 0.0))
+        if rate <= 0:
             chunks.append(g)
             continue
 
-        last_real = (
-            g.loc[~mask, "stock_qty"].dropna().iloc[-1]
-            if (~mask).any() and g.loc[~mask, "stock_qty"].notna().any()
-            else 0.0
-        )
-        future_stock = pd.to_numeric(g.loc[mask, "stock_qty"], errors="coerce")
-        g.loc[mask, "stock_qty"] = future_stock.fillna(last_real)
-
-        rate = float(rates.get((ct, sku), 0.0))
-        if rate <= 0:
+        g = g.sort_values("date").copy()
+        mask = g["date"] >= cons_start
+        if not mask.any():
             chunks.append(g)
             continue
 
