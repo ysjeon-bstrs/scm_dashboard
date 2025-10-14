@@ -283,9 +283,10 @@ def main() -> None:
         end_ts = pd.Timestamp(date_range_value[1]).normalize()
         st.session_state.date_range = (start_ts, end_ts)
         st.header("표시 옵션")
-        show_prod = st.checkbox("생산중 표시", value=True)
-        show_transit = st.checkbox("이동중 표시", value=True)
-        st.caption("체크 해제 시 계단식 차트에서 해당 라인이 숨겨집니다.")
+        show_prod = st.checkbox("생산중 표시", value=False)
+        # 요청에 따라 이동중 노출 옵션은 기본 해제 상태로 숨긴다.
+        show_transit = False
+        st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
         use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
         lookback_days = int(
             st.number_input(
@@ -433,6 +434,7 @@ def main() -> None:
         use_consumption_forecast=use_cons_forecast,
         lookback_days=lookback_days,
         timeline=timeline_for_chart,
+        show_wip=show_prod,
     )
 
 
