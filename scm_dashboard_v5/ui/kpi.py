@@ -36,12 +36,100 @@ from __future__ import annotations
 import html
 from typing import Dict, List, Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from scm_dashboard_v5.analytics import kpi_breakdown_per_sku
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
+
+
+def compute_depletion_from_timeline(
+    base_timeline: pd.DataFrame,
+    snap_long: pd.DataFrame,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+    *,
+    lookback_days: int,
+    events: Optional[Sequence[Dict[str, object]]] = None,
+) -> Dict[tuple[str, str], Dict[str, Optional[object]]]:
+    """Simulate depletion using the shared consumption engine."""
+
+    if base_timeline is None or base_timeline.empty:
+        return {}
+
+    today_norm = pd.to_datetime(today).normalize()
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+
+    timeline_with_consumption = apply_consumption_with_events(
+        base_timeline,
+        snap_long,
+        centers=list(centers),
+        skus=list(skus),
+        start=start_norm,
+        end=end_norm,
+        lookback_days=int(lookback_days),
+        events=list(events) if events else None,
+    )
+
+    if timeline_with_consumption is None or timeline_with_consumption.empty:
+        return {}
+
+    timeline_copy = timeline_with_consumption.copy()
+    timeline_copy["date"] = pd.to_datetime(
+        timeline_copy["date"], errors="coerce"
+    ).dt.normalize()
+    timeline_copy = timeline_copy.dropna(subset=["date"])
+    if timeline_copy.empty:
+        return {}
+
+    filtered = timeline_copy[
+        ~timeline_copy["center"].isin(["In-Transit", "WIP"])
+    ].copy()
+    if filtered.empty:
+        return {}
+
+    out: Dict[tuple[str, str], Dict[str, Optional[object]]] = {}
+
+    for (center, sku), group in filtered.groupby(["center", "resource_code"]):
+        segment = group.sort_values("date")
+        future_mask = segment["date"] >= today_norm
+        future_segment = segment.loc[future_mask]
+        if future_segment.empty:
+            out[(str(center), str(sku))] = {"days": None, "date": None}
+            continue
+        zero_idx = np.where(future_segment["stock_qty"].values <= 0)[0]
+        if zero_idx.size == 0:
+            out[(str(center), str(sku))] = {"days": None, "date": None}
+            continue
+        zero_date = pd.to_datetime(
+            future_segment.iloc[int(zero_idx[0])]["date"]
+        ).normalize()
+        days = max(int((zero_date - today_norm).days), 0)
+        out[(str(center), str(sku))] = {"days": days, "date": zero_date}
+
+    for sku, group in filtered.groupby("resource_code"):
+        segment = group[group["date"] >= today_norm].sort_values("date")
+        if segment.empty:
+            out[("__TOTAL__", str(sku))] = {"days": None, "date": None}
+            continue
+        agg = (
+            segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
+        )
+        zero_idx = np.where(agg["stock_qty"].values <= 0)[0]
+        if zero_idx.size == 0:
+            out[("__TOTAL__", str(sku))] = {"days": None, "date": None}
+            continue
+        zero_date = pd.to_datetime(agg.iloc[int(zero_idx[0])]["date"]).normalize()
+        days = max(int((zero_date - today_norm).days), 0)
+        out[("__TOTAL__", str(sku))] = {"days": days, "date": zero_date}
+
+    return out
 
 
 def compute_depletion_metrics(
@@ -106,95 +194,38 @@ def compute_depletion_metrics(
     if timeline is None or timeline.empty:
         return pd.DataFrame(columns=result_columns)
 
-    cons_start = max(latest_snap + pd.Timedelta(days=1), start)
-
-    timeline_cons = apply_consumption_with_events(
+    depletion_map = compute_depletion_from_timeline(
         timeline,
         snap_long,
         centers=list(centers),
         skus=list(skus),
         start=start,
         end=sim_end,
+        today=today,
         lookback_days=int(lookback_days),
         events=list(events) if events else None,
-        cons_start=cons_start,
     )
 
-    if timeline_cons is None or timeline_cons.empty:
-        return pd.DataFrame(columns=result_columns)
-
-    special_center_mask = timeline_cons["center"].isin(["In-Transit", "WIP"])
-    timeline_cons = timeline_cons.loc[~special_center_mask].copy()
-    if timeline_cons.empty:
+    if not depletion_map:
         return pd.DataFrame(columns=result_columns)
 
     rows: List[Dict[str, object]] = []
-
-    for (center, sku), group in timeline_cons.groupby(["center", "resource_code"]):
-        segment = group[group["date"] >= cons_start].sort_values("date")
-        if segment.empty:
-            rows.append({
+    for (center, sku), values in depletion_map.items():
+        rows.append(
+            {
                 "center": center,
                 "resource_code": sku,
-                "days_to_depletion": None,
-                "depletion_date": None,
-            })
-            continue
+                "days_to_depletion": values.get("days"),
+                "depletion_date": values.get("date"),
+            }
+        )
 
-        zero = segment[segment["stock_qty"] <= 0]
-        if zero.empty:
-            rows.append({
-                "center": center,
-                "resource_code": sku,
-                "days_to_depletion": None,
-                "depletion_date": None,
-            })
-            continue
+    result = pd.DataFrame(rows, columns=result_columns)
 
-        depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
-        days = max((depletion_dt - today).days, 0)
-        rows.append({
-            "center": center,
-            "resource_code": sku,
-            "days_to_depletion": days,
-            "depletion_date": depletion_dt,
-        })
+    if not include_total:
+        result = result[result["center"] != "__TOTAL__"].copy()
 
-    if include_total:
-        for sku, group in timeline_cons.groupby("resource_code"):
-            segment = group[group["date"] >= cons_start].copy()
-            if segment.empty:
-                rows.append({
-                    "center": "__TOTAL__",
-                    "resource_code": sku,
-                    "days_to_depletion": None,
-                    "depletion_date": None,
-                })
-                continue
-
-            agg = (
-                segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
-            )
-            zero = agg[agg["stock_qty"] <= 0]
-            if zero.empty:
-                rows.append({
-                    "center": "__TOTAL__",
-                    "resource_code": sku,
-                    "days_to_depletion": None,
-                    "depletion_date": None,
-                })
-                continue
-
-            depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
-            days = max((depletion_dt - today).days, 0)
-            rows.append({
-                "center": "__TOTAL__",
-                "resource_code": sku,
-                "days_to_depletion": days,
-                "depletion_date": depletion_dt,
-            })
-
-    return pd.DataFrame(rows, columns=result_columns)
+    return result
 
 
 def _escape(value: object) -> str:
@@ -384,11 +415,11 @@ def _inject_responsive_styles() -> None:
         }
 
         .kpi-grid--summary {
-            --min-card-width: 180px;
+            --min-card-width: clamp(200px, 24vw, 260px);
         }
 
         .kpi-grid--centers {
-            --min-card-width: 260px;
+            --min-card-width: clamp(220px, 24vw, 320px);
         }
 
         .kpi-grid--sku {
@@ -397,6 +428,87 @@ def _inject_responsive_styles() -> None:
 
         .kpi-grid--compact {
             --min-card-width: 150px;
+        }
+
+        .kpi-grid--center-metrics {
+            --min-card-width: clamp(140px, 28vw, 200px);
+            align-items: stretch;
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-narrow {
+            --min-card-width: clamp(260px, 28vw, 340px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-medium {
+            --min-card-width: clamp(240px, 26vw, 320px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-wide {
+            --min-card-width: clamp(220px, 24vw, 300px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-dense {
+            --min-card-width: clamp(200px, 22vw, 280px);
+        }
+
+        @media (max-width: 1200px) {
+            .kpi-card-grid {
+                gap: 0.65rem;
+            }
+
+            .kpi-metric-value {
+                font-size: 1.2rem;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .kpi-grid--summary,
+            .kpi-grid--centers,
+            .kpi-grid--sku {
+                --min-card-width: clamp(220px, 48vw, 320px);
+            }
+
+            .kpi-grid--center-metrics {
+                --min-card-width: clamp(150px, 42vw, 200px);
+            }
+
+            .kpi-sku-card {
+                padding: 0.75rem 0.85rem;
+            }
+        }
+
+        @media (max-width: 700px) {
+            .kpi-grid--summary,
+            .kpi-grid--centers,
+            .kpi-grid--sku {
+                grid-template-columns: repeat(auto-fit, minmax(100%, 1fr));
+            }
+
+            .kpi-grid--center-metrics {
+                grid-template-columns: repeat(auto-fit, minmax(48%, 1fr));
+            }
+
+            .kpi-metric-label {
+                font-size: 0.8rem;
+            }
+
+            .kpi-metric-value {
+                font-size: 1.05rem;
+            }
+        }
+
+        @media (max-width: 520px) {
+            .kpi-grid--center-metrics {
+                grid-template-columns: repeat(auto-fit, minmax(100%, 1fr));
+            }
+
+            .kpi-sku-title {
+                font-size: 1.0rem;
+            }
+
+            .kpi-sku-code {
+                font-size: 0.8rem;
+            }
         }
 
         @media (prefers-color-scheme: dark) {
@@ -439,6 +551,7 @@ def _build_grid(
     min_width: int | None = None,
     extra_class: str = "",
     columns: int | None = None,
+    data_attrs: Mapping[str, object] | None = None,
 ) -> str:
     if not items:
         return ""
@@ -455,21 +568,36 @@ def _build_grid(
         )
     style_value = " ".join(style_parts)
     style = f' style="{style_value}"' if style_value else ""
-    return f'<div class="{" ".join(classes)}"{style}>' + "".join(items) + "</div>"
+
+    attr_parts: list[str] = []
+    if data_attrs:
+        for key, value in data_attrs.items():
+            if value is None:
+                continue
+            attr_parts.append(f'{_escape(key)}="{_escape(value)}"')
+    attrs = (" " + " ".join(attr_parts)) if attr_parts else ""
+
+    return (
+        f'<div class="{" ".join(classes)}"{attrs}{style}>'
+        + "".join(items)
+        + "</div>"
+    )
 
 
-def _center_grid_layout(count: int) -> tuple[int, int]:
-    """Return (columns, min_width) for the center KPI grid."""
+def _center_grid_layout(count: int) -> tuple[int | None, int, str]:
+    """Return (columns, min_width, modifier_class) for the center KPI grid."""
 
     if count <= 2:
-        return 1, 320
+        return None, 320, "kpi-grid--centers-narrow"
     if count <= 4:
-        return 2, 260
-    return 3, 220
+        return None, 280, "kpi-grid--centers-medium"
+    if count <= 6:
+        return None, 250, "kpi-grid--centers-wide"
+    return None, 220, "kpi-grid--centers-dense"
 
 
 def _build_center_card(center_info: Mapping[str, object]) -> str:
-    inventory_cards = [
+    metric_cards = [
         _build_metric_card("재고", _format_number(center_info["current"]), compact=True),
         _build_metric_card(
             "이동중",
@@ -477,17 +605,18 @@ def _build_center_card(center_info: Mapping[str, object]) -> str:
             compact=True,
         ),
         _build_metric_card("생산중", _format_number(center_info["wip"]), compact=True),
-    ]
-    coverage_cards = [
         _build_metric_card("예상 소진일수", _format_days(center_info["coverage"]), compact=True),
         _build_metric_card("소진 예상일", _format_date(center_info["sellout_date"]), compact=True),
     ]
-    inventory_html = _build_grid(inventory_cards, extra_class="kpi-grid--compact")
-    coverage_html = _build_grid(coverage_cards, extra_class="kpi-grid--compact")
+    metrics_html = _build_grid(
+        metric_cards,
+        extra_class="kpi-grid--compact kpi-grid--center-metrics",
+        min_width=140,
+    )
     return (
         '<div class="kpi-center-card">'
         f'<div class="kpi-center-title">{_escape(center_info["center"])}</div>'
-        f"{inventory_html}{coverage_html}"
+        f"{metrics_html}"
         "</div>"
     )
 
@@ -863,6 +992,13 @@ def render_sku_summary_cards(
 
     centers_list = [str(center) for center in centers if str(center).strip()]
     sku_list = [str(sku) for sku in skus if str(sku).strip()]
+    centers_all = sorted(
+        {
+            str(center).strip()
+            for center in snapshot_view["center"].unique()
+            if str(center).strip()
+        }
+    )
 
     if not centers_list or not sku_list:
         st.caption("센터 또는 SKU 선택이 비어 있어 KPI를 계산할 수 없습니다.")
@@ -876,11 +1012,23 @@ def render_sku_summary_cards(
         st.caption("선택한 센터/SKU 조합에 해당하는 KPI 데이터가 없습니다.")
         return pd.DataFrame()
 
-    if latest_snapshot is None or pd.isna(latest_snapshot):
-        latest_snapshot = filtered_snapshot["date"].max()
-    if pd.isna(latest_snapshot):
+    global_latest_snapshot = snapshot_view["date"].max()
+    if pd.isna(global_latest_snapshot):
         st.caption("최신 스냅샷 일자를 확인할 수 없어 KPI를 계산할 수 없습니다.")
         return pd.DataFrame()
+    global_latest_snapshot_dt = pd.to_datetime(global_latest_snapshot).normalize()
+
+    selected_latest_snapshot = filtered_snapshot["date"].max()
+    if pd.isna(selected_latest_snapshot):
+        st.caption("최신 스냅샷 일자를 확인할 수 없어 KPI를 계산할 수 없습니다.")
+        return pd.DataFrame()
+
+    if latest_snapshot is None or pd.isna(latest_snapshot):
+        latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
+    else:
+        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
+
+    latest_snapshot = latest_snapshot_dt
 
     name_map: Mapping[str, str] = {}
     if "resource_name" in filtered_snapshot.columns:
@@ -897,6 +1045,7 @@ def render_sku_summary_cards(
                 )
 
     moves_view = moves.copy() if moves is not None else pd.DataFrame()
+    moves_global = pd.DataFrame()
     if not moves_view.empty:
         if "carrier_mode" in moves_view.columns:
             moves_view["carrier_mode"] = moves_view["carrier_mode"].astype(str).str.upper()
@@ -911,6 +1060,7 @@ def render_sku_summary_cards(
             moves_view = moves_view[
                 moves_view["resource_code"].isin(sku_list) | (moves_view["resource_code"] == "")
             ]
+        moves_global = moves_view.copy()
         if "to_center" in moves_view.columns:
             moves_view = moves_view[
                 moves_view["to_center"].isin(centers_list) | (moves_view["to_center"] == "")
@@ -963,20 +1113,27 @@ def render_sku_summary_cards(
 
     depletion_df["center"] = depletion_df.get("center").astype(str)
     center_depletion_map: Dict[tuple[str, str], Dict[str, object]] = {}
-    total_depletion_map: Dict[str, Dict[str, object]] = {}
     if not depletion_df.empty:
         for row in depletion_df.to_dict("records"):
             center_name = str(row.get("center"))
             sku_code = str(row.get("resource_code"))
-            if center_name == "__TOTAL__":
-                total_depletion_map[sku_code] = row
-            else:
+            if center_name != "__TOTAL__":
                 center_depletion_map[(sku_code, center_name)] = row
 
-    latest_snapshot_rows = filtered_snapshot[filtered_snapshot["date"] == latest_snapshot_dt].copy()
+    latest_snapshot_rows = filtered_snapshot[
+        filtered_snapshot["date"] == latest_snapshot_dt
+    ].copy()
     if "stock_qty" in latest_snapshot_rows.columns:
         latest_snapshot_rows["stock_qty"] = pd.to_numeric(
             latest_snapshot_rows["stock_qty"], errors="coerce"
+        )
+
+    global_snapshot_rows = snapshot_view[
+        snapshot_view["date"] == global_latest_snapshot_dt
+    ].copy()
+    if "stock_qty" in global_snapshot_rows.columns:
+        global_snapshot_rows["stock_qty"] = pd.to_numeric(
+            global_snapshot_rows["stock_qty"], errors="coerce"
         )
 
     current_by_center = (
@@ -990,6 +1147,12 @@ def render_sku_summary_cards(
         else pd.Series(dtype=float)
     )
 
+    global_current_totals = (
+        global_snapshot_rows.groupby("resource_code")["stock_qty"].sum()
+        if "stock_qty" in global_snapshot_rows.columns and not global_snapshot_rows.empty
+        else pd.Series(dtype=float)
+    )
+
     daily_demand_series, total_demand_series = _extract_daily_demand(latest_snapshot_rows)
 
     in_transit_series, wip_series = _movement_breakdown_per_center(
@@ -998,6 +1161,28 @@ def render_sku_summary_cards(
         sku_list,
         today_dt,
         int(lag_days),
+    )
+
+    global_in_transit_series = pd.Series(dtype=float)
+    global_wip_series = pd.Series(dtype=float)
+    if centers_all:
+        global_in_transit_series, global_wip_series = _movement_breakdown_per_center(
+            moves_global,
+            centers_all,
+            sku_list,
+            today_dt,
+            int(lag_days),
+        )
+
+    global_in_transit_totals = (
+        global_in_transit_series.groupby(level=0).sum()
+        if not global_in_transit_series.empty
+        else pd.Series(dtype=float)
+    )
+    global_wip_totals = (
+        global_wip_series.groupby(level=0).sum()
+        if not global_wip_series.empty
+        else pd.Series(dtype=float)
     )
 
     _inject_responsive_styles()
@@ -1010,25 +1195,48 @@ def render_sku_summary_cards(
 
         base_current = kpi_df.at[sku, "current"] if sku in kpi_df.index else 0
         total_current = int(current_totals.get(sku, base_current) or base_current)
+        if not global_current_totals.empty:
+            current_all_val = global_current_totals.get(sku, float("nan"))
+            total_current_all = (
+                int(round(current_all_val))
+                if pd.notna(current_all_val)
+                else total_current
+            )
+        else:
+            total_current_all = total_current
         total_transit = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
         total_wip = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
-        total_demand = float(total_demand_series.get(sku, 0.0))
-        total_depletion = total_depletion_map.get(sku, {})
-        total_coverage = total_depletion.get("days_to_depletion")
-        total_sellout_date = total_depletion.get("depletion_date")
+        if not global_in_transit_totals.empty:
+            transit_all_val = global_in_transit_totals.get(sku, float("nan"))
+            total_transit_all = (
+                int(round(transit_all_val))
+                if pd.notna(transit_all_val)
+                else total_transit
+            )
+        else:
+            total_transit_all = total_transit
 
-        if total_coverage is None:
-            total_coverage = _calculate_coverage_days(total_current, total_demand)
-            total_sellout_date = _calculate_sellout_date(today_dt, total_coverage)
+        if not global_wip_totals.empty:
+            wip_all_val = global_wip_totals.get(sku, float("nan"))
+            total_wip_all = (
+                int(round(wip_all_val))
+                if pd.notna(wip_all_val)
+                else total_wip
+            )
+        else:
+            total_wip_all = total_wip
 
         summary_cards = [
-            _build_metric_card("전체 센터 재고", _format_number(total_current)),
-            _build_metric_card("전체 이동중", _format_number(total_transit)),
-            _build_metric_card("전체 생산중", _format_number(total_wip)),
-            _build_metric_card("예상 소진일수", _format_days(total_coverage)),
-            _build_metric_card("소진 예상일", _format_date(total_sellout_date)),
+            _build_metric_card("전체 센터 재고 합계", _format_number(total_current_all)),
+            _build_metric_card("선택 센터 재고 합계", _format_number(total_current)),
+            _build_metric_card("전체 이동중 재고 합계", _format_number(total_transit_all)),
+            _build_metric_card("전체 생산중 재고 합계", _format_number(total_wip_all)),
         ]
-        summary_html = _build_grid(summary_cards, extra_class="kpi-grid--summary")
+        summary_html = _build_grid(
+            summary_cards,
+            extra_class="kpi-grid--summary",
+            min_width=220,
+        )
 
         center_cards: list[str] = []
         for center in centers_list:
@@ -1061,12 +1269,13 @@ def render_sku_summary_cards(
                 )
             )
 
-        center_cols, center_min_width = _center_grid_layout(len(center_cards))
+        center_cols, center_min_width, center_modifier = _center_grid_layout(len(center_cards))
         centers_html = _build_grid(
             center_cards,
-            extra_class="kpi-grid--centers",
+            extra_class=f"kpi-grid--centers {center_modifier}".strip(),
             min_width=center_min_width,
             columns=center_cols,
+            data_attrs={"data-center-count": len(center_cards)},
         )
 
         if display_name:
