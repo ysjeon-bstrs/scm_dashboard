@@ -182,14 +182,41 @@ def _ensure_data() -> Optional[LoadedData]:
     return data
 
 
+BAN_SET = {"", "nan", "None", "WIP", "In-Transit", "Transit", "생산중", "Production"}
+BAN_SET_CI = {value.casefold() for value in BAN_SET}
+
+
+def _norm_center(x: str) -> str | None:
+    if not isinstance(x, str):
+        return None
+    value = x.strip()
+    if value.casefold() in BAN_SET_CI:
+        return None
+    if value in {"AcrossBUS", "어크로스비US"}:
+        return "어크로스비US"
+    return value
+
+
 def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[list[str], list[str]]:
     """Derive selectable centers and SKUs from moves and snapshot frames."""
 
-    move_centers = set(moves["from_center"].dropna().astype(str)) | set(
-        moves["to_center"].dropna().astype(str)
+    snap_centers_src = snapshot.get("center")
+    if snap_centers_src is None:
+        snap_centers = pd.Series(dtype=str)
+    else:
+        snap_centers = snap_centers_src.dropna().astype(str).str.strip()
+    move_centers = pd.concat(
+        [
+            moves.get("from_center", pd.Series(dtype=object)),
+            moves.get("to_center", pd.Series(dtype=object)),
+        ],
+        ignore_index=True,
+    ).dropna().astype(str).str.strip()
+
+    all_candidates = pd.concat([snap_centers, move_centers], ignore_index=True).dropna()
+    centers = sorted(
+        {c for c in (_norm_center(value) for value in all_candidates) if c}
     )
-    snap_centers = set(snapshot["center"].dropna().astype(str))
-    centers = sorted({c for c in move_centers | snap_centers if c and c.lower() != "nan"})
 
     skus = sorted(snapshot["resource_code"].dropna().astype(str).unique().tolist())
     if not skus:

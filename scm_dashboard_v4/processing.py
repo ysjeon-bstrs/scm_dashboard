@@ -180,6 +180,21 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
     wip_df_norm = wip_df.copy()
     wip_df_norm["wip_start"] = pd.to_datetime(wip_df_norm["wip_start"], errors="coerce").dt.normalize()
     wip_df_norm["wip_ready"] = pd.to_datetime(wip_df_norm["wip_ready"], errors="coerce").dt.normalize()
+
+    def _first_valid_center(series: Optional[pd.Series]) -> Optional[str]:
+        if series is None:
+            return None
+        for value in series.dropna().astype(str).str.strip():
+            if value and value.upper() != "WIP":
+                return value
+        return None
+
+    default_center = _first_valid_center(wip_df_norm.get("to_center"))
+    if default_center is None and "to_center" in moves_df:
+        default_center = _first_valid_center(moves_df["to_center"])
+    if default_center is None and "from_center" in moves_df:
+        default_center = _first_valid_center(moves_df["from_center"])
+
     wip_moves = pd.DataFrame(
         {
             "resource_code": wip_df_norm["resource_code"],
@@ -194,6 +209,20 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
             "lot": wip_df_norm.get("lot", ""),
         }
     )
+
+    wip_moves["to_center"] = wip_moves["to_center"].astype("string").str.strip()
+    mask_to_wip = (wip_moves["to_center"].str.upper() == "WIP").fillna(False)
+    if default_center:
+        wip_moves.loc[mask_to_wip, "to_center"] = default_center
+    else:
+        wip_moves.loc[mask_to_wip, "to_center"] = pd.NA
+
+    wip_moves["from_center"] = wip_moves["from_center"].astype("string").str.strip()
+    mask_from_wip = (wip_moves["from_center"].str.upper() == "WIP").fillna(False)
+    wip_moves.loc[mask_from_wip, "from_center"] = (
+        wip_moves.loc[mask_from_wip, "to_center"].fillna(default_center)
+    )
+
     for col in ["onboard_date", "arrival_date", "event_date"]:
         wip_moves[col] = pd.to_datetime(wip_moves[col], errors="coerce").dt.normalize()
     return pd.concat([moves_df, wip_moves], ignore_index=True)
