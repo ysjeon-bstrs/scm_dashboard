@@ -50,6 +50,9 @@ def apply_consumption_with_events(
 
     if cons_start is not None:
         cons_start_norm = pd.to_datetime(cons_start).normalize()
+        cons_start_norm = max(cons_start_norm, start_norm)
+        if not pd.isna(latest_snap):
+            cons_start_norm = max(cons_start_norm, latest_snap + pd.Timedelta(days=1))
     elif pd.isna(latest_snap):
         cons_start_norm = start_norm
     else:
