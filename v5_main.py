@@ -200,12 +200,11 @@ def _norm_center(x: str) -> str | None:
 def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[list[str], list[str]]:
     """Derive selectable centers and SKUs from moves and snapshot frames."""
 
-    snap_centers = (
-        snapshot[CENTER_COL]
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
+    snap_centers_src = snapshot.get("center")
+    if snap_centers_src is None:
+        snap_centers = pd.Series(dtype=str)
+    else:
+        snap_centers = snap_centers_src.dropna().astype(str).str.strip()
     move_centers = pd.concat(
         [
             moves.get("from_center", pd.Series(dtype=object)),
