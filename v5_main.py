@@ -198,6 +198,78 @@ def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tupl
     return centers, skus
 
 
+def _move_date_bounds(moves: pd.DataFrame) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+    """Return the earliest and latest movement dates available in *moves*."""
+
+    date_columns = [
+        col
+        for col in ("onboard_date", "arrival_date", "inbound_date", "event_date")
+        if col in moves.columns
+    ]
+    if not date_columns:
+        return None, None
+
+    normalized_dates = []
+    for col in date_columns:
+        series = pd.to_datetime(moves[col], errors="coerce").dropna()
+        if not series.empty:
+            normalized_dates.append(series.dt.normalize())
+
+    if not normalized_dates:
+        return None, None
+
+    combined = pd.concat(normalized_dates, ignore_index=True)
+    if combined.empty:
+        return None, None
+
+    min_dt = combined.min()
+    max_dt = combined.max()
+    if pd.isna(min_dt) or pd.isna(max_dt):
+        return None, None
+
+    return pd.Timestamp(min_dt).normalize(), pd.Timestamp(max_dt).normalize()
+
+
+def _calculate_date_bounds(
+    *,
+    today: pd.Timestamp,
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame,
+    base_past_days: int,
+    base_future_days: int,
+) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    """Compute the selectable date range for the dashboard period slider."""
+
+    normalized_today = pd.Timestamp(today).normalize()
+    base_min = (normalized_today - pd.Timedelta(days=base_past_days)).normalize()
+    base_max = (normalized_today + pd.Timedelta(days=base_future_days)).normalize()
+
+    bound_min_candidates = [base_min]
+    bound_max_candidates = [base_max]
+
+    snap_dates = pd.to_datetime(snapshot_df.get("date"), errors="coerce").dropna()
+    if not snap_dates.empty:
+        bound_min_candidates.append(snap_dates.min().normalize())
+        bound_max_candidates.append(snap_dates.max().normalize())
+
+    move_min, move_max = _move_date_bounds(moves_df)
+    if move_min is not None:
+        bound_min_candidates.append(move_min)
+    if move_max is not None:
+        bound_max_candidates.append(move_max)
+
+    dynamic_min = min(bound_min_candidates)
+    dynamic_max = max(bound_max_candidates)
+
+    bound_min = max(dynamic_min, base_min)
+    bound_max = min(dynamic_max, base_max)
+
+    if bound_min > bound_max:
+        bound_min = bound_max
+
+    return bound_min.normalize(), bound_max.normalize()
+
+
 def get_consumption_params_from_ui() -> dict[str, object]:
     """Collect shared consumption parameters from the UI controls."""
 
@@ -255,19 +327,18 @@ def main() -> None:
     latest_snapshot_dt = (
         None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
     )
-    past_days = 10
-    future_days = 30
-    if snap_dates.empty:
-        snap_min = today - pd.Timedelta(days=past_days)
-        snap_max = today
-    else:
-        snap_min = snap_dates.min().normalize()
-        snap_max = snap_dates.max().normalize()
+    default_past_days = 10
+    default_future_days = 30
+    base_past_days = 42
+    base_future_days = 42
 
-    bound_min = max(today - pd.Timedelta(days=past_days), snap_min)
-    bound_max = min(today + pd.Timedelta(days=future_days), snap_max + pd.Timedelta(days=60))
-    if bound_min > bound_max:
-        bound_min = bound_max
+    bound_min, bound_max = _calculate_date_bounds(
+        today=today,
+        snapshot_df=snapshot_df,
+        moves_df=data.moves,
+        base_past_days=base_past_days,
+        base_future_days=base_future_days,
+    )
 
     def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
         start_val, end_val = range_value
@@ -281,8 +352,8 @@ def main() -> None:
 
     def _init_range() -> None:
         if "date_range" not in st.session_state:
-            default_start = max(today - pd.Timedelta(days=10), bound_min)
-            default_end = min(today + pd.Timedelta(days=30), bound_max)
+            default_start = max(today - pd.Timedelta(days=default_past_days), bound_min)
+            default_end = min(today + pd.Timedelta(days=default_future_days), bound_max)
             if default_start > default_end:
                 default_start = default_end
             st.session_state.date_range = (default_start, default_end)
