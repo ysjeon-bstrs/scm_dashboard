@@ -19,7 +19,10 @@ from scm_dashboard_v4.processing import (
 )
 
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
-from scm_dashboard_v5.forecast import apply_consumption_with_events
+from scm_dashboard_v5.forecast import (
+    apply_consumption_with_events,
+    estimate_daily_consumption,
+)
 from scm_dashboard_v5.ui import (
     render_amazon_panel,
     render_step_chart,
@@ -401,22 +404,26 @@ def main() -> None:
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
 
-    timeline_for_chart = timeline_actual.copy()
-    if use_cons_forecast:
-        cons_start = None
-        if latest_snapshot_dt is not None:
-            cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
-        timeline_for_chart = apply_consumption_with_events(
-            timeline_for_chart,
-            snapshot_df,
-            centers=selected_centers,
-            skus=selected_skus,
-            start=start_ts,
-            end=end_ts,
-            lookback_days=lookback_days,
-            events=events,
-            cons_start=cons_start,
-        )
+    cons_start = None
+    if latest_snapshot_dt is not None:
+        cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
+
+    timeline_forecast = apply_consumption_with_events(
+        timeline_actual,
+        snapshot_df,
+        centers=selected_centers,
+        skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+        lookback_days=lookback_days,
+        events=events,
+        cons_start=cons_start,
+    )
+
+    if timeline_forecast is None or timeline_forecast.empty:
+        timeline_forecast = timeline_actual.copy()
+
+    timeline_for_chart = timeline_forecast.copy() if use_cons_forecast else timeline_actual.copy()
 
     render_step_chart(
         timeline_for_chart,
@@ -429,35 +436,27 @@ def main() -> None:
         today=today_norm,
     )
     # -------------------- Amazon US sales vs. inventory --------------------
-    # 선택한 센터 중 AMZ/AMAZON만 추출 (없으면 스냅샷에서 자동 감지)
-    amazon_candidates = [
-        c for c in selected_centers
+    amazon_centers = [
+        c
+        for c in selected_centers
         if isinstance(c, str) and (c.upper().startswith("AMZ") or "AMAZON" in c.upper())
     ]
-    
+
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
-    
-    # 계단식 차트와 색을 맞추고 싶으면 render_step_chart 결과에서
-    # sku->color 매핑을 만들어 color_map 인자로 넘겨도 됩니다.
-    # (당장 매핑이 없으면 생략 가능)
-    sku_color_map = None  # 혹은 {'BA00021':'#4E79A7', 'BA00022':'#F28E2B', ...}
-    
+
     render_amazon_panel(
-        snap_long=snapshot_df if 'snapshot_df' in locals() else snap_long,  # v5/v4 호환
-        centers=amazon_candidates if amazon_candidates else list(snapshot_df['center'].unique()),
+        timeline_actual=timeline_actual,
+        timeline_forecast=timeline_forecast if use_cons_forecast else timeline_actual,
+        snap_long=snapshot_df,
+        moves=data.moves,
+        centers=amazon_centers,
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
+        lookback_days=int(lookback_days),
         today=today_norm,
-        color_map=sku_color_map,  # 없으면 None
-        show_ma7=True,            # 7일 이동평균 기반 예측
-        show_inventory_forecast=use_cons_forecast,
-        use_consumption_forecast=use_cons_forecast,
-        lookback_days=lookback_days,
         events=events,
-        timeline=timeline_actual,
-        show_wip=show_prod,
     )
 
 

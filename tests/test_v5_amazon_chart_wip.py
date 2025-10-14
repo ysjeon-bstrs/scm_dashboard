@@ -39,6 +39,18 @@ def _sample_timeline():
     )
 
 
+def _sample_forecast():
+    return pd.DataFrame(
+        [
+            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
+            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
+            {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
+            {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 70},
+            {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 60},
+        ]
+    )
+
+
 def test_render_step_chart_adds_wip_trace(monkeypatch):
     captured = _capture_plot(monkeypatch)
 
@@ -99,22 +111,29 @@ def test_render_step_chart_accepts_legacy_wip_center(monkeypatch):
     assert all("WIP" not in (name or "") for name in trace_names)
 
 
-def test_render_amazon_sales_vs_inventory_omits_wip_trace(monkeypatch):
+def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
     captured = _capture_plot(monkeypatch)
 
-    charts.render_amazon_sales_vs_inventory(
+    charts.render_amazon_panel(
+        timeline_actual=_sample_timeline(),
+        timeline_forecast=_sample_forecast(),
         snap_long=_sample_snapshot(),
+        moves=pd.DataFrame(),
         centers=["AMZUS"],
         skus=["SKU1"],
         start=pd.Timestamp("2023-01-01"),
-        end=pd.Timestamp("2023-01-03"),
+        end=pd.Timestamp("2023-01-05"),
+        lookback_days=2,
         today=pd.Timestamp("2023-01-02"),
-        color_map={"SKU1": "#123456"},
-        show_ma7=False,
-        show_inventory_forecast=False,
-        timeline=_sample_timeline(),
+        events=None,
     )
 
     fig = captured["fig"]
-    assert all("생산중" not in (tr.name or "") for tr in fig.data)
-    assert all("WIP" not in (tr.name or "") for tr in fig.data)
+    trace_names = [tr.name for tr in fig.data]
+    assert "SKU1 재고(실측)" in trace_names
+    assert "SKU1 재고(예측)" in trace_names
+
+    sales_traces = [tr for tr in fig.data if "판매" in (tr.name or "")]
+    assert sales_traces, "판매 막대가 렌더링되어야 합니다."
+    for tr in sales_traces:
+        assert all(float(v).is_integer() for v in tr.y), "판매 막대는 정수여야 합니다."
