@@ -1,7 +1,7 @@
 # scm_dashboard_v5/ui/charts.py
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,55 @@ PALETTE = [
     "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
     "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
 ]
+
+
+def _hex_to_rgb(hx: str) -> Tuple[int, int, int]:
+    hx = hx.lstrip("#")
+    if len(hx) == 3:
+        hx = "".join(ch * 2 for ch in hx)
+    return tuple(int(hx[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb: Tuple[float, float, float]) -> str:
+    r, g, b = [max(0, min(255, int(round(v)))) for v in rgb]
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _tint(hex_color: str, factor: float) -> str:
+    r, g, b = _hex_to_rgb(hex_color)
+    if factor >= 1.0:
+        r = r + (255 - r) * (factor - 1.0)
+        g = g + (255 - g) * (factor - 1.0)
+        b = b + (255 - b) * (factor - 1.0)
+    else:
+        r = r * factor
+        g = g * factor
+        b = b * factor
+    return _rgb_to_hex((r, g, b))
+
+
+CENTER_SHADE: Dict[str, float] = {
+    "태광KR": 0.85,
+    "AMZUS": 1.00,
+    "CJ서부US": 1.15,
+    "품고KR": 0.90,
+    "AcrossBUS": 1.10,
+    "SBSPH": 1.05,
+    "SBSSG": 1.05,
+    "SBSMY": 1.05,
+}
+DEFAULT_SHADE_STEP = 0.10
+
+
+def _shade_for(center: str, index: int) -> float:
+    if center in CENTER_SHADE:
+        return CENTER_SHADE[center]
+    if index <= 0:
+        return 1.0
+    step = ((index + 1) // 2) * DEFAULT_SHADE_STEP
+    if index % 2 == 1:
+        return 1.0 + step
+    return max(0.4, 1.0 - step)
 
 _PLOTLY_WARNING_EMITTED = False
 
@@ -420,8 +469,29 @@ def render_amazon_panel(
     sku_colors = _sku_color_map(skus)
     fig = go.Figure()
 
-    for sku, g in actual.groupby("resource_code"):
+    if "center" in actual.columns:
+        actual["center"] = actual["center"].astype(str)
+    else:
+        actual = actual.assign(center="")
+    if "center" in forecast.columns:
+        forecast["center"] = forecast["center"].astype(str)
+    sku_center_seen: Dict[str, Dict[str, int]] = {}
+
+    for (sku, center), g in actual.groupby(["resource_code", "center"]):
+        if not sku:
+            continue
+        label_center = center or ""
+        if isinstance(label_center, str) and label_center.lower() == "nan":
+            label_center = "Unknown"
         g = g.sort_values("date")
+        base_color = sku_colors.get(sku, PALETTE[0])
+        centers_for_sku = sku_center_seen.setdefault(sku, {})
+        if label_center not in centers_for_sku:
+            centers_for_sku[label_center] = len(centers_for_sku)
+        center_index = centers_for_sku[label_center]
+        shade = _shade_for(label_center, center_index)
+        color = _tint(base_color, shade)
+
         before = g[g["date"] <= today]
         if not before.empty:
             fig.add_trace(
@@ -430,15 +500,25 @@ def render_amazon_panel(
                     y=before["stock_qty"],
                     name=f"{sku} 재고(실측)",
                     mode="lines",
-                    line=dict(color=sku_colors[sku], width=2),
+                    line=dict(color=color, width=2.4),
                     yaxis="y2",
-                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>재고 %{y:,} EA<extra></extra>",
+                    legendgroup=f"{sku} @{label_center}",
+                    hovertemplate=(
+                        f"센터: {label_center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
+                    ),
                 )
             )
 
-        after = forecast[
-            (forecast["resource_code"] == sku) & (forecast["date"] >= today)
-        ]
+        if "center" in forecast.columns:
+            after = forecast[
+                (forecast["resource_code"] == sku)
+                & (forecast["center"] == center)
+                & (forecast["date"] >= today)
+            ]
+        else:
+            after = forecast[
+                (forecast["resource_code"] == sku) & (forecast["date"] >= today)
+            ]
         if not after.empty:
             fig.add_trace(
                 go.Scatter(
@@ -446,9 +526,12 @@ def render_amazon_panel(
                     y=after["stock_qty"],
                     name=f"{sku} 재고(예측)",
                     mode="lines",
-                    line=dict(color=sku_colors[sku], width=2, dash="dot"),
+                    line=dict(color=color, width=2.0, dash="dot"),
                     yaxis="y2",
-                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>재고 %{y:,} EA<extra></extra>",
+                    legendgroup=f"{sku} @{label_center}",
+                    hovertemplate=(
+                        f"센터: {label_center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
+                    ),
                 )
             )
 
@@ -662,16 +745,25 @@ def render_step_chart(
         color_labels.extend([f"{sku} @ 태광KR" for sku in wip_skus_for_colors])
 
     sku_colors = _step_sku_color_map(color_labels)
+    sku_center_seen: Dict[str, Dict[str, int]] = {}
     for tr in fig.data:
         name = tr.name or ""
-        sku, center = (name.split(" @ ", 1) + [""])[:2]
-        color = sku_colors.get(sku, _STEP_PALETTE[0])
+        if " @ " not in name:
+            continue
+        sku, center = name.split(" @ ", 1)
+        base_color = sku_colors.get(sku, _STEP_PALETTE[0])
 
-        # 상태/센터별 선 스타일
         if center == "In-Transit":
-            tr.update(line=dict(color=color, dash="dot", width=2.0), opacity=0.85)
-        else:
-            tr.update(line=dict(color=color, dash="solid", width=2.2), opacity=0.95)
+            tr.update(line=dict(color=base_color, dash="dot", width=2.0), opacity=0.85)
+            continue
+
+        centers_for_sku = sku_center_seen.setdefault(sku, {})
+        if center not in centers_for_sku:
+            centers_for_sku[center] = len(centers_for_sku)
+        center_index = centers_for_sku[center]
+        shade = _shade_for(center, center_index)
+        color = _tint(base_color, shade)
+        tr.update(line=dict(color=color, dash="solid", width=2.4), opacity=0.95)
 
     wip_plot: Optional[pd.DataFrame] = None
     if show_wip and not wip_source.empty:
