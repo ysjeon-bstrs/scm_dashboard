@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Set
 
 import numpy as np
 import pandas as pd
+
+
+TIMELINE_COLUMNS = ["date", "center", "resource_code", "stock_qty"]
+
+
+def _empty_timeline() -> pd.DataFrame:
+    """Return a shared empty frame matching the timeline schema."""
+
+    return pd.DataFrame(columns=TIMELINE_COLUMNS)
+
+
+def _normalise_selection(values: Iterable[str]) -> Set[str]:
+    """Return a cleaned-up selection set used across builders."""
+
+    normalised = {str(value).strip() for value in values if value is not None}
+    return {value for value in normalised if value}
+
+
+def _resolve_onboard_column(frame: pd.DataFrame) -> str:
+    """Pick the effective onboarding date column present in *frame*."""
+
+    if "_onboard_date_actual" in frame.columns:
+        return "_onboard_date_actual"
+    return "onboard_date"
 
 
 @dataclass(frozen=True)
@@ -27,14 +51,14 @@ def build_center_series(
     skus: Iterable[str],
     index: SeriesIndex,
 ) -> pd.DataFrame:
-    centers_set = {str(c) for c in centers}
-    skus_set = {str(s) for s in skus}
+    centers_set = _normalise_selection(centers)
+    skus_set = _normalise_selection(skus)
     if snapshot.empty or not centers_set or not skus_set:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     idx = index.range
     mv = moves.copy()
-    ship_start_col = "_onboard_date_actual" if "_onboard_date_actual" in mv.columns else "onboard_date"
+    ship_start_col = _resolve_onboard_column(mv)
 
     lines = []
     for (ct, sku), grp in snapshot.groupby(["center", "resource_code"]):
@@ -104,9 +128,9 @@ def build_center_series(
         lines.append(ts)
 
     if not lines:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
     out = pd.concat(lines, ignore_index=True)
-    return out
+    return out[TIMELINE_COLUMNS]
 
 
 def build_in_transit_series(
@@ -119,17 +143,17 @@ def build_in_transit_series(
     lag_days: int,
 ) -> pd.DataFrame:
     if moves.empty:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
-    centers_set = {str(c) for c in centers}
-    skus_set = {str(s) for s in skus}
+    centers_set = _normalise_selection(centers)
+    skus_set = _normalise_selection(skus)
     if not centers_set or not skus_set:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     start_dt = index.start
     horizon_end = index.end
     idx = index.range
-    start_col = "_onboard_date_actual" if "_onboard_date_actual" in moves.columns else "onboard_date"
+    start_col = _resolve_onboard_column(moves)
 
     filtered = moves[
         (moves["carrier_mode"] != "WIP")
@@ -137,7 +161,7 @@ def build_in_transit_series(
         & moves["to_center"].isin(centers_set)
     ].copy()
     if filtered.empty:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     lines = []
     for sku, grp in filtered.groupby("resource_code"):
@@ -173,11 +197,11 @@ def build_in_transit_series(
             )
 
     if not lines:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     out = pd.concat(lines, ignore_index=True)
     out["stock_qty"] = out["stock_qty"].round().astype(int)
-    return out
+    return out[TIMELINE_COLUMNS]
 
 
 def build_wip_series(
@@ -187,18 +211,18 @@ def build_wip_series(
     index: SeriesIndex,
 ) -> pd.DataFrame:
     if moves.empty:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
-    skus_set = {str(s) for s in skus}
+    skus_set = _normalise_selection(skus)
     if not skus_set:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     idx = index.range
-    start_col = "_onboard_date_actual" if "_onboard_date_actual" in moves.columns else "onboard_date"
+    start_col = _resolve_onboard_column(moves)
 
     wip = moves[(moves["carrier_mode"] == "WIP") & moves["resource_code"].isin(skus_set)]
     if wip.empty:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     lines = []
     for sku, grp in wip.groupby("resource_code"):
@@ -242,8 +266,8 @@ def build_wip_series(
         )
 
     if not lines:
-        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        return _empty_timeline()
 
     out = pd.concat(lines, ignore_index=True)
     out["stock_qty"] = out["stock_qty"].round().astype(int)
-    return out
+    return out[TIMELINE_COLUMNS]
