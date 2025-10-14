@@ -1030,6 +1030,13 @@ def render_sku_summary_cards(
 
     latest_snapshot = latest_snapshot_dt
 
+    if latest_snapshot is None or pd.isna(latest_snapshot):
+        latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
+    else:
+        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
+
+    latest_snapshot = latest_snapshot_dt
+
     name_map: Mapping[str, str] = {}
     if "resource_name" in filtered_snapshot.columns:
         name_rows = filtered_snapshot.dropna(subset=["resource_code", "resource_name"]).copy()
