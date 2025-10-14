@@ -5,14 +5,12 @@ UI 레이어의 공개 API만 간단히 재내보내기(re-export).
 
 from .charts import (
     render_step_chart,
-    render_amazon_sales_vs_inventory,
     render_amazon_panel,
     render_sku_summary_cards,
 )
 
 __all__ = (
     "render_step_chart",
-    "render_amazon_sales_vs_inventory",
     "render_amazon_panel",
     "render_sku_summary_cards",
 )
