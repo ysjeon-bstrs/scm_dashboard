@@ -93,14 +93,14 @@ def compute_depletion_metrics(
     sim_end = end + pd.Timedelta(days=int(horizon_pad_days))
 
     timeline = build_core_timeline(
-        snap_long=snap_long,
+        snapshot=snap_long,
         moves=moves,
-        centers_sel=list(centers),
-        skus_sel=list(skus),
-        start_dt=start,
-        end_dt=end,
-        horizon_days=horizon_days,
+        centers=list(centers),
+        skus=list(skus),
+        start=start,
+        end=end,
         today=today,
+        horizon_days=horizon_days,
     )
 
     if timeline is None or timeline.empty:
