@@ -1,9 +1,10 @@
-"""Forecasting adapters that reuse the proven v4 consumption logic."""
+"""Forecast-period helpers that mirror the proven v4 logic for v5."""
 
 from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from scm_dashboard_v4 import consumption as v4_consumption
@@ -27,71 +28,100 @@ def apply_consumption_with_events(
     events: Optional[Iterable[dict]] = None,
     cons_start: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """Delegate to the v4 helper while controlling the consumption window."""
-
     centers_list = list(centers)
     skus_list = list(skus)
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
     events_list = list(events) if events else None
 
-    timeline_copy = timeline.copy()
-    if "date" in timeline_copy.columns:
-        timeline_copy["date"] = pd.to_datetime(
-            timeline_copy["date"], errors="coerce"
-        ).dt.normalize()
+    out = timeline.copy()
+    if out.empty:
+        return out
 
-    result = v4_consumption.apply_consumption_with_events(
-        timeline_copy,
-        snapshot,
-        centers_list,
-        skus_list,
-        start_norm,
-        end_norm,
-        int(lookback_days),
-        events_list,
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+
+    snap_cols = {c.lower(): c for c in snapshot.columns}
+    date_col = snap_cols.get("date") or snap_cols.get("snapshot_date")
+    if date_col is None:
+        raise KeyError("snapshot must include a 'date' or 'snapshot_date' column")
+
+    latest_vals = pd.to_datetime(snapshot[date_col], errors="coerce").dropna()
+    latest_snap = latest_vals.max().normalize() if not latest_vals.empty else pd.NaT
+
+    if cons_start is not None:
+        cons_start_norm = pd.to_datetime(cons_start).normalize()
+        cons_start_norm = max(cons_start_norm, start_norm)
+        if not pd.isna(latest_snap):
+            cons_start_norm = max(cons_start_norm, latest_snap + pd.Timedelta(days=1))
+    elif pd.isna(latest_snap):
+        cons_start_norm = start_norm
+    else:
+        cons_start_norm = max(latest_snap + pd.Timedelta(days=1), start_norm)
+
+    if cons_start_norm > end_norm:
+        return out
+
+    idx = pd.date_range(cons_start_norm, end_norm, freq="D")
+    uplift = pd.Series(1.0, index=idx)
+    if events_list:
+        for event in events_list:
+            s = pd.to_datetime(event.get("start"), errors="coerce")
+            t = pd.to_datetime(event.get("end"), errors="coerce")
+            u = min(3.0, max(-1.0, float(event.get("uplift", 0.0))))
+            if pd.notna(s) and pd.notna(t):
+                s = s.normalize()
+                t = t.normalize()
+                s = max(s, idx[0])
+                t = min(t, idx[-1])
+                if s <= t:
+                    uplift.loc[s:t] = uplift.loc[s:t] * (1.0 + u)
+
+    rates = {}
+    if not pd.isna(latest_snap):
+        rates = v4_consumption.estimate_daily_consumption(
+            snapshot,
+            centers_list,
+            skus_list,
+            latest_snap,
+            int(lookback_days),
+        )
+
+    chunks: list[pd.DataFrame] = []
+    for (ct, sku), grp in out.groupby(["center", "resource_code"]):
+        g = grp.sort_values("date").copy()
+        g["stock_qty"] = pd.to_numeric(g.get("stock_qty"), errors="coerce")
+        g["stock_qty"] = g["stock_qty"].ffill()
+
+        if ct in ("In-Transit", "WIP"):
+            chunks.append(g)
+            continue
+
+        rate = float(rates.get((ct, sku), 0.0)) if rates else 0.0
+        if rate > 0:
+            mask = g["date"] >= cons_start_norm
+            if mask.any():
+                daily = g.loc[mask, "date"].map(uplift).fillna(1.0).values * rate
+                stk = g.loc[mask, "stock_qty"].astype(float).values
+                for i in range(len(stk)):
+                    dec = daily[i]
+                    stk[i:] = np.maximum(0.0, stk[i:] - dec)
+                g.loc[mask, "stock_qty"] = stk
+
+        chunks.append(g)
+
+    if not chunks:
+        return out
+
+    combined = pd.concat(chunks, ignore_index=True)
+    combined = combined.sort_values(["center", "resource_code", "date"])
+    combined["stock_qty"] = pd.to_numeric(combined["stock_qty"], errors="coerce")
+    combined["stock_qty"] = combined.groupby(["center", "resource_code"]) [
+        "stock_qty"
+    ].ffill()
+    combined["stock_qty"] = combined["stock_qty"].fillna(0)
+    combined["stock_qty"] = combined["stock_qty"].replace([np.inf, -np.inf], 0)
+    combined["stock_qty"] = (
+        combined["stock_qty"].round().clip(lower=0).astype(int)
     )
 
-    if cons_start is None or "date" not in result.columns:
-        return result
-
-    cons_start_norm = pd.to_datetime(cons_start).normalize()
-    result = result.copy()
-    result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
-
-    if "date" not in timeline_copy.columns:
-        return result
-
-    key_cols = [
-        col
-        for col in ["date", "center", "resource_code"]
-        if col in result.columns and col in timeline_copy.columns
-    ]
-
-    if not key_cols:
-        return result
-
-    orig = (
-        timeline_copy[key_cols + ["stock_qty"]]
-        .copy()
-        .rename(columns={"stock_qty": "_orig_stock_qty"})
-    )
-
-    # Ensure unique keys to avoid Cartesian products during alignment.
-    orig = orig.drop_duplicates(subset=key_cols, keep="last")
-
-    merged = result.merge(orig, on=key_cols, how="left")
-    mask = merged["date"] < cons_start_norm
-    if mask.any():
-        restored = merged.loc[mask, "_orig_stock_qty"].fillna(merged.loc[mask, "stock_qty"])
-        merged.loc[mask, "stock_qty"] = restored.values
-
-    merged = merged.drop(columns=["_orig_stock_qty"], errors="ignore")
-
-    # Reorder columns to match the original timeline when possible.
-    desired_cols = list(timeline_copy.columns)
-    remaining_cols = [c for c in merged.columns if c not in desired_cols]
-    ordered_cols = desired_cols + remaining_cols
-    merged = merged[[c for c in ordered_cols if c in merged.columns]]
-
-    return merged
+    return combined
