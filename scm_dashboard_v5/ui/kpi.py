@@ -93,8 +93,8 @@ def compute_depletion_metrics(
     sim_end = end + pd.Timedelta(days=int(horizon_pad_days))
 
     timeline = build_core_timeline(
-        snapshot=snap_long,
-        moves=moves,
+        snap_long,
+        moves,
         centers=list(centers),
         skus=list(skus),
         start=start,
@@ -106,15 +106,18 @@ def compute_depletion_metrics(
     if timeline is None or timeline.empty:
         return pd.DataFrame(columns=result_columns)
 
+    cons_start = max(latest_snap + pd.Timedelta(days=1), start)
+
     timeline_cons = apply_consumption_with_events(
-        timeline=timeline,
-        snap_long=snap_long,
-        centers_sel=list(centers),
-        skus_sel=list(skus),
-        start_dt=start,
-        end_dt=sim_end,
+        timeline,
+        snap_long,
+        centers=list(centers),
+        skus=list(skus),
+        start=start,
+        end=sim_end,
         lookback_days=int(lookback_days),
         events=list(events) if events else None,
+        cons_start=cons_start,
     )
 
     if timeline_cons is None or timeline_cons.empty:
@@ -124,7 +127,6 @@ def compute_depletion_metrics(
     timeline_cons = timeline_cons.loc[~special_center_mask].copy()
     if timeline_cons.empty:
         return pd.DataFrame(columns=result_columns)
-    cons_start = max(latest_snap + pd.Timedelta(days=1), start)
 
     rows: List[Dict[str, object]] = []
 
