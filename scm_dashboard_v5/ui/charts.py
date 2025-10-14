@@ -205,6 +205,30 @@ def _sku_colors(skus: Sequence[str], base: Optional[Dict[str, str]] = None) -> D
             i += 1
     return cmap
 
+
+def _is_wip_center_name(value: object) -> bool:
+    """Return True when the provided center name represents a WIP/production bucket."""
+
+    text = str(value or "")
+    upper = text.upper()
+    if "WIP" in upper or "PRODUCTION" in upper:
+        return True
+    return "생산" in text
+
+
+def _drop_wip_centers(df: pd.DataFrame, *, center_col: str = "center") -> pd.DataFrame:
+    """Remove rows that represent WIP/production centers from the given DataFrame."""
+
+    if not isinstance(df, pd.DataFrame) or center_col not in df.columns:
+        return df
+
+    centers = df[center_col].astype(str)
+    mask = centers.map(_is_wip_center_name)
+    if not mask.any():
+        return df.copy()
+
+    return df.loc[~mask].copy()
+
 def _pick_amazon_centers(all_centers: Iterable[str]) -> List[str]:
     """선택 센터 중 Amazon 계열만 추출 (없으면 자동 감지에 사용)"""
     out = []
@@ -351,7 +375,7 @@ def render_amazon_sales_vs_inventory(
     use_consumption_forecast: bool = False,
     lookback_days: int = 28,
     timeline: Optional[pd.DataFrame] = None,
-    show_wip: bool = True,
+    show_wip: Optional[bool] = None,
 ) -> None:
     """
     Amazon US 일별 판매(누적 막대) vs. 재고(라인) 패널.
@@ -359,10 +383,26 @@ def render_amazon_sales_vs_inventory(
     - 판매(예측): 최근 7일(옵션) 평균을 오늘 다음 날부터 적용 (막대 색상 동일)
     - 재고(실측): 실선, 재고(예측): 오늘 이후 점선
     - SKU별 색상 고정, 계단형 라인(hv), 오늘 세로 기준선 추가
-    - show_wip=True 시 타임라인 데이터의 WIP(생산중) 재고를 점선으로 추가 표시
+    - 생산중(WIP) 수량은 Amazon 판매/재고 패널에서 더 이상 노출되지 않음
     """
+    show_wip_flag = False if show_wip is None else bool(show_wip)
+
     if not _ensure_plotly_available():
         return
+
+    centers_list = [str(c) for c in centers]
+    if not show_wip_flag:
+        centers_list = [c for c in centers_list if not _is_wip_center_name(c)]
+
+    snap_df = snap_long.copy()
+    if not show_wip_flag:
+        snap_df = _drop_wip_centers(snap_df, center_col="center")
+
+    timeline_df: Optional[pd.DataFrame] = None
+    if isinstance(timeline, pd.DataFrame):
+        timeline_df = timeline.copy()
+        if not show_wip_flag:
+            timeline_df = _drop_wip_centers(timeline_df, center_col="center")
 
     start = _as_naive_timestamp(start)
     end = _as_naive_timestamp(end)
@@ -373,10 +413,16 @@ def render_amazon_sales_vs_inventory(
         st.info("선택된 SKU가 없습니다.")
         return
 
-    amz_centers = _pick_amazon_centers(centers)
+    amz_centers = _pick_amazon_centers(centers_list)
+    if not show_wip_flag:
+        amz_centers = [c for c in amz_centers if not _is_wip_center_name(c)]
     if not amz_centers:
         # 그래도 AMZ 관련 센터가 스냅샷에 있다면 자동 감지
-        amz_centers = _pick_amazon_centers(snap_long.get("center", pd.Series()).dropna().unique())
+        amz_centers = _pick_amazon_centers(
+            snap_df.get("center", pd.Series()).dropna().unique()
+        )
+        if not show_wip_flag:
+            amz_centers = [c for c in amz_centers if not _is_wip_center_name(c)]
 
     if not amz_centers:
         st.info("Amazon/AMZ 계열 센터가 보이지 않습니다.")
@@ -387,7 +433,7 @@ def render_amazon_sales_vs_inventory(
 
     # 판매(실측) 및 이동평균 (필터 lookback_days 반영)
     sales = _safe_dataframe(
-        _sales_from_snapshot(snap_long, amz_centers, skus, start, end),
+        _sales_from_snapshot(snap_df, amz_centers, skus, start, end),
         columns=skus,
     )
     if not sales.empty:
@@ -403,7 +449,7 @@ def render_amazon_sales_vs_inventory(
 
     # 재고(실측)
     inv = _safe_dataframe(
-        _inventory_matrix(snap_long, amz_centers, skus, start, end), columns=skus
+        _inventory_matrix(snap_df, amz_centers, skus, start, end), columns=skus
     )
     if not inv.empty:
         inv.index = _ensure_naive_index(inv.index)
@@ -414,7 +460,7 @@ def render_amazon_sales_vs_inventory(
 
     inv_future: Optional[pd.DataFrame] = None
     future_sales_from_inventory: Optional[pd.DataFrame] = None
-    timeline_pivot = _timeline_inventory_matrix(timeline, amz_centers, skus, start, end)
+    timeline_pivot = _timeline_inventory_matrix(timeline_df, amz_centers, skus, start, end)
     if timeline_pivot is not None and not timeline_pivot.empty:
         timeline_pivot.index = _ensure_naive_index(timeline_pivot.index)
         timeline_pivot = _safe_dataframe(timeline_pivot, columns=skus)
@@ -640,40 +686,6 @@ def render_amazon_sales_vs_inventory(
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
             )
 
-    if show_wip and wip_pivot is not None:
-        wip_plot = _safe_dataframe(wip_pivot.round(0), columns=skus)
-        if not wip_plot.empty:
-            wip_plot.index = _ensure_naive_index(wip_plot.index)
-            for sku in skus:
-                series = wip_plot.get(sku)
-                if series is None:
-                    continue
-                if isinstance(series, pd.DataFrame):
-                    if series.empty:
-                        continue
-                    # Duplicate columns for the same SKU can appear when the
-                    # selection contains repeated labels. Use the first column
-                    # to keep a 1‑dimensional series for plotting.
-                    series = series.iloc[:, 0]
-                if not isinstance(series, pd.Series):
-                    series = pd.Series(series, index=wip_plot.index)
-
-                series_numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
-                values = series_numeric.to_numpy(dtype=float, copy=False)
-                if not np.isfinite(values).any() or not np.any(np.abs(values) > 0):
-                    continue
-
-                color = cmap.get(sku)
-                _safe_add_scatter(
-                    fig,
-                    x=wip_plot.index,
-                    y=series_numeric,
-                    name=f"{sku} 생산중(WIP)",
-                    line=dict(color=color, width=1.8, dash="dot") if color else None,
-                    yaxis="y2",
-                    hovertemplate="날짜 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:,.0f} EA<extra></extra>",
-                )
-
     # (3) 오늘 기준선
     fig.add_vline(x=today, line_color="red", line_dash="dot", line_width=2)
 
@@ -695,10 +707,18 @@ def render_amazon_sales_vs_inventory(
 def render_amazon_panel(*args: object, **kwargs: object) -> None:
     """Backward-compatible alias for :func:`render_amazon_sales_vs_inventory`."""
 
-    if "show_production" in kwargs and "show_wip" not in kwargs:
-        kwargs["show_wip"] = kwargs.pop("show_production")
+    show_wip = kwargs.pop("show_wip", None)
+    show_production = kwargs.pop("show_production", None)
 
-    render_amazon_sales_vs_inventory(*args, **kwargs)
+    if show_wip is None:
+        if show_production is not None:
+            show_wip = bool(show_production)
+        else:
+            show_wip = False
+    else:
+        show_wip = bool(show_wip)
+
+    render_amazon_sales_vs_inventory(*args, show_wip=show_wip, **kwargs)
 
 # --- STEP CHART (v5_main이 호출하는 공개 API) ---------------------------------
 # 충분히 긴 팔레트 (SKU별 고정색)
