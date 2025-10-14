@@ -106,8 +106,20 @@ def apply_consumption_with_events(
                     last_real = grp.loc[~mask, stock_col].dropna().iloc[-1]
                 else:
                     last_real = 0.0
-                future = grp.loc[mask, stock_col]
-                grp.loc[mask, stock_col] = future.fillna(last_real)
+
+                future = grp.loc[mask, stock_col].copy()
+                if future.isna().all():
+                    future_filled = pd.Series(last_real, index=future.index)
+                else:
+                    future_filled = future.copy()
+                    first_idx = future_filled.index[0]
+                    if pd.isna(future_filled.loc[first_idx]):
+                        future_filled.loc[first_idx] = last_real
+                    future_filled = future_filled.ffill()
+                    if future_filled.isna().any():
+                        future_filled = future_filled.fillna(last_real)
+
+                grp.loc[mask, stock_col] = future_filled.astype(float)
             groups.append(grp)
         result = pd.concat(groups, ignore_index=True)
 
