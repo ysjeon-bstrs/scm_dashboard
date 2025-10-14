@@ -415,11 +415,11 @@ def _inject_responsive_styles() -> None:
         }
 
         .kpi-grid--summary {
-            --min-card-width: 180px;
+            --min-card-width: clamp(200px, 24vw, 260px);
         }
 
         .kpi-grid--centers {
-            --min-card-width: 260px;
+            --min-card-width: clamp(220px, 24vw, 320px);
         }
 
         .kpi-grid--sku {
@@ -428,6 +428,87 @@ def _inject_responsive_styles() -> None:
 
         .kpi-grid--compact {
             --min-card-width: 150px;
+        }
+
+        .kpi-grid--center-metrics {
+            --min-card-width: clamp(140px, 28vw, 200px);
+            align-items: stretch;
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-narrow {
+            --min-card-width: clamp(260px, 28vw, 340px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-medium {
+            --min-card-width: clamp(240px, 26vw, 320px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-wide {
+            --min-card-width: clamp(220px, 24vw, 300px);
+        }
+
+        .kpi-grid--centers.kpi-grid--centers-dense {
+            --min-card-width: clamp(200px, 22vw, 280px);
+        }
+
+        @media (max-width: 1200px) {
+            .kpi-card-grid {
+                gap: 0.65rem;
+            }
+
+            .kpi-metric-value {
+                font-size: 1.2rem;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .kpi-grid--summary,
+            .kpi-grid--centers,
+            .kpi-grid--sku {
+                --min-card-width: clamp(220px, 48vw, 320px);
+            }
+
+            .kpi-grid--center-metrics {
+                --min-card-width: clamp(150px, 42vw, 200px);
+            }
+
+            .kpi-sku-card {
+                padding: 0.75rem 0.85rem;
+            }
+        }
+
+        @media (max-width: 700px) {
+            .kpi-grid--summary,
+            .kpi-grid--centers,
+            .kpi-grid--sku {
+                grid-template-columns: repeat(auto-fit, minmax(100%, 1fr));
+            }
+
+            .kpi-grid--center-metrics {
+                grid-template-columns: repeat(auto-fit, minmax(48%, 1fr));
+            }
+
+            .kpi-metric-label {
+                font-size: 0.8rem;
+            }
+
+            .kpi-metric-value {
+                font-size: 1.05rem;
+            }
+        }
+
+        @media (max-width: 520px) {
+            .kpi-grid--center-metrics {
+                grid-template-columns: repeat(auto-fit, minmax(100%, 1fr));
+            }
+
+            .kpi-sku-title {
+                font-size: 1.0rem;
+            }
+
+            .kpi-sku-code {
+                font-size: 0.8rem;
+            }
         }
 
         @media (prefers-color-scheme: dark) {
@@ -470,6 +551,7 @@ def _build_grid(
     min_width: int | None = None,
     extra_class: str = "",
     columns: int | None = None,
+    data_attrs: Mapping[str, object] | None = None,
 ) -> str:
     if not items:
         return ""
@@ -486,17 +568,32 @@ def _build_grid(
         )
     style_value = " ".join(style_parts)
     style = f' style="{style_value}"' if style_value else ""
-    return f'<div class="{" ".join(classes)}"{style}>' + "".join(items) + "</div>"
+
+    attr_parts: list[str] = []
+    if data_attrs:
+        for key, value in data_attrs.items():
+            if value is None:
+                continue
+            attr_parts.append(f'{_escape(key)}="{_escape(value)}"')
+    attrs = (" " + " ".join(attr_parts)) if attr_parts else ""
+
+    return (
+        f'<div class="{" ".join(classes)}"{attrs}{style}>'
+        + "".join(items)
+        + "</div>"
+    )
 
 
-def _center_grid_layout(count: int) -> tuple[int, int]:
-    """Return (columns, min_width) for the center KPI grid."""
+def _center_grid_layout(count: int) -> tuple[int | None, int, str]:
+    """Return (columns, min_width, modifier_class) for the center KPI grid."""
 
     if count <= 2:
-        return 1, 320
+        return None, 320, "kpi-grid--centers-narrow"
     if count <= 4:
-        return 2, 260
-    return 3, 220
+        return None, 280, "kpi-grid--centers-medium"
+    if count <= 6:
+        return None, 250, "kpi-grid--centers-wide"
+    return None, 220, "kpi-grid--centers-dense"
 
 
 def _build_center_card(center_info: Mapping[str, object]) -> str:
@@ -513,8 +610,8 @@ def _build_center_card(center_info: Mapping[str, object]) -> str:
     ]
     metrics_html = _build_grid(
         metric_cards,
-        extra_class="kpi-grid--compact",
-        columns=len(metric_cards),
+        extra_class="kpi-grid--compact kpi-grid--center-metrics",
+        min_width=140,
     )
     return (
         '<div class="kpi-center-card">'
@@ -933,6 +1030,13 @@ def render_sku_summary_cards(
 
     latest_snapshot = latest_snapshot_dt
 
+    if latest_snapshot is None or pd.isna(latest_snapshot):
+        latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
+    else:
+        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
+
+    latest_snapshot = latest_snapshot_dt
+
     name_map: Mapping[str, str] = {}
     if "resource_name" in filtered_snapshot.columns:
         name_rows = filtered_snapshot.dropna(subset=["resource_code", "resource_name"]).copy()
@@ -1138,7 +1242,7 @@ def render_sku_summary_cards(
         summary_html = _build_grid(
             summary_cards,
             extra_class="kpi-grid--summary",
-            columns=len(summary_cards),
+            min_width=220,
         )
 
         center_cards: list[str] = []
@@ -1172,12 +1276,13 @@ def render_sku_summary_cards(
                 )
             )
 
-        center_cols, center_min_width = _center_grid_layout(len(center_cards))
+        center_cols, center_min_width, center_modifier = _center_grid_layout(len(center_cards))
         centers_html = _build_grid(
             center_cards,
-            extra_class="kpi-grid--centers",
+            extra_class=f"kpi-grid--centers {center_modifier}".strip(),
             min_width=center_min_width,
             columns=center_cols,
+            data_attrs={"data-center-count": len(center_cards)},
         )
 
         if display_name:
