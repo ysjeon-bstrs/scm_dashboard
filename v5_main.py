@@ -98,13 +98,16 @@ def _load_from_excel_uploader() -> Optional[LoadedData]:
     return LoadedData(moves=moves, snapshot=snapshot)
 
 
-def _load_from_gsheet_button() -> Optional[LoadedData]:
+def _load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     """Return normalized data retrieved from Google Sheets."""
 
-    if not st.button("Google Sheets에서 데이터 로드", type="primary", key="v5_gsheet"):
+    try:
+        with st.spinner(show_spinner_message):
+            df_move, df_ref, df_incoming = load_from_gsheet_api()
+    except Exception as exc:  # pragma: no cover - streamlit feedback
+        st.error(f"Google Sheets 데이터를 불러오는 중 오류가 발생했습니다: {exc}")
         return None
 
-    df_move, df_ref, df_incoming = load_from_gsheet_api()
     if df_move.empty or df_ref.empty:
         st.error("Google Sheets에서 데이터를 불러올 수 없습니다. 권한을 확인해주세요.")
         return None
@@ -120,32 +123,60 @@ def _load_from_gsheet_button() -> Optional[LoadedData]:
     except Exception as exc:  # pragma: no cover - streamlit feedback
         st.warning(f"WIP 불러오기 실패: {exc}")
 
+    st.success("Google Sheets 데이터가 업데이트되었습니다.")
     return LoadedData(moves=moves, snapshot=snapshot)
 
 
 def _ensure_data() -> Optional[LoadedData]:
     """Load data via the available tabs and persist it in the session state."""
 
-    if "v5_data" in st.session_state:
-        return st.session_state["v5_data"]
+    data: Optional[LoadedData] = st.session_state.get("v5_data")
 
-    tab_excel, tab_gsheet = st.tabs(["엑셀 업로드", "Google Sheets"])
+    st.markdown("### 데이터 소스")
+    st.caption("대시보드 진입 시 Google Sheets 데이터를 자동으로 불러옵니다.")
 
-    with tab_excel:
-        data = _load_from_excel_uploader()
-        if data is not None:
-            st.session_state["_v5_source"] = "excel"
-            st.session_state["v5_data"] = data
-            return data
+    source_label = st.session_state.get("_v5_source")
+    source_display = {
+        "gsheet": "Google Sheets",
+        "excel": "엑셀 업로드",
+    }.get(source_label, "없음")
 
-    with tab_gsheet:
-        data = _load_from_gsheet_button()
-        if data is not None:
+    source_caption = st.empty()
+
+    refresh_clicked = st.button("Google Sheets 데이터 새로 고침", key="v5_gsheet_refresh")
+
+    should_load_gsheet = data is None or refresh_clicked
+    if should_load_gsheet:
+        spinner_msg = (
+            "Google Sheets 데이터 불러오는 중..."
+            if data is None
+            else "Google Sheets 데이터를 새로 불러오는 중..."
+        )
+        gsheet_data = _load_from_gsheet(show_spinner_message=spinner_msg)
+        if gsheet_data is not None:
             st.session_state["_v5_source"] = "gsheet"
-            st.session_state["v5_data"] = data
-            return data
+            st.session_state["v5_data"] = gsheet_data
+            data = gsheet_data
+            source_display = "Google Sheets"
+        elif data is None:
+            source_display = "없음"
 
-    return None
+    with st.expander("엑셀 파일 업로드 (선택)", expanded=False):
+        st.caption("필요할 때만 수동으로 엑셀 파일을 업로드하여 데이터를 교체할 수 있습니다.")
+        excel_data = _load_from_excel_uploader()
+        if excel_data is not None:
+            st.session_state["_v5_source"] = "excel"
+            st.session_state["v5_data"] = excel_data
+            st.success("엑셀 데이터가 로드되었습니다.")
+            data = excel_data
+            source_display = "엑셀 업로드"
+
+    source_caption.caption(f"현재 데이터 소스: **{source_display}**")
+
+    if data is None:
+        return None
+
+    return data
 
 
 def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[list[str], list[str]]:
