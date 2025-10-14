@@ -252,8 +252,8 @@ def main() -> None:
     latest_snapshot_dt = (
         None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
     )
-    past_days = 42
-    future_days = 60
+    past_days = 10
+    future_days = 30
     if snap_dates.empty:
         snap_min = today - pd.Timedelta(days=past_days)
         snap_max = today
@@ -278,30 +278,20 @@ def main() -> None:
 
     def _init_range() -> None:
         if "date_range" not in st.session_state:
-            default_start = max(today - pd.Timedelta(days=20), bound_min)
-            default_end = min(today + pd.Timedelta(days=20), bound_max)
+            default_start = max(today - pd.Timedelta(days=10), bound_min)
+            default_end = min(today + pd.Timedelta(days=30), bound_max)
+            if default_start > default_end:
+                default_start = default_end
             st.session_state.date_range = (default_start, default_end)
         else:
             st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
-        if "horizon_days" not in st.session_state:
-            st.session_state.horizon_days = 20
-        st.session_state.horizon_days = int(
-            max(0, min(int(st.session_state.horizon_days), future_days))
-        )
-
-    def _apply_horizon_to_range() -> None:
-        horizon = int(max(0, min(int(st.session_state.horizon_days), future_days)))
-        st.session_state.horizon_days = horizon
-        start_val = max(today - pd.Timedelta(days=horizon), bound_min)
-        end_val = min(today + pd.Timedelta(days=horizon), bound_max)
-        st.session_state.date_range = (start_val, end_val)
 
     _init_range()
 
     with st.sidebar:
         st.header("필터")
         st.caption(
-            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘±(−10일, +30일)."
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−10일 ~ +30일."
             " 해당 항목이 없으면 전체 데이터를 기준으로 표시합니다."
         )
         preset_centers = ["태광KR", "AMZUS"]
@@ -315,14 +305,6 @@ def main() -> None:
             default_skus = skus if len(skus) <= 10 else skus[:10]
         selected_skus = st.multiselect("SKU", skus, default=default_skus)
         st.subheader("기간 설정")
-        st.number_input(
-            "미래 전망 일수",
-            min_value=0,
-            max_value=future_days,
-            step=1,
-            key="horizon_days",
-            on_change=_apply_horizon_to_range,
-        )
         date_range_value = st.slider(
             "기간",
             min_value=bound_min.to_pydatetime(),
@@ -335,12 +317,14 @@ def main() -> None:
         start_ts = pd.Timestamp(date_range_value[0]).normalize()
         end_ts = pd.Timestamp(date_range_value[1]).normalize()
         st.session_state.date_range = (start_ts, end_ts)
+        st.divider()
         st.header("표시 옵션")
         show_prod = st.checkbox("생산중 표시", value=False)
         # 요청에 따라 이동중 노출 옵션은 기본 해제 상태로 숨긴다.
         show_transit = False
         st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
         use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
+        st.subheader("추세 계산 설정")
         lookback_days = int(
             st.number_input(
                 "추세 계산 기간(일)",
@@ -351,18 +335,6 @@ def main() -> None:
                 key="trend_lookback_days",
             )
         )
-
-        st.subheader("입고 반영 가정")
-        lag_days = int(
-            st.number_input(
-                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
-                min_value=0,
-                max_value=21,
-                value=7,
-                step=1,
-            )
-        )
-
         with st.expander("프로모션 가중치(+%)", expanded=False):
             st.checkbox("가중치 적용", value=False, key="promo_enabled")
             st.date_input("시작일", key="promo_start")
@@ -375,6 +347,18 @@ def main() -> None:
                 step=5.0,
                 key="promo_uplift_pct",
             )
+
+        st.divider()
+        st.header("입고 반영 가정")
+        lag_days = int(
+            st.number_input(
+                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
+                min_value=0,
+                max_value=21,
+                value=7,
+                step=1,
+            )
+        )
 
     if not selected_centers:
         st.warning("최소 한 개의 센터를 선택하세요.")
