@@ -131,11 +131,7 @@ def _should_show_in_transit(center: str, in_transit_value: int) -> bool:
 
 
 def _inject_responsive_styles() -> None:
-    """Inject shared CSS styles for responsive KPI cards."""
-
-    style_key = "_kpi_responsive_styles"
-    if st.session_state.get(style_key):
-        return
+    """Inject shared CSS styles for KPI cards (re-inject on each run)."""
 
     st.markdown(
         """
@@ -264,7 +260,6 @@ def _inject_responsive_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.session_state[style_key] = True
 
 
 def _build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
