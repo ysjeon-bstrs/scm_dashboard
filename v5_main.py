@@ -285,8 +285,11 @@ def _calculate_date_bounds(
     if move_max is not None:
         bound_max_candidates.append(move_max)
 
-    bound_min = min(bound_min_candidates)
-    bound_max = max(bound_max_candidates)
+    dynamic_min = min(bound_min_candidates)
+    dynamic_max = max(bound_max_candidates)
+
+    bound_min = max(dynamic_min, base_min)
+    bound_max = min(dynamic_max, base_max)
 
     if bound_min > bound_max:
         bound_min = bound_max

@@ -1,7 +1,5 @@
 import pandas as pd
 
-import pandas as pd
-
 from v5_main import _calculate_date_bounds
 
 
@@ -26,7 +24,7 @@ def test_calculate_date_bounds_defaults_to_base_window():
     assert bound_max == pd.Timestamp("2024-05-22")
 
 
-def test_calculate_date_bounds_extends_with_snapshot_history():
+def test_calculate_date_bounds_clamps_snapshot_history_to_base_window():
     today = pd.Timestamp("2024-04-10")
     history_start = today - pd.Timedelta(days=60)
     snapshot = pd.DataFrame({"date": pd.date_range(history_start, periods=5, freq="7D")})
@@ -40,11 +38,11 @@ def test_calculate_date_bounds_extends_with_snapshot_history():
         base_future_days=42,
     )
 
-    assert bound_min == history_start.normalize()
+    assert bound_min == pd.Timestamp("2024-02-28")
     assert bound_max == pd.Timestamp("2024-05-22")
 
 
-def test_calculate_date_bounds_extends_with_future_moves():
+def test_calculate_date_bounds_clamps_future_moves_to_base_window():
     today = pd.Timestamp("2024-04-10")
     snapshot = _empty_snapshot()
     future_date = today + pd.Timedelta(days=90)
@@ -59,4 +57,4 @@ def test_calculate_date_bounds_extends_with_future_moves():
     )
 
     assert bound_min == pd.Timestamp("2024-02-28")
-    assert bound_max == future_date.normalize()
+    assert bound_max == pd.Timestamp("2024-05-22")
