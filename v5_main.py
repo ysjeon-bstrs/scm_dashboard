@@ -356,6 +356,11 @@ def main() -> None:
         today=today_norm,
         latest_snapshot=latest_dt,
         lag_days=int(lag_days),
+        start=start_ts,
+        end=end_ts,
+        lookback_days=int(lag_days),
+        horizon_pad_days=60,
+        events=events,
     )
 
     st.divider()

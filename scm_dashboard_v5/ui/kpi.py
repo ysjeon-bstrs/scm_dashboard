@@ -34,12 +34,165 @@ different viewport sizes.
 from __future__ import annotations
 
 import html
-from typing import Mapping, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import streamlit as st
 
 from scm_dashboard_v5.analytics import kpi_breakdown_per_sku
+from scm_dashboard_v5.core import build_timeline as build_core_timeline
+from scm_dashboard_v5.forecast import apply_consumption_with_events
+
+
+def compute_depletion_metrics(
+    snap_long: pd.DataFrame,
+    moves: pd.DataFrame,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    today: pd.Timestamp,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    lookback_days: int = 28,
+    horizon_pad_days: int = 60,
+    events: Optional[Sequence[Dict[str, object]]] = None,
+    include_total: bool = True,
+) -> pd.DataFrame:
+    """Return deterministic depletion metrics per center and SKU.
+
+    The calculation mirrors the timeline simulation used in the charts: the
+    latest snapshot is rolled forward by ``apply_consumption_with_events``
+    starting from the day after the snapshot while respecting future inbound
+    and outbound moves.  The first day where the simulated stock quantity is
+    zero or negative becomes the depletion date.
+    """
+
+    result_columns = ["center", "resource_code", "days_to_depletion", "depletion_date"]
+
+    if snap_long is None or snap_long.empty:
+        return pd.DataFrame(columns=result_columns)
+
+    date_series = None
+    for candidate in ("snapshot_date", "date"):
+        if candidate in snap_long.columns:
+            date_series = pd.to_datetime(snap_long[candidate], errors="coerce")
+            break
+    if date_series is None:
+        return pd.DataFrame(columns=result_columns)
+
+    latest_snap = date_series.max()
+    if pd.isna(latest_snap):
+        return pd.DataFrame(columns=result_columns)
+
+    latest_snap = latest_snap.normalize()
+    today = pd.to_datetime(today).normalize()
+    start = pd.to_datetime(start).normalize()
+    end = pd.to_datetime(end).normalize()
+
+    horizon_days = max(0, int((end - latest_snap).days)) + int(horizon_pad_days)
+    sim_end = end + pd.Timedelta(days=int(horizon_pad_days))
+
+    timeline = build_core_timeline(
+        snap_long=snap_long,
+        moves=moves,
+        centers_sel=list(centers),
+        skus_sel=list(skus),
+        start_dt=start,
+        end_dt=end,
+        horizon_days=horizon_days,
+        today=today,
+    )
+
+    if timeline is None or timeline.empty:
+        return pd.DataFrame(columns=result_columns)
+
+    timeline_cons = apply_consumption_with_events(
+        timeline=timeline,
+        snap_long=snap_long,
+        centers_sel=list(centers),
+        skus_sel=list(skus),
+        start_dt=start,
+        end_dt=sim_end,
+        lookback_days=int(lookback_days),
+        events=list(events) if events else None,
+    )
+
+    if timeline_cons is None or timeline_cons.empty:
+        return pd.DataFrame(columns=result_columns)
+
+    special_center_mask = timeline_cons["center"].isin(["In-Transit", "WIP"])
+    timeline_cons = timeline_cons.loc[~special_center_mask].copy()
+    if timeline_cons.empty:
+        return pd.DataFrame(columns=result_columns)
+    cons_start = max(latest_snap + pd.Timedelta(days=1), start)
+
+    rows: List[Dict[str, object]] = []
+
+    for (center, sku), group in timeline_cons.groupby(["center", "resource_code"]):
+        segment = group[group["date"] >= cons_start].sort_values("date")
+        if segment.empty:
+            rows.append({
+                "center": center,
+                "resource_code": sku,
+                "days_to_depletion": None,
+                "depletion_date": None,
+            })
+            continue
+
+        zero = segment[segment["stock_qty"] <= 0]
+        if zero.empty:
+            rows.append({
+                "center": center,
+                "resource_code": sku,
+                "days_to_depletion": None,
+                "depletion_date": None,
+            })
+            continue
+
+        depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
+        days = max((depletion_dt - today).days, 0)
+        rows.append({
+            "center": center,
+            "resource_code": sku,
+            "days_to_depletion": days,
+            "depletion_date": depletion_dt,
+        })
+
+    if include_total:
+        for sku, group in timeline_cons.groupby("resource_code"):
+            segment = group[group["date"] >= cons_start].copy()
+            if segment.empty:
+                rows.append({
+                    "center": "__TOTAL__",
+                    "resource_code": sku,
+                    "days_to_depletion": None,
+                    "depletion_date": None,
+                })
+                continue
+
+            agg = (
+                segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
+            )
+            zero = agg[agg["stock_qty"] <= 0]
+            if zero.empty:
+                rows.append({
+                    "center": "__TOTAL__",
+                    "resource_code": sku,
+                    "days_to_depletion": None,
+                    "depletion_date": None,
+                })
+                continue
+
+            depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
+            days = max((depletion_dt - today).days, 0)
+            rows.append({
+                "center": "__TOTAL__",
+                "resource_code": sku,
+                "days_to_depletion": days,
+                "depletion_date": depletion_dt,
+            })
+
+    return pd.DataFrame(rows, columns=result_columns)
 
 
 def _escape(value: object) -> str:
@@ -678,6 +831,11 @@ def render_sku_summary_cards(
     latest_snapshot: pd.Timestamp | None = None,
     lag_days: int = 7,
     chunk_size: int = 2,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    lookback_days: int | None = None,
+    horizon_pad_days: int = 60,
+    events: Optional[Sequence[Dict[str, object]]] | None = None,
 ) -> pd.DataFrame:
     """Render SKU summary KPI cards and return the underlying DataFrame."""
 
@@ -776,6 +934,43 @@ def render_sku_summary_cards(
     latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
     today_dt = pd.to_datetime(today).normalize()
 
+    start_dt = (
+        pd.to_datetime(start).normalize()
+        if start is not None
+        else pd.to_datetime(filtered_snapshot["date"].min()).normalize()
+    )
+    end_dt = (
+        pd.to_datetime(end).normalize()
+        if end is not None
+        else pd.to_datetime(filtered_snapshot["date"].max()).normalize()
+    )
+    lookback_val = int(lookback_days) if lookback_days is not None else int(lag_days)
+
+    depletion_df = compute_depletion_metrics(
+        snap_long=filtered_snapshot,
+        moves=moves_view,
+        centers=centers_list,
+        skus=sku_list,
+        today=today_dt,
+        start=start_dt,
+        end=end_dt,
+        lookback_days=lookback_val,
+        horizon_pad_days=int(horizon_pad_days),
+        events=list(events) if events else None,
+    )
+
+    depletion_df["center"] = depletion_df.get("center").astype(str)
+    center_depletion_map: Dict[tuple[str, str], Dict[str, object]] = {}
+    total_depletion_map: Dict[str, Dict[str, object]] = {}
+    if not depletion_df.empty:
+        for row in depletion_df.to_dict("records"):
+            center_name = str(row.get("center"))
+            sku_code = str(row.get("resource_code"))
+            if center_name == "__TOTAL__":
+                total_depletion_map[sku_code] = row
+            else:
+                center_depletion_map[(sku_code, center_name)] = row
+
     latest_snapshot_rows = filtered_snapshot[filtered_snapshot["date"] == latest_snapshot_dt].copy()
     if "stock_qty" in latest_snapshot_rows.columns:
         latest_snapshot_rows["stock_qty"] = pd.to_numeric(
@@ -816,8 +1011,13 @@ def render_sku_summary_cards(
         total_transit = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
         total_wip = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
         total_demand = float(total_demand_series.get(sku, 0.0))
-        total_coverage = _calculate_coverage_days(total_current, total_demand)
-        total_sellout_date = _calculate_sellout_date(today_dt, total_coverage)
+        total_depletion = total_depletion_map.get(sku, {})
+        total_coverage = total_depletion.get("days_to_depletion")
+        total_sellout_date = total_depletion.get("depletion_date")
+
+        if total_coverage is None:
+            total_coverage = _calculate_coverage_days(total_current, total_demand)
+            total_sellout_date = _calculate_sellout_date(today_dt, total_coverage)
 
         summary_cards = [
             _build_metric_card("전체 센터 재고", _format_number(total_current)),
@@ -838,8 +1038,13 @@ def render_sku_summary_cards(
             )
             center_wip = int(wip_series.get((sku, center), 0)) if not wip_series.empty else 0
             center_demand = float(daily_demand_series.get((sku, center), float("nan")))
-            center_coverage = _calculate_coverage_days(center_current, center_demand)
-            center_sellout_date = _calculate_sellout_date(today_dt, center_coverage)
+            center_depletion = center_depletion_map.get((sku, center), {})
+            center_coverage = center_depletion.get("days_to_depletion")
+            center_sellout_date = center_depletion.get("depletion_date")
+
+            if center_coverage is None:
+                center_coverage = _calculate_coverage_days(center_current, center_demand)
+                center_sellout_date = _calculate_sellout_date(today_dt, center_coverage)
             center_cards.append(
                 _build_center_card(
                     {
