@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 import streamlit as st
 
+from center_alias import normalize_center_value
 from scm_dashboard_v4.config import CENTER_COL
 from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v4.loaders import load_from_excel, load_from_gsheet_api, load_snapshot_raw
@@ -182,19 +183,8 @@ def _ensure_data() -> Optional[LoadedData]:
     return data
 
 
-BAN_SET = {"", "nan", "None", "WIP", "In-Transit", "Transit", "생산중", "Production"}
-BAN_SET_CI = {value.casefold() for value in BAN_SET}
-
-
 def _norm_center(x: str) -> str | None:
-    if not isinstance(x, str):
-        return None
-    value = x.strip()
-    if value.casefold() in BAN_SET_CI:
-        return None
-    if value in {"AcrossBUS", "어크로스비US"}:
-        return "어크로스비US"
-    return value
+    return normalize_center_value(x)
 
 
 def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tuple[list[str], list[str]]:
