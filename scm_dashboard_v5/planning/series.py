@@ -72,6 +72,7 @@ def build_center_series(
         ts["resource_code"] = sku
         stock_series = grp.set_index("date")["stock_qty"].astype(float)
         ts = ts.merge(stock_series.rename("stock_qty"), on="date", how="left")
+        ts["stock_qty"] = pd.to_numeric(ts["stock_qty"], errors="coerce")
         ts["stock_qty"] = ts["stock_qty"].ffill().fillna(0.0)
 
         mv_sku = mv[mv["resource_code"] == sku]
