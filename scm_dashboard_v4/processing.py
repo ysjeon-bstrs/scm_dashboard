@@ -219,11 +219,9 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
     else:
         wip_moves.loc[mask_to_wip, "to_center"] = pd.NA
 
+    # Keep WIP as a virtual origin so future center timelines do not
+    # pre-subtract in-progress quantities from the physical warehouse.
     wip_moves["from_center"] = normalize_center_series(wip_moves["from_center"])
-    mask_from_wip = (wip_moves["from_center"].str.upper() == "WIP").fillna(False)
-    wip_moves.loc[mask_from_wip, "from_center"] = (
-        wip_moves.loc[mask_from_wip, "to_center"].fillna(default_center)
-    )
 
     for col in ["onboard_date", "arrival_date", "event_date"]:
         wip_moves[col] = pd.to_datetime(wip_moves[col], errors="coerce").dt.normalize()
