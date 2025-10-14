@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Tuple
 import gspread
 from google.oauth2.service_account import Credentials
 
+from center_alias import normalize_center_series, normalize_center_value
+
 # =========================
 # Global configuration
 # =========================
@@ -244,7 +246,7 @@ def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
     }).copy()
 
     result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
-    result["center"] = result["center"].astype(str)
+    result["center"] = normalize_center_series(result["center"])
     result["resource_code"] = result["resource_code"].astype(str)
     result["stock_qty"] = pd.to_numeric(result["stock_qty"], errors="coerce").fillna(0).astype(int)
 
@@ -269,8 +271,8 @@ def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
         "resource_code": resource_code.astype(str).str.strip(),
         "qty_ea": pd.to_numeric(qty_ea.astype(str).str.replace(',',''), errors="coerce").fillna(0).astype(int),
         "carrier_mode": carrier_mode.astype(str).str.strip(),
-        "from_center": from_center.astype(str).str.strip(),
-        "to_center": to_center.astype(str).str.strip(),
+        "from_center": normalize_center_series(from_center),
+        "to_center": normalize_center_series(to_center),
         "onboard_date": onboard_date,
         "arrival_date": arrival_date,
         "inbound_date": inbound_date,
@@ -326,6 +328,7 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
     if wip_df is None or wip_df.empty:
         return moves_df
     wip_df_norm = wip_df.copy()
+    wip_df_norm["to_center"] = normalize_center_series(wip_df_norm["to_center"])
     wip_df_norm["wip_start"] = pd.to_datetime(wip_df_norm["wip_start"], errors="coerce").dt.normalize()
     wip_df_norm["wip_ready"] = pd.to_datetime(wip_df_norm["wip_ready"], errors="coerce").dt.normalize()
 
@@ -356,14 +359,14 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
         "lot": wip_df_norm.get("lot", "")
     })
 
-    wip_moves["to_center"] = wip_moves["to_center"].astype("string").str.strip()
+    wip_moves["to_center"] = normalize_center_series(wip_moves["to_center"])
     mask_to_wip = (wip_moves["to_center"].str.upper() == "WIP").fillna(False)
     if default_center:
         wip_moves.loc[mask_to_wip, "to_center"] = default_center
     else:
         wip_moves.loc[mask_to_wip, "to_center"] = pd.NA
 
-    wip_moves["from_center"] = wip_moves["from_center"].astype("string").str.strip()
+    wip_moves["from_center"] = normalize_center_series(wip_moves["from_center"])
     mask_from_wip = (wip_moves["from_center"].str.upper() == "WIP").fillna(False)
     wip_moves.loc[mask_from_wip, "from_center"] = (
         wip_moves.loc[mask_from_wip, "to_center"].fillna(default_center)
@@ -857,11 +860,7 @@ centers_moves = set(moves["from_center"].dropna().astype(str).unique().tolist() 
                    moves["to_center"].dropna().astype(str).unique().tolist())
 
 def normalize_center_name(center):
-    if center in ["", "nan", "None", "WIP", "In-Transit"]:
-        return None
-    if center in ["AcrossBUS", "어크로스비US"]:
-        return "어크로스비US"
-    return center
+    return normalize_center_value(center)
 
 all_centers = set()
 for center in centers_snap | centers_moves:
