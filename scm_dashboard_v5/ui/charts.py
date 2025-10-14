@@ -18,6 +18,7 @@ else:
     _PLOTLY_IMPORT_ERROR = None
 
 from scm_dashboard_v5.ui.kpi import render_sku_summary_cards as _render_sku_summary_cards
+from scm_dashboard_v5.forecast import apply_consumption_with_events
 
 # ---------------- Palette (SKU -> Color) ----------------
 # 계단식 차트와 최대한 비슷한 톤(20+색)
@@ -374,6 +375,7 @@ def render_amazon_sales_vs_inventory(
     show_inventory_forecast: bool = True,
     use_consumption_forecast: bool = False,
     lookback_days: int = 28,
+    events: Optional[Sequence[Dict[str, object]]] = None,
     timeline: Optional[pd.DataFrame] = None,
     show_wip: Optional[bool] = None,
 ) -> None:
@@ -399,10 +401,27 @@ def render_amazon_sales_vs_inventory(
         snap_df = _drop_wip_centers(snap_df, center_col="center")
 
     timeline_df: Optional[pd.DataFrame] = None
+    timeline_forecast: Optional[pd.DataFrame] = None
     if isinstance(timeline, pd.DataFrame):
         timeline_df = timeline.copy()
         if not show_wip_flag:
             timeline_df = _drop_wip_centers(timeline_df, center_col="center")
+
+    if timeline_df is not None and use_consumption_forecast:
+        timeline_forecast = apply_consumption_with_events(
+            timeline,
+            snap_long,
+            centers=list(centers_list),
+            skus=list(skus),
+            start=start,
+            end=end,
+            lookback_days=int(lookback_days),
+            events=list(events) if events else None,
+        )
+        if not show_wip_flag and isinstance(timeline_forecast, pd.DataFrame):
+            timeline_forecast = _drop_wip_centers(timeline_forecast, center_col="center")
+    else:
+        timeline_forecast = timeline_df
 
     start = _as_naive_timestamp(start)
     end = _as_naive_timestamp(end)
@@ -460,7 +479,8 @@ def render_amazon_sales_vs_inventory(
 
     inv_future: Optional[pd.DataFrame] = None
     future_sales_from_inventory: Optional[pd.DataFrame] = None
-    timeline_pivot = _timeline_inventory_matrix(timeline_df, amz_centers, skus, start, end)
+    timeline_source = timeline_forecast if timeline_forecast is not None else timeline_df
+    timeline_pivot = _timeline_inventory_matrix(timeline_source, amz_centers, skus, start, end)
     if timeline_pivot is not None and not timeline_pivot.empty:
         timeline_pivot.index = _ensure_naive_index(timeline_pivot.index)
         timeline_pivot = _safe_dataframe(timeline_pivot, columns=skus)
@@ -470,7 +490,8 @@ def render_amazon_sales_vs_inventory(
     wip_pivot: Optional[pd.DataFrame] = None
     wip_requested = _contains_wip_center(centers)
     if show_wip and wip_requested:
-        wip_pivot = _timeline_inventory_matrix(timeline, ["WIP"], skus, start, end)
+        wip_source = timeline_forecast if timeline_forecast is not None else timeline
+        wip_pivot = _timeline_inventory_matrix(wip_source, ["WIP"], skus, start, end)
         if wip_pivot is not None and not wip_pivot.empty:
             wip_pivot.index = _ensure_naive_index(wip_pivot.index)
             wip_pivot = _safe_dataframe(wip_pivot, columns=skus)

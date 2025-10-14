@@ -36,12 +36,100 @@ from __future__ import annotations
 import html
 from typing import Dict, List, Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from scm_dashboard_v5.analytics import kpi_breakdown_per_sku
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import apply_consumption_with_events
+
+
+def compute_depletion_from_timeline(
+    base_timeline: pd.DataFrame,
+    snap_long: pd.DataFrame,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+    *,
+    lookback_days: int,
+    events: Optional[Sequence[Dict[str, object]]] = None,
+) -> Dict[tuple[str, str], Dict[str, Optional[object]]]:
+    """Simulate depletion using the shared consumption engine."""
+
+    if base_timeline is None or base_timeline.empty:
+        return {}
+
+    today_norm = pd.to_datetime(today).normalize()
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+
+    timeline_with_consumption = apply_consumption_with_events(
+        base_timeline,
+        snap_long,
+        centers=list(centers),
+        skus=list(skus),
+        start=start_norm,
+        end=end_norm,
+        lookback_days=int(lookback_days),
+        events=list(events) if events else None,
+    )
+
+    if timeline_with_consumption is None or timeline_with_consumption.empty:
+        return {}
+
+    timeline_copy = timeline_with_consumption.copy()
+    timeline_copy["date"] = pd.to_datetime(
+        timeline_copy["date"], errors="coerce"
+    ).dt.normalize()
+    timeline_copy = timeline_copy.dropna(subset=["date"])
+    if timeline_copy.empty:
+        return {}
+
+    filtered = timeline_copy[
+        ~timeline_copy["center"].isin(["In-Transit", "WIP"])
+    ].copy()
+    if filtered.empty:
+        return {}
+
+    out: Dict[tuple[str, str], Dict[str, Optional[object]]] = {}
+
+    for (center, sku), group in filtered.groupby(["center", "resource_code"]):
+        segment = group.sort_values("date")
+        future_mask = segment["date"] >= today_norm
+        future_segment = segment.loc[future_mask]
+        if future_segment.empty:
+            out[(str(center), str(sku))] = {"days": None, "date": None}
+            continue
+        zero_idx = np.where(future_segment["stock_qty"].values <= 0)[0]
+        if zero_idx.size == 0:
+            out[(str(center), str(sku))] = {"days": None, "date": None}
+            continue
+        zero_date = pd.to_datetime(
+            future_segment.iloc[int(zero_idx[0])]["date"]
+        ).normalize()
+        days = max(int((zero_date - today_norm).days), 0)
+        out[(str(center), str(sku))] = {"days": days, "date": zero_date}
+
+    for sku, group in filtered.groupby("resource_code"):
+        segment = group[group["date"] >= today_norm].sort_values("date")
+        if segment.empty:
+            out[("__TOTAL__", str(sku))] = {"days": None, "date": None}
+            continue
+        agg = (
+            segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
+        )
+        zero_idx = np.where(agg["stock_qty"].values <= 0)[0]
+        if zero_idx.size == 0:
+            out[("__TOTAL__", str(sku))] = {"days": None, "date": None}
+            continue
+        zero_date = pd.to_datetime(agg.iloc[int(zero_idx[0])]["date"]).normalize()
+        days = max(int((zero_date - today_norm).days), 0)
+        out[("__TOTAL__", str(sku))] = {"days": days, "date": zero_date}
+
+    return out
 
 
 def compute_depletion_metrics(
@@ -106,95 +194,38 @@ def compute_depletion_metrics(
     if timeline is None or timeline.empty:
         return pd.DataFrame(columns=result_columns)
 
-    cons_start = max(latest_snap + pd.Timedelta(days=1), start)
-
-    timeline_cons = apply_consumption_with_events(
+    depletion_map = compute_depletion_from_timeline(
         timeline,
         snap_long,
         centers=list(centers),
         skus=list(skus),
         start=start,
         end=sim_end,
+        today=today,
         lookback_days=int(lookback_days),
         events=list(events) if events else None,
-        cons_start=cons_start,
     )
 
-    if timeline_cons is None or timeline_cons.empty:
-        return pd.DataFrame(columns=result_columns)
-
-    special_center_mask = timeline_cons["center"].isin(["In-Transit", "WIP"])
-    timeline_cons = timeline_cons.loc[~special_center_mask].copy()
-    if timeline_cons.empty:
+    if not depletion_map:
         return pd.DataFrame(columns=result_columns)
 
     rows: List[Dict[str, object]] = []
-
-    for (center, sku), group in timeline_cons.groupby(["center", "resource_code"]):
-        segment = group[group["date"] >= cons_start].sort_values("date")
-        if segment.empty:
-            rows.append({
+    for (center, sku), values in depletion_map.items():
+        rows.append(
+            {
                 "center": center,
                 "resource_code": sku,
-                "days_to_depletion": None,
-                "depletion_date": None,
-            })
-            continue
+                "days_to_depletion": values.get("days"),
+                "depletion_date": values.get("date"),
+            }
+        )
 
-        zero = segment[segment["stock_qty"] <= 0]
-        if zero.empty:
-            rows.append({
-                "center": center,
-                "resource_code": sku,
-                "days_to_depletion": None,
-                "depletion_date": None,
-            })
-            continue
+    result = pd.DataFrame(rows, columns=result_columns)
 
-        depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
-        days = max((depletion_dt - today).days, 0)
-        rows.append({
-            "center": center,
-            "resource_code": sku,
-            "days_to_depletion": days,
-            "depletion_date": depletion_dt,
-        })
+    if not include_total:
+        result = result[result["center"] != "__TOTAL__"].copy()
 
-    if include_total:
-        for sku, group in timeline_cons.groupby("resource_code"):
-            segment = group[group["date"] >= cons_start].copy()
-            if segment.empty:
-                rows.append({
-                    "center": "__TOTAL__",
-                    "resource_code": sku,
-                    "days_to_depletion": None,
-                    "depletion_date": None,
-                })
-                continue
-
-            agg = (
-                segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
-            )
-            zero = agg[agg["stock_qty"] <= 0]
-            if zero.empty:
-                rows.append({
-                    "center": "__TOTAL__",
-                    "resource_code": sku,
-                    "days_to_depletion": None,
-                    "depletion_date": None,
-                })
-                continue
-
-            depletion_dt = pd.to_datetime(zero.iloc[0]["date"]).normalize()
-            days = max((depletion_dt - today).days, 0)
-            rows.append({
-                "center": "__TOTAL__",
-                "resource_code": sku,
-                "days_to_depletion": days,
-                "depletion_date": depletion_dt,
-            })
-
-    return pd.DataFrame(rows, columns=result_columns)
+    return result
 
 
 def _escape(value: object) -> str:

@@ -164,6 +164,28 @@ def _center_and_sku_options(moves: pd.DataFrame, snapshot: pd.DataFrame) -> Tupl
     return centers, skus
 
 
+def get_consumption_params_from_ui() -> dict[str, object]:
+    """Collect shared consumption parameters from the UI controls."""
+
+    lookback_days = int(st.session_state.get("trend_lookback_days", 28))
+    promo_on = bool(st.session_state.get("promo_enabled", False))
+    promo_start = st.session_state.get("promo_start")
+    promo_end = st.session_state.get("promo_end")
+    promo_uplift = float(st.session_state.get("promo_uplift_pct", 0.0)) / 100.0
+
+    events: list[dict[str, object]] = []
+    if promo_on and promo_start and promo_end and promo_uplift != 0.0:
+        events.append(
+            {
+                "start": pd.to_datetime(promo_start),
+                "end": pd.to_datetime(promo_end),
+                "uplift": promo_uplift,
+            }
+        )
+
+    return {"lookback_days": lookback_days, "events": events}
+
+
 def main() -> None:
     """Entrypoint for running the v5 dashboard in Streamlit."""
 
@@ -295,6 +317,7 @@ def main() -> None:
                 max_value=56,
                 value=28,
                 step=7,
+                key="trend_lookback_days",
             )
         )
 
@@ -310,27 +333,17 @@ def main() -> None:
         )
 
         with st.expander("프로모션 가중치(+%)", expanded=False):
-            enable_event = st.checkbox("가중치 적용", value=False)
-            ev_start = st.date_input("시작일")
-            ev_end = st.date_input("종료일")
-            ev_pct = st.number_input(
+            st.checkbox("가중치 적용", value=False, key="promo_enabled")
+            st.date_input("시작일", key="promo_start")
+            st.date_input("종료일", key="promo_end")
+            st.number_input(
                 "가중치(%)",
                 min_value=-100.0,
                 max_value=300.0,
                 value=30.0,
                 step=5.0,
+                key="promo_uplift_pct",
             )
-
-        if enable_event:
-            events = [
-                {
-                    "start": pd.Timestamp(ev_start).strftime("%Y-%m-%d"),
-                    "end": pd.Timestamp(ev_end).strftime("%Y-%m-%d"),
-                    "uplift": float(ev_pct) / 100.0,
-                }
-            ]
-        else:
-            events = []
 
     if not selected_centers:
         st.warning("최소 한 개의 센터를 선택하세요.")
@@ -341,6 +354,10 @@ def main() -> None:
 
     selected_centers = [str(center) for center in selected_centers if str(center).strip()]
     selected_skus = [str(sku) for sku in selected_skus if str(sku).strip()]
+
+    cons_params = get_consumption_params_from_ui()
+    lookback_days = int(cons_params.get("lookback_days", 28))
+    events = list(cons_params.get("events", []))
 
     st.subheader("요약 KPI")
     today_norm = pd.Timestamp.today().normalize()
@@ -358,7 +375,7 @@ def main() -> None:
         lag_days=int(lag_days),
         start=start_ts,
         end=end_ts,
-        lookback_days=int(lag_days),
+        lookback_days=lookback_days,
         horizon_pad_days=60,
         events=events,
     )
@@ -438,7 +455,8 @@ def main() -> None:
         show_inventory_forecast=use_cons_forecast,
         use_consumption_forecast=use_cons_forecast,
         lookback_days=lookback_days,
-        timeline=timeline_for_chart,
+        events=events,
+        timeline=timeline_actual,
         show_wip=show_prod,
     )
 
