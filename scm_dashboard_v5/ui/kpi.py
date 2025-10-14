@@ -57,6 +57,28 @@ def _format_number(value: float | int | None) -> str:
         return "-"
 
 
+def _value_font_size(value: str, *, base_size: float = 1.25, min_size: float = 0.9) -> str:
+    """Return a font-size in ``rem`` units that keeps long numbers visible."""
+
+    if not value:
+        return f"{max(min_size, base_size):.2f}rem"
+
+    digit_count = sum(ch.isdigit() for ch in value)
+    if digit_count <= 4:
+        scale = 1.0
+    elif digit_count <= 6:
+        scale = 0.9
+    elif digit_count <= 8:
+        scale = 0.8
+    elif digit_count <= 10:
+        scale = 0.72
+    else:
+        scale = 0.65
+
+    size = max(min_size, base_size * scale)
+    return f"{size:.2f}rem"
+
+
 def _format_days(value: float | None) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "-"
@@ -174,6 +196,7 @@ def _inject_responsive_styles() -> None:
             flex-direction: column;
             gap: 0.3rem;
             min-height: 100%;
+            overflow: visible;
         }
 
         .kpi-metric-card--compact {
@@ -189,8 +212,9 @@ def _inject_responsive_styles() -> None:
         .kpi-metric-value {
             font-size: 1.25rem;
             font-weight: 700;
-            white-space: normal;
+            white-space: nowrap;
             word-break: keep-all;
+            overflow: visible;
         }
 
         .kpi-center-card {
@@ -247,24 +271,51 @@ def _build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
     classes = ["kpi-metric-card"]
     if compact:
         classes.append("kpi-metric-card--compact")
+    value_text = "-" if value is None else str(value)
+    base_font = 1.55 if not compact else 1.3
+    min_font = 1.05 if not compact else 0.85
+    font_size = _value_font_size(value_text, base_size=base_font, min_size=min_font)
     return (
         f'<div class="{" ".join(classes)}">'
         f'<div class="kpi-metric-label">{_escape(label)}</div>'
-        f'<div class="kpi-metric-value">{_escape(value)}</div>'
+        f'<div class="kpi-metric-value" style="font-size:{font_size}; white-space:nowrap;">{_escape(value_text)}</div>'
         "</div>"
     )
 
 
-def _build_grid(items: Sequence[str], *, min_width: int | None = None, extra_class: str = "") -> str:
+def _build_grid(
+    items: Sequence[str],
+    *,
+    min_width: int | None = None,
+    extra_class: str = "",
+    columns: int | None = None,
+) -> str:
     if not items:
         return ""
     classes = ["kpi-card-grid"]
     if extra_class:
         classes.append(extra_class)
-    style = ""
+    style_parts: list[str] = []
     if min_width is not None:
-        style = f' style="--min-card-width: {int(min_width)}px;"'
+        style_parts.append(f"--min-card-width: {int(min_width)}px;")
+    if columns is not None and columns > 0:
+        style_parts.append(
+            "grid-template-columns: repeat("
+            f"{int(columns)}, minmax(var(--min-card-width, 280px), 1fr));"
+        )
+    style_value = " ".join(style_parts)
+    style = f' style="{style_value}"' if style_value else ""
     return f'<div class="{" ".join(classes)}"{style}>' + "".join(items) + "</div>"
+
+
+def _center_grid_layout(count: int) -> tuple[int, int]:
+    """Return (columns, min_width) for the center KPI grid."""
+
+    if count <= 2:
+        return 1, 320
+    if count <= 4:
+        return 2, 260
+    return 3, 220
 
 
 def _build_center_card(center_info: Mapping[str, object]) -> str:
@@ -808,7 +859,13 @@ def render_sku_summary_cards(
                 )
             )
 
-        centers_html = _build_grid(center_cards, extra_class="kpi-grid--centers")
+        center_cols, center_min_width = _center_grid_layout(len(center_cards))
+        centers_html = _build_grid(
+            center_cards,
+            extra_class="kpi-grid--centers",
+            min_width=center_min_width,
+            columns=center_cols,
+        )
 
         if display_name:
             title_html = (

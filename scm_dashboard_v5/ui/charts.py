@@ -216,6 +216,20 @@ def _pick_amazon_centers(all_centers: Iterable[str]) -> List[str]:
             out.append(str(c))
     return out
 
+
+def _contains_wip_center(centers: Sequence[str]) -> bool:
+    """Return True if the selection looks like it includes a WIP/태광 center."""
+
+    for center in centers:
+        norm = str(center).replace(" ", "").lower()
+        if not norm:
+            continue
+        if norm == "wip":
+            return True
+        if "태광" in norm or "taekwang" in norm or "tae-kwang" in norm:
+            return True
+    return False
+
 # ---------------- Core helpers ----------------
 def _coerce_cols(df: pd.DataFrame) -> Dict[str, str]:
     cols = {c.lower(): c for c in df.columns}
@@ -408,13 +422,16 @@ def render_amazon_sales_vs_inventory(
     start_vector: Optional[pd.DataFrame] = None
 
     wip_pivot: Optional[pd.DataFrame] = None
-    if show_wip:
+    wip_requested = _contains_wip_center(centers)
+    if show_wip and wip_requested:
         wip_pivot = _timeline_inventory_matrix(timeline, ["WIP"], skus, start, end)
         if wip_pivot is not None and not wip_pivot.empty:
             wip_pivot.index = _ensure_naive_index(wip_pivot.index)
             wip_pivot = _safe_dataframe(wip_pivot, columns=skus)
         else:
             wip_pivot = None
+    else:
+        wip_pivot = None
 
     if show_inventory_forecast:
         if use_consumption_forecast and timeline_pivot is not None and not timeline_pivot.empty:
