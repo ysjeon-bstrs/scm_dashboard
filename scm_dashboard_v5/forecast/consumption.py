@@ -90,11 +90,12 @@ def apply_consumption_with_events(
     for (ct, sku), grp in out.groupby(["center", "resource_code"]):
         g = grp.sort_values("date").copy()
         g["stock_qty"] = pd.to_numeric(g.get("stock_qty"), errors="coerce")
-        g["stock_qty"] = g["stock_qty"].ffill()
 
         if ct in ("In-Transit", "WIP"):
             chunks.append(g)
             continue
+
+        g["stock_qty"] = g["stock_qty"].ffill()
 
         rate = float(rates.get((ct, sku), 0.0)) if rates else 0.0
         if rate > 0:
@@ -115,9 +116,12 @@ def apply_consumption_with_events(
     combined = pd.concat(chunks, ignore_index=True)
     combined = combined.sort_values(["center", "resource_code", "date"])
     combined["stock_qty"] = pd.to_numeric(combined["stock_qty"], errors="coerce")
-    combined["stock_qty"] = combined.groupby(["center", "resource_code"]) [
-        "stock_qty"
-    ].ffill()
+    ffill_mask = ~combined["center"].isin(["In-Transit", "WIP"])
+    combined.loc[ffill_mask, "stock_qty"] = (
+        combined.loc[ffill_mask]
+        .groupby(["center", "resource_code"])["stock_qty"]
+        .ffill()
+    )
     combined["stock_qty"] = combined["stock_qty"].fillna(0)
     combined["stock_qty"] = combined["stock_qty"].replace([np.inf, -np.inf], 0)
     combined["stock_qty"] = (
