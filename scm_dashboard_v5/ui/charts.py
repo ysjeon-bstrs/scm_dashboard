@@ -208,6 +208,87 @@ def _safe_add_scatter(
         return
 
 
+def _normalize_inventory_frame(
+    df: Optional[pd.DataFrame], *, default_center: str | None = None
+) -> pd.DataFrame:
+    cols = ["date", "center", "resource_code", "stock_qty"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    frame = df.copy()
+    rename_map = {str(col).lower(): col for col in frame.columns}
+
+    if "date" not in frame.columns and "snapshot_date" in rename_map:
+        frame = frame.rename(columns={rename_map["snapshot_date"]: "date"})
+    if "center" not in frame.columns and "center" in rename_map:
+        frame = frame.rename(columns={rename_map["center"]: "center"})
+    if "resource_code" not in frame.columns and "resource_code" in rename_map:
+        frame = frame.rename(columns={rename_map["resource_code"]: "resource_code"})
+    if "stock_qty" not in frame.columns and "stock" in rename_map:
+        frame = frame.rename(columns={rename_map["stock"]: "stock_qty"})
+
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce").dt.normalize()
+    if "center" in frame.columns:
+        frame["center"] = frame["center"].astype(str)
+    elif default_center is not None:
+        frame["center"] = default_center
+    else:
+        frame["center"] = ""
+
+    if "resource_code" in frame.columns:
+        frame["resource_code"] = frame["resource_code"].astype(str)
+    else:
+        frame["resource_code"] = ""
+
+    frame["stock_qty"] = pd.to_numeric(frame.get("stock_qty"), errors="coerce").fillna(0)
+
+    return frame[cols]
+
+
+def _normalize_sales_frame(
+    df: Optional[pd.DataFrame], *, default_center: str | None = None
+) -> pd.DataFrame:
+    cols = ["date", "center", "resource_code", "sales_ea"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    frame = df.copy()
+    rename_map = {str(col).lower(): col for col in frame.columns}
+
+    if "date" not in frame.columns and "snapshot_date" in rename_map:
+        frame = frame.rename(columns={rename_map["snapshot_date"]: "date"})
+    if "center" not in frame.columns and "center" in rename_map:
+        frame = frame.rename(columns={rename_map["center"]: "center"})
+    if "resource_code" not in frame.columns and "resource_code" in rename_map:
+        frame = frame.rename(columns={rename_map["resource_code"]: "resource_code"})
+    if "sales_ea" not in frame.columns:
+        candidate = None
+        for col in frame.columns:
+            if str(col).lower().endswith("sales_ea") or "sales" in str(col).lower():
+                candidate = col
+                break
+        if candidate is not None:
+            frame = frame.rename(columns={candidate: "sales_ea"})
+
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce").dt.normalize()
+    if "center" in frame.columns:
+        frame["center"] = frame["center"].astype(str)
+    elif default_center is not None:
+        frame["center"] = default_center
+    else:
+        frame["center"] = ""
+
+    if "resource_code" in frame.columns:
+        frame["resource_code"] = frame["resource_code"].astype(str)
+    else:
+        frame["resource_code"] = ""
+
+    frame["sales_ea"] = pd.to_numeric(frame.get("sales_ea"), errors="coerce").fillna(0)
+    frame = frame.dropna(subset=["date"])
+
+    return frame[cols]
+
+
 def _as_naive_timestamp(value: pd.Timestamp | str | None) -> pd.Timestamp:
     """Return a timezone-naive timestamp for consistent comparisons."""
 
@@ -420,25 +501,19 @@ def _sku_color_map(skus):
 
 def render_amazon_panel(
     timeline_actual: pd.DataFrame,
-    timeline_forecast: pd.DataFrame,
-    snap_long: pd.DataFrame,
-    moves: pd.DataFrame,
-    centers: list[str],
-    skus: list[str],
+    timeline_forecast: Optional[pd.DataFrame],
+    *,
+    centers: Sequence[str],
+    skus: Sequence[str],
     start: pd.Timestamp,
     end: pd.Timestamp,
-    lookback_days: int,
     today: pd.Timestamp,
-    events=None,
-):
-    """
-    • 위/아래 차트가 같은 예측을 쓰도록, v5_main에서 만들어준
-      timeline_actual / timeline_forecast(=소진 반영)를 그대로 사용합니다.
-    • 재고선: 오늘까지 실선(실측), 오늘 이후 점선(예측)을 한 줄로.
-    • 판매막대: 날짜≤오늘 → 실판매(일별 하락분, 음수 제거).
-               날짜>오늘 → 예측판매(최근 lookback 평균; 정수 막대).
-    • SKU별 누적(stacked) 막대로 표시.
-    """
+    lookback_days: int = 28,
+    daily_sales: Optional[pd.DataFrame] = None,
+    sales_forecast: Optional[pd.DataFrame] = None,
+    inv_forecast: Optional[pd.DataFrame] = None,
+) -> None:
+    """Render the Amazon sales vs. inventory panel with aligned OOS timing."""
 
     if not centers:
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
@@ -447,52 +522,58 @@ def render_amazon_panel(
     if not _ensure_plotly_available():
         return
 
-    actual = timeline_actual[
-        (timeline_actual["center"].isin(centers))
-        & (timeline_actual["resource_code"].isin(skus))
-    ].copy()
+    centers_norm = [str(c).strip() for c in centers if str(c).strip()]
+    if not centers_norm:
+        st.info("Amazon 계열 센터가 선택되지 않았습니다.")
+        return
 
-    forecast = timeline_forecast[
-        (timeline_forecast["center"].isin(centers))
-        & (timeline_forecast["resource_code"].isin(skus))
-    ].copy()
+    sku_filter = [str(s).strip() for s in skus if str(s).strip()]
 
-    if "date" in actual.columns:
-        actual["date"] = pd.to_datetime(actual["date"], errors="coerce").dt.normalize()
-    if "date" in forecast.columns:
-        forecast["date"] = pd.to_datetime(forecast["date"], errors="coerce").dt.normalize()
+    actual = _normalize_inventory_frame(timeline_actual)
+    actual = actual[actual["center"].isin(centers_norm)]
+    if sku_filter:
+        actual = actual[actual["resource_code"].isin(sku_filter)]
 
     if actual.empty:
         st.info("표시할 Amazon 라인이 없습니다.")
         return
 
-    sku_colors = _sku_color_map(skus)
+    default_center = centers_norm[0]
+    forecast_source = inv_forecast if inv_forecast is not None and not inv_forecast.empty else timeline_forecast
+    forecast = _normalize_inventory_frame(forecast_source, default_center=default_center)
+    forecast = forecast[forecast["center"].isin(centers_norm)]
+    if sku_filter:
+        forecast = forecast[forecast["resource_code"].isin(sku_filter)]
+
+    sales_hist = _normalize_sales_frame(daily_sales, default_center=default_center)
+    sales_hist = sales_hist[sales_hist["center"].isin(centers_norm)]
+    if sku_filter:
+        sales_hist = sales_hist[sales_hist["resource_code"].isin(sku_filter)]
+
+    sales_fc = _normalize_sales_frame(sales_forecast, default_center=default_center)
+    sales_fc = sales_fc[sales_fc["center"].isin(centers_norm)]
+    if sku_filter:
+        sales_fc = sales_fc[sales_fc["resource_code"].isin(sku_filter)]
+
+    sku_palette = sku_filter or actual["resource_code"].unique().tolist()
+    sku_colors = _sku_color_map(sku_palette)
     fig = go.Figure()
 
-    if "center" in actual.columns:
-        actual["center"] = actual["center"].astype(str)
-    else:
-        actual = actual.assign(center="")
-    if "center" in forecast.columns:
-        forecast["center"] = forecast["center"].astype(str)
     sku_center_seen: Dict[str, Dict[str, int]] = {}
 
-    for (sku, center), g in actual.groupby(["resource_code", "center"]):
-        if not sku:
+    for (sku, center), group in actual.groupby(["resource_code", "center"]):
+        group = group.sort_values("date")
+        if group.empty:
             continue
         label_center = center or ""
-        if isinstance(label_center, str) and label_center.lower() == "nan":
-            label_center = "Unknown"
-        g = g.sort_values("date")
         base_color = sku_colors.get(sku, PALETTE[0])
         centers_for_sku = sku_center_seen.setdefault(sku, {})
         if label_center not in centers_for_sku:
             centers_for_sku[label_center] = len(centers_for_sku)
-        center_index = centers_for_sku[label_center]
-        shade = _shade_for(label_center, center_index)
+        shade = _shade_for(label_center, centers_for_sku[label_center])
         color = _tint(base_color, shade)
 
-        before = g[g["date"] <= today]
+        before = group[group["date"] <= today]
         if not before.empty:
             fig.add_trace(
                 go.Scatter(
@@ -509,21 +590,30 @@ def render_amazon_panel(
                 )
             )
 
-        if "center" in forecast.columns:
-            after = forecast[
-                (forecast["resource_code"] == sku)
-                & (forecast["center"] == center)
-                & (forecast["date"] >= today)
-            ]
-        else:
-            after = forecast[
-                (forecast["resource_code"] == sku) & (forecast["date"] >= today)
-            ]
-        if not after.empty:
+        future = forecast[
+            (forecast["resource_code"] == sku)
+            & (forecast["center"] == center)
+            & (forecast["date"] >= today)
+        ].sort_values("date")
+
+        if not future.empty and not before.empty:
+            last_actual = before.iloc[-1]
+            if not (future["date"] == today).any():
+                bridge = pd.DataFrame(
+                    {
+                        "date": [today],
+                        "center": [center],
+                        "resource_code": [sku],
+                        "stock_qty": [last_actual["stock_qty"]],
+                    }
+                )
+                future = pd.concat([bridge, future], ignore_index=True)
+
+        if not future.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=after["date"],
-                    y=after["stock_qty"],
+                    x=future["date"],
+                    y=future["stock_qty"],
                     name=f"{sku} 재고(예측)",
                     mode="lines",
                     line=dict(color=color, width=2.0, dash="dot"),
@@ -535,49 +625,111 @@ def render_amazon_panel(
                 )
             )
 
-    bars_hist = []
-    bars_fore = []
+    history_limit = min(end, today)
+    hist_range = sales_hist[
+        (sales_hist["date"] >= start) & (sales_hist["date"] <= history_limit)
+    ]
+    hist_range = (
+        hist_range.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+        if not hist_range.empty
+        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    )
 
-    for sku, g in actual.groupby("resource_code"):
-        g = g.sort_values("date")
-        g = g[(g["date"] >= start) & (g["date"] <= today)]
-        if g.empty:
+    if hist_range.empty:
+        fallback_rows: list[pd.DataFrame] = []
+        for (sku, center), group in actual.groupby(["resource_code", "center"]):
+            subset = group[(group["date"] >= start) & (group["date"] <= history_limit)]
+            if subset.empty:
+                continue
+            subset = subset.sort_values("date")
+            qty = subset["stock_qty"].astype(float).values
+            dec = np.clip(np.diff(qty, prepend=qty[0]), a_min=None, a_max=0) * -1.0
+            fallback_rows.append(
+                pd.DataFrame(
+                    {
+                        "date": subset["date"],
+                        "center": center,
+                        "resource_code": sku,
+                        "sales_ea": np.rint(dec).astype(int),
+                    }
+                )
+            )
+        if fallback_rows:
+            fallback_hist = pd.concat(fallback_rows, ignore_index=True)
+            hist_range = (
+                fallback_hist.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+            )
+
+    future_sales = sales_fc[
+        (sales_fc["date"] > today) & (sales_fc["date"] <= end)
+    ]
+    future_sales = (
+        future_sales.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+        if not future_sales.empty
+        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    )
+
+    if future_sales.empty and lookback_days > 0:
+        fallback_future: list[pd.DataFrame] = []
+        start_future = max(today + pd.Timedelta(days=1), start)
+        if start_future <= end:
+            idx_future = pd.date_range(start_future, end, freq="D")
+            for (sku, center), group in actual.groupby(["resource_code", "center"]):
+                past = group[group["date"] <= today].sort_values("date")
+                if past.empty:
+                    continue
+                qty = past["stock_qty"].astype(float).values
+                dec = np.clip(np.diff(qty, prepend=qty[0]), a_min=None, a_max=0) * -1.0
+                if dec.size == 0:
+                    continue
+                window = int(min(len(dec), max(1, lookback_days)))
+                tail = dec[-window:]
+                rate = int(np.rint(tail.mean())) if tail.size else 0
+                if rate < 0:
+                    rate = 0
+                fallback_future.append(
+                    pd.DataFrame(
+                        {
+                            "date": idx_future,
+                            "center": center,
+                            "resource_code": sku,
+                            "sales_ea": np.full(len(idx_future), rate, dtype=int),
+                        }
+                    )
+                )
+        if fallback_future:
+            fallback_future_df = pd.concat(fallback_future, ignore_index=True)
+            future_sales = (
+                fallback_future_df.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+            )
+
+    bars_hist = []
+    for sku, group in hist_range.groupby("resource_code"):
+        group = group.sort_values("date")
+        if group.empty:
             continue
-        y = g["stock_qty"].values.astype(float)
-        dec = np.clip(np.diff(y, prepend=y[0]), a_min=None, a_max=0) * -1.0
-        dec = np.rint(dec).astype(int)
         bars_hist.append(
             go.Bar(
-                x=g["date"],
-                y=dec,
+                x=group["date"],
+                y=group["sales_ea"],
                 name=f"{sku} 판매(실측)",
-                marker_color=sku_colors[sku],
+                marker_color=sku_colors.get(sku, PALETTE[0]),
                 opacity=0.85,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>판매 %{y:,} EA<extra></extra>",
             )
         )
 
-    for sku, g in actual.groupby("resource_code"):
-        idx_future = pd.date_range(
-            max(today + pd.Timedelta(days=1), start), end, freq="D"
-        )
-        if len(idx_future) == 0:
+    bars_fore = []
+    for sku, group in future_sales.groupby("resource_code"):
+        group = group.sort_values("date")
+        if group.empty:
             continue
-
-        past = actual[
-            (actual["resource_code"] == sku) & (actual["date"] <= today)
-        ].sort_values("date")
-        y = past["stock_qty"].values.astype(float)
-        dec = np.clip(np.diff(y, prepend=y[0]), a_min=None, a_max=0) * -1.0
-        tail = dec[-lookback_days:] if len(dec) >= lookback_days else dec
-        rate = int(np.rint(tail.mean())) if len(tail) else 0
-
         bars_fore.append(
             go.Bar(
-                x=idx_future,
-                y=np.full(len(idx_future), rate, dtype=int),
+                x=group["date"],
+                y=group["sales_ea"],
                 name=f"{sku} 판매(예측)",
-                marker_color=sku_colors[sku],
+                marker_color=sku_colors.get(sku, PALETTE[0]),
                 opacity=0.35,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>예상 판매 %{y:,} EA<extra></extra>",
             )
@@ -585,18 +737,12 @@ def render_amazon_panel(
 
     for tr in bars_hist + bars_fore:
         tr.update(offsetgroup=0, legendgroup="sales", yaxis="y")
-
-    for tr in bars_hist + bars_fore:
         fig.add_trace(tr)
 
     fig.update_layout(
         barmode="stack",
         xaxis=dict(range=[start, end]),
-        yaxis=dict(
-            title="판매량(EA/Day)",
-            rangemode="tozero",
-            gridcolor="rgba(0,0,0,0.08)",
-        ),
+        yaxis=dict(title="판매량(EA/Day)", rangemode="tozero", gridcolor="rgba(0,0,0,0.08)"),
         yaxis2=dict(
             title="재고(EA)",
             overlaying="y",
