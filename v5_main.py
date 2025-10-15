@@ -23,6 +23,8 @@ from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import (
     apply_consumption_with_events,
     estimate_daily_consumption,
+    forecast_sales_and_inventory,
+    load_amazon_daily_sales_from_snapshot_raw,
 )
 from scm_dashboard_v5.ui import (
     render_amazon_panel,
@@ -548,18 +550,45 @@ def main() -> None:
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
 
+    amz_daily_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+    amz_sales_fc = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+    amz_inv_fc = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    if amazon_centers:
+        snapshot_raw_df = load_snapshot_raw()
+        amz_daily_sales = load_amazon_daily_sales_from_snapshot_raw(
+            snapshot_raw_df,
+            centers=tuple(amazon_centers),
+            skus=selected_skus,
+        )
+
+        timeline_amazon = timeline_actual[
+            timeline_actual["center"].isin(amazon_centers)
+            & timeline_actual["resource_code"].isin(selected_skus)
+        ]
+
+        fc_start = max(today_norm + pd.Timedelta(days=1), start_ts)
+        amz_sales_fc, amz_inv_fc = forecast_sales_and_inventory(
+            amz_daily_sales,
+            timeline_amazon,
+            start=fc_start,
+            end=end_ts,
+            lookback_days=int(lookback_days),
+            uplift_events=events,
+        )
+
     render_amazon_panel(
         timeline_actual=timeline_actual,
         timeline_forecast=timeline_forecast if use_cons_forecast else timeline_actual,
-        snap_long=snapshot_df,
-        moves=data.moves,
         centers=amazon_centers,
         skus=selected_skus,
         start=start_ts,
         end=end_ts,
-        lookback_days=int(lookback_days),
         today=today_norm,
-        events=events,
+        lookback_days=int(lookback_days),
+        daily_sales=amz_daily_sales,
+        sales_forecast=amz_sales_fc,
+        inv_forecast=amz_inv_fc,
     )
 
 
