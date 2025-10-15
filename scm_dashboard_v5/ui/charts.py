@@ -432,6 +432,133 @@ def _sales_from_snapshot(
     sales = sales.loc[(sales.index >= start) & (sales.index <= end)]
     return sales
 
+
+def _empty_sales_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+
+def _sales_from_snapshot_raw(
+    snap_raw: Optional[pd.DataFrame],
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> pd.DataFrame:
+    if snap_raw is None or snap_raw.empty:
+        return _empty_sales_frame()
+
+    df = snap_raw.copy()
+
+    rename_map: dict[str, str] = {}
+    for col in df.columns:
+        key = str(col).strip().lower()
+        if key in {"snapshot_date", "date", "스냅샷일자", "스냅샷 일자"}:
+            rename_map[col] = "date"
+        elif key in {"center", "센터", "창고", "창고명"}:
+            rename_map[col] = "center"
+        elif key in {"resource_code", "sku", "상품코드", "product_code"}:
+            rename_map[col] = "resource_code"
+        elif "fba_output_stock" in key:
+            rename_map[col] = "fba_output_stock"
+
+    df = df.rename(columns=rename_map)
+
+    if "fba_output_stock" not in df.columns:
+        return _empty_sales_frame()
+
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.normalize()
+    df = df.dropna(subset=["date"])
+    df["fba_output_stock"] = pd.to_numeric(
+        df.get("fba_output_stock"), errors="coerce"
+    ).fillna(0)
+
+    if "center" in df.columns and centers:
+        centers_norm = {str(c) for c in centers if str(c).strip()}
+        if centers_norm:
+            df = df[df["center"].astype(str).isin(centers_norm)]
+
+    if skus:
+        sku_set = {str(s) for s in skus if str(s).strip()}
+        if sku_set:
+            df = df[df["resource_code"].astype(str).isin(sku_set)]
+
+    if df.empty:
+        return _empty_sales_frame()
+
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+
+    df = df[(df["date"] >= start_norm) & (df["date"] <= end_norm)]
+    if df.empty:
+        return _empty_sales_frame()
+
+    grouped = (
+        df.groupby(["date", "resource_code"], as_index=False)["fba_output_stock"].sum()
+        .rename(columns={"fba_output_stock": "sales_ea"})
+    )
+
+    grouped["sales_ea"] = (
+        pd.to_numeric(grouped["sales_ea"], errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
+        .round()
+        .astype(int)
+    )
+    return grouped
+
+
+def _sales_from_snapshot_decays(
+    snap_like: Optional[pd.DataFrame],
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> pd.DataFrame:
+    if snap_like is None or snap_like.empty:
+        return _empty_sales_frame()
+
+    centers_list = [str(c) for c in centers if str(c).strip()]
+    skus_list = [str(s) for s in skus if str(s).strip()]
+    if not centers_list or not skus_list:
+        return _empty_sales_frame()
+
+    matrix = _sales_from_snapshot(
+        snap_like,
+        centers=centers_list,
+        skus=skus_list,
+        start=start,
+        end=end,
+    )
+
+    if matrix is None or matrix.empty:
+        return _empty_sales_frame()
+
+    tidy = (
+        matrix.reset_index()
+        .melt(id_vars="date", var_name="resource_code", value_name="sales_ea")
+    )
+
+    tidy["date"] = pd.to_datetime(tidy.get("date"), errors="coerce").dt.normalize()
+    tidy = tidy.dropna(subset=["date"])
+    tidy["resource_code"] = tidy["resource_code"].astype(str)
+    tidy = tidy[tidy["resource_code"].isin(skus_list)]
+
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    tidy = tidy[(tidy["date"] >= start_norm) & (tidy["date"] <= end_norm)]
+
+    tidy["sales_ea"] = (
+        pd.to_numeric(tidy.get("sales_ea"), errors="coerce")
+        .fillna(0)
+        .clip(lower=0)
+        .round()
+        .astype(int)
+    )
+
+    tidy = tidy[tidy["sales_ea"] >= 0]
+    tidy = tidy.sort_values(["date", "resource_code"]).reset_index(drop=True)
+    return tidy
+
 def _inventory_matrix(
     snap_long: pd.DataFrame,
     centers: List[str],
@@ -594,15 +721,62 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                 secondary_y=True,
             )
 
-    hist = ctx.sales_hist.copy()
-    hist["date"] = pd.to_datetime(hist.get("date"), errors="coerce").dt.normalize()
-    hist = hist.dropna(subset=["date"])
-    hist["sales_ea"] = pd.to_numeric(hist.get("sales_ea"), errors="coerce").fillna(0)
-    hist = hist[(hist["date"] >= ctx.start) & (hist["date"] <= ctx.today)]
+    hist = getattr(ctx, "sales_hist", pd.DataFrame()).copy()
+    hist_source = "실측"
+
+    if not hist.empty:
+        hist["date"] = pd.to_datetime(hist.get("date"), errors="coerce").dt.normalize()
+        hist = hist.dropna(subset=["date"])
+        hist["sales_ea"] = pd.to_numeric(hist.get("sales_ea"), errors="coerce").fillna(0)
+        hist = hist[(hist["date"] >= ctx.start) & (hist["date"] <= ctx.today)]
+        if "resource_code" in hist.columns:
+            hist["resource_code"] = hist["resource_code"].astype(str)
+        if "center" in hist.columns and ctx.centers:
+            center_filter = {str(c) for c in ctx.centers if str(c).strip()}
+            if center_filter:
+                hist = hist[hist["center"].astype(str).isin(center_filter)]
+        if hist.empty:
+            hist_source = "실측"
+
+    if hist.empty:
+        sales_raw = _sales_from_snapshot_raw(
+            getattr(ctx, "snapshot_raw", None),
+            ctx.centers,
+            ctx.skus,
+            ctx.start,
+            ctx.today,
+        )
+        if not sales_raw.empty:
+            hist = sales_raw
+            hist_source = "실측"
+
+    if hist.empty:
+        sales_decay = _sales_from_snapshot_decays(
+            getattr(ctx, "snapshot_long", None),
+            ctx.centers,
+            ctx.skus,
+            ctx.start,
+            ctx.today,
+        )
+        if sales_decay.empty:
+            sales_decay = _sales_from_snapshot_decays(
+                getattr(ctx, "inv_actual", pd.DataFrame()),
+                ctx.centers,
+                ctx.skus,
+                ctx.start,
+                ctx.today,
+            )
+        if not sales_decay.empty:
+            hist = sales_decay
+            hist_source = "근사"
+
+    if hist.empty:
+        st.info("아마존 판매 데이터가 없습니다. snapshot_raw(fba_output_stock) 또는 스냅샷 감소분을 확인하세요.")
+
     hist_grouped = (
         hist.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
         if not hist.empty
-        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+        else _empty_sales_frame()
     )
 
     future_sales = ctx.sales_forecast.copy()
@@ -620,6 +794,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
     )
 
+    bar_opacity = 0.55 if hist_source == "실측" else 0.45
     for sku, group in hist_grouped.groupby("resource_code"):
         group = group.sort_values("date")
         if group.empty:
@@ -628,9 +803,9 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             go.Bar(
                 x=group["date"],
                 y=group["sales_ea"],
-                name=f"{sku} 판매(실측)",
+                name=f"{sku} 판매({hist_source})",
                 marker_color=colors.get(sku, PALETTE[0]),
-                opacity=0.85,
+                opacity=bar_opacity,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>판매 %{y:,} EA<extra></extra>",
             ),
             secondary_y=False,
@@ -681,7 +856,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
     fig.add_vline(x=ctx.today, line_color="red", line_dash="dash", opacity=0.85)
 
     fig.update_layout(
-        barmode="stack",
+        barmode="relative",
         hovermode="x unified",
         margin=dict(l=10, r=10, t=40, b=20),
         legend=dict(orientation="h"),
