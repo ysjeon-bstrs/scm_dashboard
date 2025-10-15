@@ -1344,18 +1344,6 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
 
     fig.add_vline(x=ctx.today, line_color="red", line_dash="dash", opacity=0.85)
 
-    today_norm = pd.to_datetime(ctx.today).normalize()
-    shade_start = max(today_norm, chart_start)
-    shade_end = chart_end
-    if pd.notna(shade_start) and pd.notna(shade_end) and shade_end >= shade_start:
-        fig.add_vrect(
-            x0=shade_start,
-            x1=shade_end,
-            fillcolor="rgba(0,0,0,0.05)",
-            line_width=0,
-            layer="below",
-        )
-
     fig.update_layout(
         barmode="relative",
         hovermode="x unified",
