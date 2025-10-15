@@ -60,6 +60,35 @@ def _sample_sales_forecast():
     )
 
 
+def test_load_amazon_sales_normalises_center_alias():
+    snapshot_raw = pd.DataFrame(
+        [
+            {
+                "snapshot_date": "2023-01-01",
+                "center": "어크로스비US",
+                "resource_code": "SKU1",
+                "fba_output_stock": 4,
+            },
+            {
+                "snapshot_date": "2023-01-02",
+                "center": "AcrossBUS",
+                "resource_code": "SKU1",
+                "fba_output_stock": 5,
+            },
+        ]
+    )
+
+    result = consumption.load_amazon_daily_sales_from_snapshot_raw(
+        snapshot_raw,
+        centers=("AcrossBUS",),
+        skus=("SKU1",),
+    )
+
+    assert not result.empty
+    assert sorted(result["center"].unique().tolist()) == ["AcrossBUS"]
+    assert result["sales_ea"].sum() == 9
+
+
 def test_render_step_chart_adds_wip_trace(monkeypatch):
     captured = _capture_plot(monkeypatch)
 

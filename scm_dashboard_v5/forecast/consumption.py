@@ -8,6 +8,7 @@ from typing import Iterable, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from center_alias import normalize_center_value
 from scm_dashboard_v4 import consumption as v4_consumption
 from scm_dashboard_v5.core import build_timeline
 
@@ -68,8 +69,19 @@ def load_amazon_daily_sales_from_snapshot_raw(
     df["fba_output_stock"] = pd.to_numeric(df["fba_output_stock"], errors="coerce").fillna(0)
     df = df[df["fba_output_stock"] >= 0]
 
+    if "center" in df.columns:
+        df["center"] = df["center"].apply(normalize_center_value)
+        df = df[df["center"].notna()]
+
     if centers:
-        center_set = {str(ct) for ct in centers}
+        center_set = {
+            normalized
+            for ct in centers
+            for normalized in [normalize_center_value(ct)]
+            if normalized
+        }
+        if not center_set:
+            return pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
         df = df[df["center"].astype(str).isin(center_set)]
 
     if skus:
@@ -327,7 +339,13 @@ def build_amazon_forecast_context(
     end_norm = pd.to_datetime(end).normalize()
     today_norm = pd.to_datetime(today).normalize()
 
-    center_list = [str(ct) for ct in centers if str(ct).strip()]
+    center_list: list[str] = []
+    for raw_center in centers:
+        normalized = normalize_center_value(raw_center)
+        if not normalized:
+            continue
+        if normalized not in center_list:
+            center_list.append(normalized)
     sku_list = [str(sku) for sku in skus if str(sku).strip()]
 
     if not center_list or not sku_list or end_norm < start_norm:
