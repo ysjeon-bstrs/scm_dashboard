@@ -674,6 +674,106 @@ def _sales_from_snapshot_raw(
     return grouped
 
 
+def _sales_forecast_from_inventory_projection(
+    inv_actual: pd.DataFrame,
+    inv_forecast: pd.DataFrame,
+    *,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+) -> pd.DataFrame:
+    """Derive future sales from the projected inventory trajectory.
+
+    ``apply_consumption_with_events`` already produces the most accurate stock
+    projection for Amazon centres by blending actual inventory, inbound moves
+    and the calibrated consumption trend.  Sales should therefore mirror the
+    day-on-day decrease of that stock projection so that both visuals stay in
+    sync even when promotions or inbound events shift the depletion curve.
+    """
+
+    frames: list[pd.DataFrame] = []
+    for frame in (inv_actual, inv_forecast):
+        if frame is None or frame.empty:
+            continue
+        if not {"date", "center", "resource_code", "stock_qty"}.issubset(frame.columns):
+            continue
+        chunk = frame.copy()
+        chunk["date"] = pd.to_datetime(chunk.get("date"), errors="coerce").dt.normalize()
+        chunk = chunk.dropna(subset=["date"])
+        chunk["center"] = chunk.get("center", "").apply(normalize_center_value)
+        chunk = chunk[chunk["center"].notna()]
+        chunk["resource_code"] = chunk.get("resource_code", "").astype(str).str.strip()
+        chunk["stock_qty"] = pd.to_numeric(chunk.get("stock_qty"), errors="coerce").fillna(0.0)
+        frames.append(chunk)
+
+    if not frames:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    centers_norm = [normalize_center_value(c) for c in centers]
+    centers_norm = [c for c in centers_norm if c]
+    skus_norm = [str(sku).strip() for sku in skus if str(sku).strip()]
+
+    if centers_norm:
+        combined = combined[combined["center"].isin(set(centers_norm))]
+    if skus_norm:
+        combined = combined[combined["resource_code"].isin(set(skus_norm))]
+
+    if combined.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    today_norm = pd.to_datetime(today).normalize()
+
+    combined = combined[(combined["date"] >= start_norm) & (combined["date"] <= end_norm)]
+    if combined.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+    pivot = (
+        combined.groupby(["date", "resource_code"])["stock_qty"].sum().unstack("resource_code")
+    )
+    if pivot.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+    pivot = pivot.reindex(columns=skus_norm, fill_value=0.0)
+    full_index = pd.date_range(start_norm, end_norm, freq="D")
+    pivot = pivot.reindex(full_index).sort_index()
+    pivot = pivot.ffill().fillna(0.0)
+
+    diff = pivot.diff()
+    sales = (-diff).clip(lower=0.0)
+
+    # Once the stock reaches zero we clamp subsequent sales to zero.  This
+    # prevents tiny negative diffs introduced by floating point noise from
+    # leaking into the forecast bars after depletion.
+    for sku in sales.columns:
+        stock_series = pivot[sku]
+        zero_dates = stock_series.index[stock_series <= 0]
+        if len(zero_dates) > 0:
+            first_zero = zero_dates[0]
+            sales.loc[sales.index >= first_zero, sku] = 0.0
+
+    future = sales.loc[sales.index > today_norm]
+    if future.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
+    tidy = (
+        future.round(0)
+        .astype(int)
+        .stack()
+        .reset_index()
+        .rename(columns={"level_0": "date", "level_1": "resource_code", 0: "sales_ea"})
+    )
+    tidy["date"] = pd.to_datetime(tidy["date"], errors="coerce").dt.normalize()
+    tidy = tidy.dropna(subset=["date"])
+    tidy["sales_ea"] = tidy["sales_ea"].clip(lower=0)
+    return tidy.sort_values(["resource_code", "date"]).reset_index(drop=True)
+
+
 def _sales_from_snapshot_decays(
     snap_like: Optional[pd.DataFrame],
     centers: Sequence[str],
@@ -1034,7 +1134,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             ctx.centers,
             ctx.skus,
             ctx.start,
-            ctx.today,
+            ctx.end,
             debug=raw_debug,
         )
         if not sales_raw.empty:
@@ -1080,38 +1180,48 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         else _empty_sales_frame()
     )
 
-    future_sales = ctx.sales_forecast.copy()
-    future_sales["date"] = pd.to_datetime(future_sales.get("date"), errors="coerce").dt.normalize()
-    future_sales = future_sales.dropna(subset=["date"])
-    future_sales["sales_ea"] = pd.to_numeric(
-        future_sales.get("sales_ea"), errors="coerce"
-    ).fillna(0)
-    future_sales = future_sales[
-        (future_sales["date"] > ctx.today) & (future_sales["date"] <= ctx.end)
-    ]
     chart_start = pd.to_datetime(ctx.start).normalize()
     chart_end = pd.to_datetime(ctx.end).normalize()
-
-    future_grouped = (
-        future_sales.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
-        if not future_sales.empty
-        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    future_grouped = _sales_forecast_from_inventory_projection(
+        ctx.inv_actual,
+        ctx.inv_forecast,
+        centers=ctx.centers,
+        skus=ctx.skus,
+        start=chart_start,
+        end=chart_end,
+        today=ctx.today,
     )
 
     forecast_start = (ctx.today + pd.Timedelta(days=1)).normalize()
-    future_grouped = _trim_sales_forecast_to_inventory(
-        future_grouped,
-        ctx.inv_actual,
-        ctx.inv_forecast,
-        start=chart_start,
-        end=chart_end,
-        forecast_start=forecast_start,
-    )
+
+    if future_grouped.empty:
+        future_sales = ctx.sales_forecast.copy()
+        future_sales["date"] = pd.to_datetime(future_sales.get("date"), errors="coerce").dt.normalize()
+        future_sales = future_sales.dropna(subset=["date"])
+        future_sales["sales_ea"] = pd.to_numeric(
+            future_sales.get("sales_ea"), errors="coerce"
+        ).fillna(0)
+        future_sales = future_sales[
+            (future_sales["date"] > ctx.today) & (future_sales["date"] <= ctx.end)
+        ]
+
+        future_grouped = (
+            future_sales.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+            if not future_sales.empty
+            else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+        )
+
+        future_grouped = _trim_sales_forecast_to_inventory(
+            future_grouped,
+            ctx.inv_actual,
+            ctx.inv_forecast,
+            start=chart_start,
+            end=chart_end,
+            forecast_start=forecast_start,
+        )
 
     if future_grouped.empty and not hist_grouped.empty and forecast_start <= chart_end:
-        hist_for_forecast = hist_grouped.rename(
-            columns={"sales_ea": "qty_sold"}
-        )
+        hist_for_forecast = hist_grouped.rename(columns={"sales_ea": "qty_sold"})
         fallback_frames: list[pd.DataFrame] = []
         for raw_sku in ctx.skus:
             fc = _sales_forecast_ma(
@@ -1147,6 +1257,12 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             future_grouped = pd.DataFrame(
                 columns=["date", "resource_code", "sales_ea"]
             )
+
+    if not future_grouped.empty:
+        future_grouped["date"] = pd.to_datetime(
+            future_grouped.get("date"), errors="coerce"
+        ).dt.normalize()
+        future_grouped = future_grouped.dropna(subset=["date"])
 
     if not future_grouped.empty:
         future_grouped["resource_code"] = future_grouped["resource_code"].astype(str)
@@ -1230,7 +1346,11 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         title_text="재고 (EA)",
         rangemode="tozero",
         secondary_y=True,
-        gridcolor="rgba(0,0,0,0.08)",
+        showgrid=False,
+        zeroline=False,
+        showline=False,
+        ticks="",
+        tickfont=dict(color="#888"),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
