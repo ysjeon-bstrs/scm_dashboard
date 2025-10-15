@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
@@ -27,6 +27,8 @@ class AmazonForecastContext:
     sales_hist: pd.DataFrame
     sales_ma7: pd.DataFrame
     sales_forecast: pd.DataFrame
+    snapshot_raw: pd.DataFrame = field(default_factory=pd.DataFrame)
+    snapshot_long: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def load_amazon_daily_sales_from_snapshot_raw(
@@ -334,6 +336,8 @@ def build_amazon_forecast_context(
 
     empty_inv = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
     empty_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+    snapshot_raw_df = snapshot_raw.copy() if snapshot_raw is not None else pd.DataFrame()
+    snapshot_long_df = snap_long.copy()
 
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
@@ -360,6 +364,8 @@ def build_amazon_forecast_context(
             sales_hist=empty_sales.copy(),
             sales_ma7=empty_sales.copy(),
             sales_forecast=empty_sales.copy(),
+            snapshot_raw=snapshot_raw_df.copy(),
+            snapshot_long=snapshot_long_df.copy(),
         )
 
     snapshot_cols = {c.lower(): c for c in snap_long.columns}
@@ -400,6 +406,8 @@ def build_amazon_forecast_context(
             sales_hist=empty_sales.copy(),
             sales_ma7=empty_sales.copy(),
             sales_forecast=empty_sales.copy(),
+            snapshot_raw=snapshot_raw_df.copy(),
+            snapshot_long=snapshot_long_df.copy(),
         )
 
     timeline = timeline[timeline["center"].isin(center_list)].copy()
@@ -434,7 +442,7 @@ def build_amazon_forecast_context(
     inv_actual["stock_qty"] = inv_actual["stock_qty"].round().clip(lower=0).astype(int)
     inv_forecast["stock_qty"] = inv_forecast["stock_qty"].round().clip(lower=0).astype(int)
 
-    sales_source = snapshot_raw if snapshot_raw is not None else pd.DataFrame()
+    sales_source = snapshot_raw_df.copy()
     sales_hist = load_amazon_daily_sales_from_snapshot_raw(
         sales_source,
         centers=tuple(center_list),
@@ -562,6 +570,8 @@ def build_amazon_forecast_context(
         sales_hist=sales_hist.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
         sales_ma7=sales_ma7.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
         sales_forecast=sales_forecast.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
+        snapshot_raw=snapshot_raw_df.reset_index(drop=True),
+        snapshot_long=snapshot_long_df.reset_index(drop=True),
     )
 
 def estimate_daily_consumption(sales: pd.DataFrame, *, window: int = 28) -> pd.DataFrame:
