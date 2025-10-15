@@ -34,6 +34,7 @@ def build_timeline(
         today=today,
         lag_days=lag_days,
         horizon_days=int(max(0, horizon_days)),
+        move_fallback_days=int(max(0, move_fallback_days)),
     )
     timeline = bundle.concat()
     if timeline.empty:
