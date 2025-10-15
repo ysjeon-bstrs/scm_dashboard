@@ -24,6 +24,8 @@ from scm_dashboard_v5.forecast import (
     apply_consumption_with_events,
     build_amazon_forecast_context,
     estimate_daily_consumption,
+    forecast_sales_and_inventory,
+    load_amazon_daily_sales_from_snapshot_raw,
 )
 from scm_dashboard_v5.ui import (
     render_amazon_sales_vs_inventory,
