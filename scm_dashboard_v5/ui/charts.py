@@ -477,9 +477,40 @@ def _sales_from_snapshot_raw(
     df = df.rename(columns=rename_map)
 
     if "fba_output_stock" not in df.columns:
+        if debug is not None:
+            centers_for_debug: list[str] = []
+            if "center" in df.columns:
+                centers_for_debug = (
+                    df["center"].dropna().astype(str).unique().tolist()
+                )
+            debug.clear()
+            debug.update(
+                {
+                    "rows_before_center_filter": len(df),
+                    "rows_after_center_filter": len(df),
+                    "snapshot_centers": sorted(centers_for_debug),
+                    "warning": "missing fba_output_stock column",
+                }
+            )
         return _empty_sales_frame()
 
-    df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.normalize()
+    if "date" not in df.columns:
+        centers_for_debug = []
+        if "center" in df.columns:
+            centers_for_debug = df["center"].dropna().astype(str).unique().tolist()
+        if debug is not None:
+            debug.clear()
+            debug.update(
+                {
+                    "rows_before_center_filter": len(df),
+                    "rows_after_center_filter": len(df),
+                    "snapshot_centers": sorted(centers_for_debug),
+                    "warning": "missing date column",
+                }
+            )
+        return _empty_sales_frame()
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     df = df.dropna(subset=["date"])
     df["fba_output_stock"] = pd.to_numeric(
         df.get("fba_output_stock"), errors="coerce"
