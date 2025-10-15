@@ -10,8 +10,13 @@ import pandas as pd
 # Centralised alias mapping so that all inputs converge to a single canonical
 # name. Extend this dictionary when new aliases appear in upstream systems.
 CENTER_ALIAS: dict[str, str] = {
-    "어크로스비US": "AcrossBUS",  # Hangul alias → English canonical name
+    # Amazon US
+    "AMZUS": "AMZUS",
+    "아마존US": "AMZUS",
+    "AmazonUS": "AMZUS",
+    # Across B US fulfilment centre
     "AcrossBUS": "AcrossBUS",
+    "어크로스비US": "AcrossBUS",
 }
 
 # Center values that should be ignored when building filter options. The
