@@ -763,8 +763,13 @@ def _total_inventory_series(
         frames.append(chunk[["date", "stock_qty"]])
 
     if not frames:
-        index = pd.date_range(start_norm, end_norm, freq="D")
-        return pd.Series(0.0, index=index)
+        # When no inventory data exists for the SKU we should not fabricate a
+        # zero-filled timeline. Returning an empty, date-indexed series allows
+        # downstream callers to treat the situation as "no data" instead of
+        # "out of stock", so forecasts remain visible until real inventory
+        # reaches zero.
+        empty_index = pd.DatetimeIndex([], name="date")
+        return pd.Series(dtype=float, index=empty_index)
 
     combined = pd.concat(frames, ignore_index=True)
     combined = (
