@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from center_alias import normalize_center_value
+
 try:  # Plotly는 선택적 의존성이므로 임포트 실패를 허용한다.
     import plotly.express as px  # type: ignore
     import plotly.graph_objects as go  # type: ignore
@@ -472,10 +474,19 @@ def _sales_from_snapshot_raw(
         df.get("fba_output_stock"), errors="coerce"
     ).fillna(0)
 
+    if "center" in df.columns:
+        df["center"] = df["center"].apply(normalize_center_value)
+        df = df[df["center"].notna()]
+
     if "center" in df.columns and centers:
-        centers_norm = {str(c) for c in centers if str(c).strip()}
+        centers_norm = {
+            normalized
+            for c in centers
+            for normalized in [normalize_center_value(c)]
+            if normalized is not None
+        }
         if centers_norm:
-            df = df[df["center"].astype(str).isin(centers_norm)]
+            df = df[df["center"].isin(centers_norm)]
 
     if skus:
         sku_set = {str(s) for s in skus if str(s).strip()}
