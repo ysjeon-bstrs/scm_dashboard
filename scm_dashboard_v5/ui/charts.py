@@ -693,8 +693,10 @@ def _sales_forecast_from_inventory_projection(
     sync even when promotions or inbound events shift the depletion curve.
     """
 
+    today_norm = pd.to_datetime(today).normalize()
+
     frames: list[pd.DataFrame] = []
-    for frame in (inv_actual, inv_forecast):
+    for label, frame in (("actual", inv_actual), ("forecast", inv_forecast)):
         if frame is None or frame.empty:
             continue
         if not {"date", "center", "resource_code", "stock_qty"}.issubset(frame.columns):
@@ -702,6 +704,12 @@ def _sales_forecast_from_inventory_projection(
         chunk = frame.copy()
         chunk["date"] = pd.to_datetime(chunk.get("date"), errors="coerce").dt.normalize()
         chunk = chunk.dropna(subset=["date"])
+        if label == "actual":
+            chunk = chunk[chunk["date"] <= today_norm]
+        else:
+            chunk = chunk[chunk["date"] > today_norm]
+        if chunk.empty:
+            continue
         chunk["center"] = chunk.get("center", "").apply(normalize_center_value)
         chunk = chunk[chunk["center"].notna()]
         chunk["resource_code"] = chunk.get("resource_code", "").astype(str).str.strip()
@@ -727,8 +735,6 @@ def _sales_forecast_from_inventory_projection(
 
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
-    today_norm = pd.to_datetime(today).normalize()
-
     combined = combined[(combined["date"] >= start_norm) & (combined["date"] <= end_norm)]
     if combined.empty:
         return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
