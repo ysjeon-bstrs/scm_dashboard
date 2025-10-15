@@ -1,5 +1,6 @@
 import pandas as pd
 
+from scm_dashboard_v5.forecast import AmazonForecastContext
 from scm_dashboard_v5.ui import charts
 
 
@@ -14,16 +15,6 @@ def _capture_plot(monkeypatch):
     monkeypatch.setattr(charts.st, "warning", lambda *args, **kwargs: None)
 
     return captured
-
-
-def _sample_snapshot():
-    return pd.DataFrame(
-        [
-            {"snapshot_date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
-            {"snapshot_date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
-            {"snapshot_date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
-        ]
-    )
 
 
 def _sample_timeline():
@@ -42,11 +33,28 @@ def _sample_timeline():
 def _sample_forecast():
     return pd.DataFrame(
         [
-            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
-            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
             {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
             {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 70},
             {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 60},
+        ]
+    )
+
+
+def _sample_daily_sales():
+    return pd.DataFrame(
+        [
+            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10},
+            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10},
+        ]
+    )
+
+
+def _sample_sales_forecast():
+    return pd.DataFrame(
+        [
+            {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 9},
+            {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 8},
+            {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 7},
         ]
     )
 
@@ -114,26 +122,37 @@ def test_render_step_chart_accepts_legacy_wip_center(monkeypatch):
 def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
     captured = _capture_plot(monkeypatch)
 
-    charts.render_amazon_panel(
-        timeline_actual=_sample_timeline(),
-        timeline_forecast=_sample_forecast(),
-        snap_long=_sample_snapshot(),
-        moves=pd.DataFrame(),
-        centers=["AMZUS"],
-        skus=["SKU1"],
+    ctx = AmazonForecastContext(
         start=pd.Timestamp("2023-01-01"),
         end=pd.Timestamp("2023-01-05"),
-        lookback_days=2,
         today=pd.Timestamp("2023-01-02"),
-        events=None,
+        centers=["AMZUS"],
+        skus=["SKU1"],
+        inv_actual=pd.DataFrame(
+            [
+                {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
+                {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
+            ]
+        ),
+        inv_forecast=_sample_forecast(),
+        sales_hist=_sample_daily_sales(),
+        sales_ma7=pd.DataFrame(
+            [
+                {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10.0},
+                {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10.0},
+            ]
+        ),
+        sales_forecast=_sample_sales_forecast(),
     )
+
+    charts.render_amazon_sales_vs_inventory(ctx)
 
     fig = captured["fig"]
     trace_names = [tr.name for tr in fig.data]
     assert "SKU1 재고(실측)" in trace_names
     assert "SKU1 재고(예측)" in trace_names
 
-    sales_traces = [tr for tr in fig.data if "판매" in (tr.name or "")]
+    sales_traces = [tr for tr in fig.data if "판매(" in (tr.name or "")]
     assert sales_traces, "판매 막대가 렌더링되어야 합니다."
     for tr in sales_traces:
         assert all(float(v).is_integer() for v in tr.y), "판매 막대는 정수여야 합니다."

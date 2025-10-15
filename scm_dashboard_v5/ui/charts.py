@@ -1,7 +1,7 @@
 # scm_dashboard_v5/ui/charts.py
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -10,14 +10,19 @@ import streamlit as st
 try:  # Plotly는 선택적 의존성이므로 임포트 실패를 허용한다.
     import plotly.express as px  # type: ignore
     import plotly.graph_objects as go  # type: ignore
+    from plotly.subplots import make_subplots  # type: ignore
 except ImportError as _plotly_err:  # pragma: no cover - 의존성 결손 환경만 재현 가능
     px = None  # type: ignore[assignment]
     go = None  # type: ignore[assignment]
+    make_subplots = None  # type: ignore[assignment]
     _PLOTLY_IMPORT_ERROR = _plotly_err
 else:
     _PLOTLY_IMPORT_ERROR = None
 
 from scm_dashboard_v5.ui.kpi import render_sku_summary_cards as _render_sku_summary_cards
+
+if TYPE_CHECKING:
+    from scm_dashboard_v5.forecast import AmazonForecastContext
 
 # ---------------- Palette (SKU -> Color) ----------------
 # 계단식 차트와 최대한 비슷한 톤(20+색)
@@ -418,199 +423,201 @@ def _sku_color_map(skus):
     return m
 
 
-def render_amazon_panel(
-    timeline_actual: pd.DataFrame,
-    timeline_forecast: pd.DataFrame,
-    snap_long: pd.DataFrame,
-    moves: pd.DataFrame,
-    centers: list[str],
-    skus: list[str],
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-    lookback_days: int,
-    today: pd.Timestamp,
-    events=None,
-):
-    """
-    • 위/아래 차트가 같은 예측을 쓰도록, v5_main에서 만들어준
-      timeline_actual / timeline_forecast(=소진 반영)를 그대로 사용합니다.
-    • 재고선: 오늘까지 실선(실측), 오늘 이후 점선(예측)을 한 줄로.
-    • 판매막대: 날짜≤오늘 → 실판매(일별 하락분, 음수 제거).
-               날짜>오늘 → 예측판매(최근 lookback 평균; 정수 막대).
-    • SKU별 누적(stacked) 막대로 표시.
-    """
+def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
+    """Draw the Amazon sales and inventory panel from a shared forecast context."""
 
-    if not centers:
-        st.info("Amazon 계열 센터가 선택되지 않았습니다.")
+    if not _ensure_plotly_available() or go is None or make_subplots is None:
         return
 
-    if not _ensure_plotly_available():
+    if ctx is None:
+        st.info("아마존 데이터가 없습니다.")
         return
 
-    actual = timeline_actual[
-        (timeline_actual["center"].isin(centers))
-        & (timeline_actual["resource_code"].isin(skus))
-    ].copy()
+    frames = [
+        getattr(ctx, "inv_actual", pd.DataFrame()),
+        getattr(ctx, "inv_forecast", pd.DataFrame()),
+        getattr(ctx, "sales_hist", pd.DataFrame()),
+        getattr(ctx, "sales_forecast", pd.DataFrame()),
+        getattr(ctx, "sales_ma7", pd.DataFrame()),
+    ]
 
-    forecast = timeline_forecast[
-        (timeline_forecast["center"].isin(centers))
-        & (timeline_forecast["resource_code"].isin(skus))
-    ].copy()
-
-    if "date" in actual.columns:
-        actual["date"] = pd.to_datetime(actual["date"], errors="coerce").dt.normalize()
-    if "date" in forecast.columns:
-        forecast["date"] = pd.to_datetime(forecast["date"], errors="coerce").dt.normalize()
-
-    if actual.empty:
-        st.info("표시할 Amazon 라인이 없습니다.")
+    if all(frame is None or frame.empty for frame in frames):
+        st.info("아마존 데이터가 없습니다.")
         return
 
-    sku_colors = _sku_color_map(skus)
-    fig = go.Figure()
+    colors = _sku_colors(ctx.skus)
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    if "center" in actual.columns:
-        actual["center"] = actual["center"].astype(str)
-    else:
-        actual = actual.assign(center="")
-    if "center" in forecast.columns:
-        forecast["center"] = forecast["center"].astype(str)
-    sku_center_seen: Dict[str, Dict[str, int]] = {}
+    actual = ctx.inv_actual.copy()
+    actual["date"] = pd.to_datetime(actual.get("date"), errors="coerce")
+    actual = actual.dropna(subset=["date"])
+    actual["stock_qty"] = pd.to_numeric(actual.get("stock_qty"), errors="coerce").fillna(0)
 
-    for (sku, center), g in actual.groupby(["resource_code", "center"]):
-        if not sku:
+    forecast = ctx.inv_forecast.copy()
+    forecast["date"] = pd.to_datetime(forecast.get("date"), errors="coerce")
+    forecast = forecast.dropna(subset=["date"])
+    forecast["stock_qty"] = pd.to_numeric(forecast.get("stock_qty"), errors="coerce").fillna(0)
+
+    for (center, sku), group in actual.groupby(["center", "resource_code"], dropna=True):
+        group = group.sort_values("date")
+        if group.empty:
             continue
-        label_center = center or ""
-        if isinstance(label_center, str) and label_center.lower() == "nan":
-            label_center = "Unknown"
-        g = g.sort_values("date")
-        base_color = sku_colors.get(sku, PALETTE[0])
-        centers_for_sku = sku_center_seen.setdefault(sku, {})
-        if label_center not in centers_for_sku:
-            centers_for_sku[label_center] = len(centers_for_sku)
-        center_index = centers_for_sku[label_center]
-        shade = _shade_for(label_center, center_index)
-        color = _tint(base_color, shade)
+        color = colors.get(sku, PALETTE[0])
+        fig.add_trace(
+            go.Scatter(
+                x=group["date"],
+                y=group["stock_qty"],
+                name=f"{sku} 재고(실측)",
+                mode="lines",
+                line=dict(color=color, width=2.4),
+                legendgroup=f"{sku}@{center}",
+                hovertemplate=(
+                    f"센터: {center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
+                ),
+            ),
+            secondary_y=True,
+        )
 
-        before = g[g["date"] <= today]
-        if not before.empty:
+        future = forecast[
+            (forecast["center"] == center)
+            & (forecast["resource_code"] == sku)
+        ].sort_values("date")
+
+        if not future.empty:
+            past = group[group["date"] <= ctx.today]
+            if not past.empty:
+                last_actual = past.iloc[-1]
+                if future["date"].min() > ctx.today:
+                    bridge = pd.DataFrame(
+                        {
+                            "date": [ctx.today],
+                            "center": [center],
+                            "resource_code": [sku],
+                            "stock_qty": [last_actual["stock_qty"]],
+                        }
+                    )
+                    future = pd.concat([bridge, future], ignore_index=True)
+
             fig.add_trace(
                 go.Scatter(
-                    x=before["date"],
-                    y=before["stock_qty"],
-                    name=f"{sku} 재고(실측)",
-                    mode="lines",
-                    line=dict(color=color, width=2.4),
-                    yaxis="y2",
-                    legendgroup=f"{sku} @{label_center}",
-                    hovertemplate=(
-                        f"센터: {label_center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
-                    ),
-                )
-            )
-
-        if "center" in forecast.columns:
-            after = forecast[
-                (forecast["resource_code"] == sku)
-                & (forecast["center"] == center)
-                & (forecast["date"] >= today)
-            ]
-        else:
-            after = forecast[
-                (forecast["resource_code"] == sku) & (forecast["date"] >= today)
-            ]
-        if not after.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=after["date"],
-                    y=after["stock_qty"],
+                    x=future["date"],
+                    y=future["stock_qty"],
                     name=f"{sku} 재고(예측)",
                     mode="lines",
                     line=dict(color=color, width=2.0, dash="dot"),
-                    yaxis="y2",
-                    legendgroup=f"{sku} @{label_center}",
+                    legendgroup=f"{sku}@{center}",
                     hovertemplate=(
-                        f"센터: {label_center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
+                        f"센터: {center}<br>날짜 %{{x|%Y-%m-%d}}<br>재고 %{{y:,}} EA<extra></extra>"
                     ),
-                )
+                ),
+                secondary_y=True,
             )
 
-    bars_hist = []
-    bars_fore = []
+    hist = ctx.sales_hist.copy()
+    hist["date"] = pd.to_datetime(hist.get("date"), errors="coerce").dt.normalize()
+    hist = hist.dropna(subset=["date"])
+    hist["sales_ea"] = pd.to_numeric(hist.get("sales_ea"), errors="coerce").fillna(0)
+    hist = hist[(hist["date"] >= ctx.start) & (hist["date"] <= ctx.today)]
+    hist_grouped = (
+        hist.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+        if not hist.empty
+        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    )
 
-    for sku, g in actual.groupby("resource_code"):
-        g = g.sort_values("date")
-        g = g[(g["date"] >= start) & (g["date"] <= today)]
-        if g.empty:
+    future_sales = ctx.sales_forecast.copy()
+    future_sales["date"] = pd.to_datetime(future_sales.get("date"), errors="coerce").dt.normalize()
+    future_sales = future_sales.dropna(subset=["date"])
+    future_sales["sales_ea"] = pd.to_numeric(
+        future_sales.get("sales_ea"), errors="coerce"
+    ).fillna(0)
+    future_sales = future_sales[
+        (future_sales["date"] > ctx.today) & (future_sales["date"] <= ctx.end)
+    ]
+    future_grouped = (
+        future_sales.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+        if not future_sales.empty
+        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    )
+
+    for sku, group in hist_grouped.groupby("resource_code"):
+        group = group.sort_values("date")
+        if group.empty:
             continue
-        y = g["stock_qty"].values.astype(float)
-        dec = np.clip(np.diff(y, prepend=y[0]), a_min=None, a_max=0) * -1.0
-        dec = np.rint(dec).astype(int)
-        bars_hist.append(
+        fig.add_trace(
             go.Bar(
-                x=g["date"],
-                y=dec,
+                x=group["date"],
+                y=group["sales_ea"],
                 name=f"{sku} 판매(실측)",
-                marker_color=sku_colors[sku],
+                marker_color=colors.get(sku, PALETTE[0]),
                 opacity=0.85,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>판매 %{y:,} EA<extra></extra>",
-            )
+            ),
+            secondary_y=False,
         )
 
-    for sku, g in actual.groupby("resource_code"):
-        idx_future = pd.date_range(
-            max(today + pd.Timedelta(days=1), start), end, freq="D"
-        )
-        if len(idx_future) == 0:
+    for sku, group in future_grouped.groupby("resource_code"):
+        group = group.sort_values("date")
+        if group.empty:
             continue
-
-        past = actual[
-            (actual["resource_code"] == sku) & (actual["date"] <= today)
-        ].sort_values("date")
-        y = past["stock_qty"].values.astype(float)
-        dec = np.clip(np.diff(y, prepend=y[0]), a_min=None, a_max=0) * -1.0
-        tail = dec[-lookback_days:] if len(dec) >= lookback_days else dec
-        rate = int(np.rint(tail.mean())) if len(tail) else 0
-
-        bars_fore.append(
+        fig.add_trace(
             go.Bar(
-                x=idx_future,
-                y=np.full(len(idx_future), rate, dtype=int),
+                x=group["date"],
+                y=group["sales_ea"],
                 name=f"{sku} 판매(예측)",
-                marker_color=sku_colors[sku],
+                marker_color=colors.get(sku, PALETTE[0]),
                 opacity=0.35,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>예상 판매 %{y:,} EA<extra></extra>",
-            )
+            ),
+            secondary_y=False,
         )
 
-    for tr in bars_hist + bars_fore:
-        tr.update(offsetgroup=0, legendgroup="sales", yaxis="y")
+    ma7 = ctx.sales_ma7.copy()
+    ma7["date"] = pd.to_datetime(ma7.get("date"), errors="coerce").dt.normalize()
+    ma7 = ma7.dropna(subset=["date"])
+    ma7 = ma7[(ma7["date"] >= ctx.start) & (ma7["date"] <= ctx.today)]
+    ma7_grouped = (
+        ma7.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+        if not ma7.empty
+        else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+    )
 
-    for tr in bars_hist + bars_fore:
-        fig.add_trace(tr)
+    for sku, group in ma7_grouped.groupby("resource_code"):
+        group = group.sort_values("date")
+        if group.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=group["date"],
+                y=group["sales_ea"],
+                name=f"{sku} 판매 7일 평균",
+                mode="lines",
+                line=dict(color=colors.get(sku, PALETTE[0]), dash="dash"),
+                hovertemplate="날짜 %{x|%Y-%m-%d}<br>판매 7일 평균 %{y:.1f} EA<extra></extra>",
+            ),
+            secondary_y=False,
+        )
+
+    fig.add_vline(x=ctx.today, line_color="red", line_dash="dash", opacity=0.85)
 
     fig.update_layout(
         barmode="stack",
-        xaxis=dict(range=[start, end]),
-        yaxis=dict(
-            title="판매량(EA/Day)",
-            rangemode="tozero",
-            gridcolor="rgba(0,0,0,0.08)",
-        ),
-        yaxis2=dict(
-            title="재고(EA)",
-            overlaying="y",
-            side="right",
-            rangemode="tozero",
-            gridcolor="rgba(0,0,0,0.08)",
-            showgrid=False,
-        ),
-        legend=dict(orientation="h"),
-        margin=dict(l=10, r=10, t=10, b=10),
         hovermode="x unified",
+        margin=dict(l=10, r=10, t=40, b=20),
+        legend=dict(orientation="h"),
+        xaxis=dict(title="Date", range=[ctx.start, ctx.end]),
     )
-
-    fig.add_vline(x=today, line_width=2, line_dash="dot", line_color="#D84A4A")
+    fig.update_yaxes(
+        title_text="판매량 (EA/Day)",
+        rangemode="tozero",
+        secondary_y=False,
+        gridcolor="rgba(0,0,0,0.08)",
+    )
+    fig.update_yaxes(
+        title_text="재고 (EA)",
+        rangemode="tozero",
+        secondary_y=True,
+        gridcolor="rgba(0,0,0,0.08)",
+    )
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
