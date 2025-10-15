@@ -150,12 +150,21 @@ def forecast_sales_and_inventory(
             inferred_center = center_set[0] if len(center_set) == 1 else ""
             filtered_sales["center"] = inferred_center
 
-    pivot = (
-        filtered_sales.groupby(["resource_code", "date"], as_index=False)["sales_ea"].sum()
-        .pivot(index="date", columns="resource_code", values="sales_ea")
-        .sort_index()
-        .asfreq("D", fill_value=0)
-    )
+    if filtered_sales.empty:
+        pivot = pd.DataFrame(
+            index=pd.DatetimeIndex([], name="date"), columns=pd.Index([], name="resource_code")
+        )
+    else:
+        filtered_sales["date"] = pd.to_datetime(
+            filtered_sales["date"], errors="coerce"
+        ).dt.normalize()
+        pivot = (
+            filtered_sales.groupby(["resource_code", "date"], as_index=False)["sales_ea"].sum()
+            .pivot(index="date", columns="resource_code", values="sales_ea")
+            .sort_index()
+        )
+        pivot.index = pd.DatetimeIndex(pivot.index)
+        pivot = pivot.asfreq("D", fill_value=0)
 
     if lookback_days <= 0:
         lookback_days = 1
