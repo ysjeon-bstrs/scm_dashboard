@@ -16,16 +16,6 @@ def _capture_plot(monkeypatch):
     return captured
 
 
-def _sample_snapshot():
-    return pd.DataFrame(
-        [
-            {"snapshot_date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
-            {"snapshot_date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
-            {"snapshot_date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
-        ]
-    )
-
-
 def _sample_timeline():
     return pd.DataFrame(
         [
@@ -47,6 +37,25 @@ def _sample_forecast():
             {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
             {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 70},
             {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 60},
+        ]
+    )
+
+
+def _sample_daily_sales():
+    return pd.DataFrame(
+        [
+            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10},
+            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 10},
+        ]
+    )
+
+
+def _sample_sales_forecast():
+    return pd.DataFrame(
+        [
+            {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 9},
+            {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 8},
+            {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "sales_ea": 7},
         ]
     )
 
@@ -117,15 +126,15 @@ def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
     charts.render_amazon_panel(
         timeline_actual=_sample_timeline(),
         timeline_forecast=_sample_forecast(),
-        snap_long=_sample_snapshot(),
-        moves=pd.DataFrame(),
         centers=["AMZUS"],
         skus=["SKU1"],
         start=pd.Timestamp("2023-01-01"),
         end=pd.Timestamp("2023-01-05"),
-        lookback_days=2,
         today=pd.Timestamp("2023-01-02"),
-        events=None,
+        lookback_days=2,
+        daily_sales=_sample_daily_sales(),
+        sales_forecast=_sample_sales_forecast(),
+        inv_forecast=_sample_forecast(),
     )
 
     fig = captured["fig"]
