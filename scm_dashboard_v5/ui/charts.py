@@ -630,6 +630,19 @@ def _sales_from_snapshot_raw(
             if not df.empty
             else []
         )
+    else:
+        # If center is absent in snapshot_raw, infer a single Amazon centre to keep
+        # the downstream filters working. Use the first requested centre, default AMZUS.
+        inferred = None
+        for ct in centers:
+            norm = normalize_center_value(ct)
+            if norm:
+                inferred = norm
+                break
+        if inferred is None:
+            inferred = "AMZUS"
+        df["center"] = inferred
+        available_centers = [inferred]
 
     if "center" in df.columns and centers:
         centers_norm = {
