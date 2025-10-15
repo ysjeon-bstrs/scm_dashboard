@@ -109,9 +109,11 @@ def forecast_sales_and_inventory(
                     break
             if value_col is not None:
                 sales_history = sales_history.rename(columns={value_col: "sales_ea"})
-        sales_history["sales_ea"] = pd.to_numeric(
-            sales_history.get("sales_ea"), errors="coerce"
-        ).fillna(0)
+        if "sales_ea" in sales_history.columns:
+            coerced = pd.to_numeric(sales_history["sales_ea"], errors="coerce")
+        else:
+            coerced = pd.Series(0.0, index=sales_history.index, dtype=float)
+        sales_history["sales_ea"] = coerced.fillna(0.0)
         sales_history = sales_history.dropna(subset=["date"])
 
     timeline = timeline_center.copy()
