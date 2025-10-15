@@ -22,10 +22,11 @@ from scm_dashboard_v4.processing import (
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import (
     apply_consumption_with_events,
+    build_amazon_forecast_context,
     estimate_daily_consumption,
 )
 from scm_dashboard_v5.ui import (
-    render_amazon_panel,
+    render_amazon_sales_vs_inventory,
     render_step_chart,
     render_sku_summary_cards,
 )
@@ -544,23 +545,30 @@ def main() -> None:
         for c in selected_centers
         if isinstance(c, str) and (c.upper().startswith("AMZ") or "AMAZON" in c.upper())
     ]
+    if not amazon_centers and "AMZUS" in selected_centers:
+        amazon_centers = ["AMZUS"]
 
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
 
-    render_amazon_panel(
-        timeline_actual=timeline_actual,
-        timeline_forecast=timeline_forecast if use_cons_forecast else timeline_actual,
-        snap_long=snapshot_df,
-        moves=data.moves,
-        centers=amazon_centers,
-        skus=selected_skus,
-        start=start_ts,
-        end=end_ts,
-        lookback_days=int(lookback_days),
-        today=today_norm,
-        events=events,
-    )
+    if not amazon_centers:
+        st.info("Amazon 계열 센터가 선택되지 않았습니다.")
+    else:
+        snapshot_raw_df = load_snapshot_raw()
+        amz_ctx = build_amazon_forecast_context(
+            snap_long=snapshot_df,
+            moves=data.moves,
+            snapshot_raw=snapshot_raw_df,
+            centers=amazon_centers,
+            skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+            today=today_norm,
+            lookback_days=int(lookback_days),
+            promotion_events=events,
+            use_consumption_forecast=use_cons_forecast,
+        )
+        render_amazon_sales_vs_inventory(amz_ctx)
 
 
 
