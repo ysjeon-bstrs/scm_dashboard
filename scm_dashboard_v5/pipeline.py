@@ -26,6 +26,7 @@ def build_timeline_bundle(
     today: pd.Timestamp,
     lag_days: int = 7,
     horizon_days: int = 0,
+    move_fallback_days: int = 1,
 ):
     context = TimelineContext(
         centers=list(centers),
@@ -38,5 +39,10 @@ def build_timeline_bundle(
     )
     builder = TimelineBuilder(context)
     snapshot_table = prepare_snapshot(inputs.snapshot)
-    move_table = prepare_moves(inputs.moves, context=context)
+    fallback_days = int(max(0, move_fallback_days))
+    move_table = prepare_moves(
+        inputs.moves,
+        context=context,
+        fallback_days=fallback_days,
+    )
     return builder.build(snapshot_table, move_table)

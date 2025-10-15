@@ -2,6 +2,7 @@ import pandas as pd
 
 from scm_dashboard_v4.timeline import build_timeline as build_timeline_v4
 from scm_dashboard_v5 import BuildInputs, build_timeline_bundle
+from scm_dashboard_v5.core.timeline import build_timeline as build_timeline_v5
 
 
 def _make_sample_inputs():
@@ -96,3 +97,77 @@ def test_bundle_exposes_component_frames():
     assert set(bundle.center_lines["center"].unique()) == {"A", "B"}
     assert set(bundle.in_transit_lines["center"].unique()) == {"In-Transit"}
     assert set(bundle.wip_lines["center"].unique()) == {"WIP"}
+
+
+def test_build_timeline_respects_move_fallback_days():
+    today = pd.Timestamp("2024-02-01")
+    start = today
+    end = today + pd.Timedelta(days=5)
+
+    snapshot = pd.DataFrame(
+        [
+            {
+                "date": start,
+                "center": "C1",
+                "resource_code": "SKU1",
+                "stock_qty": 0,
+            }
+        ]
+    )
+    moves = pd.DataFrame(
+        [
+            {
+                "resource_code": "SKU1",
+                "qty_ea": 10,
+                "from_center": "SUP",
+                "to_center": "C1",
+                "carrier_mode": "SEA",
+                "onboard_date": pd.NaT,
+            }
+        ]
+    )
+
+    timeline_default = build_timeline_v5(
+        snapshot,
+        moves,
+        centers=["C1"],
+        skus=["SKU1"],
+        start=start,
+        end=end,
+        today=today,
+        lag_days=0,
+        move_fallback_days=1,
+    )
+    timeline_delayed = build_timeline_v5(
+        snapshot,
+        moves,
+        centers=["C1"],
+        skus=["SKU1"],
+        start=start,
+        end=end,
+        today=today,
+        lag_days=0,
+        move_fallback_days=5,
+    )
+
+    center_default = (
+        timeline_default[
+            (timeline_default["center"] == "C1")
+            & (timeline_default["resource_code"] == "SKU1")
+        ]
+        .set_index("date")["stock_qty"]
+    )
+    center_delayed = (
+        timeline_delayed[
+            (timeline_delayed["center"] == "C1")
+            & (timeline_delayed["resource_code"] == "SKU1")
+        ]
+        .set_index("date")["stock_qty"]
+    )
+
+    one_day_later = today + pd.Timedelta(days=1)
+    five_days_later = today + pd.Timedelta(days=5)
+
+    assert center_default.loc[one_day_later] == 10
+    assert center_delayed.loc[one_day_later] == 0
+    assert center_delayed.loc[five_days_later] == 10
