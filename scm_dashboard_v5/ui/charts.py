@@ -213,6 +213,87 @@ def _safe_add_scatter(
         return
 
 
+def _normalize_inventory_frame(
+    df: Optional[pd.DataFrame], *, default_center: str | None = None
+) -> pd.DataFrame:
+    cols = ["date", "center", "resource_code", "stock_qty"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    frame = df.copy()
+    rename_map = {str(col).lower(): col for col in frame.columns}
+
+    if "date" not in frame.columns and "snapshot_date" in rename_map:
+        frame = frame.rename(columns={rename_map["snapshot_date"]: "date"})
+    if "center" not in frame.columns and "center" in rename_map:
+        frame = frame.rename(columns={rename_map["center"]: "center"})
+    if "resource_code" not in frame.columns and "resource_code" in rename_map:
+        frame = frame.rename(columns={rename_map["resource_code"]: "resource_code"})
+    if "stock_qty" not in frame.columns and "stock" in rename_map:
+        frame = frame.rename(columns={rename_map["stock"]: "stock_qty"})
+
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce").dt.normalize()
+    if "center" in frame.columns:
+        frame["center"] = frame["center"].astype(str)
+    elif default_center is not None:
+        frame["center"] = default_center
+    else:
+        frame["center"] = ""
+
+    if "resource_code" in frame.columns:
+        frame["resource_code"] = frame["resource_code"].astype(str)
+    else:
+        frame["resource_code"] = ""
+
+    frame["stock_qty"] = pd.to_numeric(frame.get("stock_qty"), errors="coerce").fillna(0)
+
+    return frame[cols]
+
+
+def _normalize_sales_frame(
+    df: Optional[pd.DataFrame], *, default_center: str | None = None
+) -> pd.DataFrame:
+    cols = ["date", "center", "resource_code", "sales_ea"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    frame = df.copy()
+    rename_map = {str(col).lower(): col for col in frame.columns}
+
+    if "date" not in frame.columns and "snapshot_date" in rename_map:
+        frame = frame.rename(columns={rename_map["snapshot_date"]: "date"})
+    if "center" not in frame.columns and "center" in rename_map:
+        frame = frame.rename(columns={rename_map["center"]: "center"})
+    if "resource_code" not in frame.columns and "resource_code" in rename_map:
+        frame = frame.rename(columns={rename_map["resource_code"]: "resource_code"})
+    if "sales_ea" not in frame.columns:
+        candidate = None
+        for col in frame.columns:
+            if str(col).lower().endswith("sales_ea") or "sales" in str(col).lower():
+                candidate = col
+                break
+        if candidate is not None:
+            frame = frame.rename(columns={candidate: "sales_ea"})
+
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce").dt.normalize()
+    if "center" in frame.columns:
+        frame["center"] = frame["center"].astype(str)
+    elif default_center is not None:
+        frame["center"] = default_center
+    else:
+        frame["center"] = ""
+
+    if "resource_code" in frame.columns:
+        frame["resource_code"] = frame["resource_code"].astype(str)
+    else:
+        frame["resource_code"] = ""
+
+    frame["sales_ea"] = pd.to_numeric(frame.get("sales_ea"), errors="coerce").fillna(0)
+    frame = frame.dropna(subset=["date"])
+
+    return frame[cols]
+
+
 def _as_naive_timestamp(value: pd.Timestamp | str | None) -> pd.Timestamp:
     """Return a timezone-naive timestamp for consistent comparisons."""
 
