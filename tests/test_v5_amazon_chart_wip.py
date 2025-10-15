@@ -89,6 +89,31 @@ def test_load_amazon_sales_normalises_center_alias():
     assert result["sales_ea"].sum() == 9
 
 
+def test_sales_from_snapshot_raw_handles_missing_date():
+    debug: dict[str, object] = {}
+    snapshot_raw = pd.DataFrame(
+        [
+            {
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "fba_output_stock": 4,
+            }
+        ]
+    )
+
+    result = charts._sales_from_snapshot_raw(
+        snapshot_raw,
+        centers=["AMZUS"],
+        skus=["SKU1"],
+        start=pd.Timestamp("2023-01-01"),
+        end=pd.Timestamp("2023-01-02"),
+        debug=debug,
+    )
+
+    assert result.empty
+    assert debug.get("warning") == "missing date column"
+
+
 def test_render_step_chart_adds_wip_trace(monkeypatch):
     captured = _capture_plot(monkeypatch)
 
