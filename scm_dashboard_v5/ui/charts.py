@@ -445,8 +445,19 @@ def _sales_from_snapshot_raw(
     skus: Sequence[str],
     start: pd.Timestamp,
     end: pd.Timestamp,
+    *,
+    debug: Optional[dict[str, object]] = None,
 ) -> pd.DataFrame:
     if snap_raw is None or snap_raw.empty:
+        if debug is not None:
+            debug.clear()
+            debug.update(
+                {
+                    "rows_before_center_filter": 0,
+                    "rows_after_center_filter": 0,
+                    "snapshot_centers": [],
+                }
+            )
         return _empty_sales_frame()
 
     df = snap_raw.copy()
@@ -474,9 +485,17 @@ def _sales_from_snapshot_raw(
         df.get("fba_output_stock"), errors="coerce"
     ).fillna(0)
 
+    rows_before_center_filter = len(df)
+    available_centers: list[str] = []
+
     if "center" in df.columns:
         df["center"] = df["center"].apply(normalize_center_value)
         df = df[df["center"].notna()]
+        available_centers = (
+            df["center"].dropna().astype(str).unique().tolist()
+            if not df.empty
+            else []
+        )
 
     if "center" in df.columns and centers:
         centers_norm = {
@@ -487,6 +506,18 @@ def _sales_from_snapshot_raw(
         }
         if centers_norm:
             df = df[df["center"].isin(centers_norm)]
+
+    rows_after_center_filter = len(df)
+
+    if debug is not None:
+        debug.clear()
+        debug.update(
+            {
+                "rows_before_center_filter": rows_before_center_filter,
+                "rows_after_center_filter": rows_after_center_filter,
+                "snapshot_centers": sorted(available_centers),
+            }
+        )
 
     if skus:
         sku_set = {str(s) for s in skus if str(s).strip()}
@@ -742,12 +773,22 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         hist = hist[(hist["date"] >= ctx.start) & (hist["date"] <= ctx.today)]
         if "resource_code" in hist.columns:
             hist["resource_code"] = hist["resource_code"].astype(str)
+        if "center" in hist.columns:
+            hist["center"] = hist["center"].apply(normalize_center_value)
+            hist = hist[hist["center"].notna()]
         if "center" in hist.columns and ctx.centers:
-            center_filter = {str(c) for c in ctx.centers if str(c).strip()}
+            center_filter = {
+                normalized
+                for c in ctx.centers
+                for normalized in [normalize_center_value(c)]
+                if normalized is not None
+            }
             if center_filter:
                 hist = hist[hist["center"].astype(str).isin(center_filter)]
         if hist.empty:
             hist_source = "실측"
+
+    raw_debug: dict[str, object] = {}
 
     if hist.empty:
         sales_raw = _sales_from_snapshot_raw(
@@ -756,6 +797,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             ctx.skus,
             ctx.start,
             ctx.today,
+            debug=raw_debug,
         )
         if not sales_raw.empty:
             hist = sales_raw
@@ -782,7 +824,17 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             hist_source = "근사"
 
     if hist.empty:
-        st.info("아마존 판매 데이터가 없습니다. snapshot_raw(fba_output_stock) 또는 스냅샷 감소분을 확인하세요.")
+        centers_available = raw_debug.get("snapshot_centers") if raw_debug else []
+        if centers_available:
+            center_text = ", ".join(map(str, centers_available))
+            st.info(
+                "아마존 판매 데이터가 없습니다. snapshot_raw 센터 별칭을 확인하세요. "
+                f"(데이터 센터: {center_text})"
+            )
+        else:
+            st.info(
+                "아마존 판매 데이터가 없습니다. snapshot_raw(fba_output_stock) 또는 스냅샷 감소분을 확인하세요."
+            )
 
     hist_grouped = (
         hist.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
