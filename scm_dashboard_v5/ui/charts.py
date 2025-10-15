@@ -439,6 +439,97 @@ def _empty_sales_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
 
 
+def _sales_forecast_ma(
+    sales_daily: pd.DataFrame,
+    *,
+    sku: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    lookback_days: int = 28,
+    promo_multiplier: float = 1.0,
+    value_column: str = "qty_sold",
+) -> pd.DataFrame:
+    """Return a constant daily forecast using a guarded moving-average base.
+
+    ``sales_daily`` is expected to contain at least ``date``, ``resource_code``
+    and the ``value_column`` (defaults to ``qty_sold``).  The function mirrors
+    the defensive logic described in the user guidance: the centre names must
+    already be normalised and the forecast should survive even when only a few
+    historical points are available.
+    """
+
+    if sales_daily is None or sales_daily.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    if pd.isna(start_norm) or pd.isna(end_norm) or end_norm < start_norm:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    sku_str = str(sku)
+    df = sales_daily.copy()
+    df["resource_code"] = df.get("resource_code", "").astype(str)
+    df = df[df["resource_code"] == sku_str]
+    if df.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.normalize()
+    df = df.dropna(subset=["date"])
+    if df.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    values = pd.to_numeric(df.get(value_column), errors="coerce").fillna(0.0)
+    df[value_column] = values
+
+    last_hist_day = start_norm - pd.Timedelta(days=1)
+    history = df[df["date"] <= last_hist_day]
+    if history.empty:
+        history = df
+
+    lookback = max(1, int(lookback_days))
+    history = history.sort_values("date").tail(lookback)
+    if history.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    series = (
+        history.set_index("date")[value_column]
+        .asfreq("D")
+        .fillna(0.0)
+    )
+    if series.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    ma7 = series.rolling(7, min_periods=1).mean()
+    if not ma7.empty:
+        base = float(ma7.iloc[-1])
+    else:
+        base = float(series.mean()) if not series.empty else 0.0
+
+    if not np.isfinite(base):
+        base = 0.0
+
+    multiplier = float(promo_multiplier) if np.isfinite(promo_multiplier) else 1.0
+    base = max(0.0, base * multiplier)
+    has_positive_history = bool((series > 0).any())
+    qty = int(round(base))
+    if qty <= 0 and has_positive_history:
+        qty = 1
+    elif qty < 0:
+        qty = 0
+
+    index = pd.date_range(start_norm, end_norm, freq="D")
+    if index.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
+
+    return pd.DataFrame(
+        {
+            "date": index,
+            "resource_code": sku_str,
+            "qty_pred": qty,
+        }
+    )
+
+
 def _sales_from_snapshot_raw(
     snap_raw: Optional[pd.DataFrame],
     centers: Sequence[str],
@@ -634,6 +725,119 @@ def _sales_from_snapshot_decays(
     tidy = tidy[tidy["sales_ea"] >= 0]
     tidy = tidy.sort_values(["date", "resource_code"]).reset_index(drop=True)
     return tidy
+
+
+def _total_inventory_series(
+    inv_actual: pd.DataFrame,
+    inv_forecast: pd.DataFrame,
+    *,
+    sku: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> pd.Series:
+    """Aggregate actual/forecast inventory for a SKU across centres."""
+
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    if pd.isna(start_norm) or pd.isna(end_norm) or end_norm < start_norm:
+        return pd.Series(dtype=float)
+
+    sku_str = str(sku)
+    frames: list[pd.DataFrame] = []
+    for frame in (inv_actual, inv_forecast):
+        if frame is None or frame.empty:
+            continue
+        if "resource_code" not in frame.columns or "date" not in frame.columns:
+            continue
+        chunk = frame.copy()
+        chunk["resource_code"] = chunk.get("resource_code", "").astype(str)
+        chunk = chunk[chunk["resource_code"] == sku_str]
+        if chunk.empty:
+            continue
+        chunk["date"] = pd.to_datetime(chunk.get("date"), errors="coerce").dt.normalize()
+        chunk = chunk.dropna(subset=["date"])
+        if chunk.empty:
+            continue
+        qty = pd.to_numeric(chunk.get("stock_qty"), errors="coerce").fillna(0.0)
+        chunk = chunk.assign(stock_qty=qty)
+        frames.append(chunk[["date", "stock_qty"]])
+
+    if not frames:
+        # When no inventory data exists for the SKU we should not fabricate a
+        # zero-filled timeline. Returning an empty, date-indexed series allows
+        # downstream callers to treat the situation as "no data" instead of
+        # "out of stock", so forecasts remain visible until real inventory
+        # reaches zero.
+        empty_index = pd.DatetimeIndex([], name="date")
+        return pd.Series(dtype=float, index=empty_index)
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = (
+        combined.groupby("date")["stock_qty"].sum().sort_index()
+    )
+
+    index = pd.date_range(start_norm, end_norm, freq="D")
+    if index.empty:
+        return pd.Series(dtype=float)
+
+    combined = combined.reindex(index)
+    if combined.notna().any():
+        combined = combined.ffill()
+        combined = combined.bfill()
+    combined = combined.fillna(0.0)
+    combined.index.name = "date"
+    return combined.astype(float)
+
+
+def _trim_sales_forecast_to_inventory(
+    forecast_df: pd.DataFrame,
+    inv_actual: pd.DataFrame,
+    inv_forecast: pd.DataFrame,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    forecast_start: pd.Timestamp,
+) -> pd.DataFrame:
+    """Remove forecast rows that extend beyond the first stock-out date."""
+
+    if forecast_df is None or forecast_df.empty:
+        return forecast_df
+
+    forecast = forecast_df.copy()
+    forecast["date"] = pd.to_datetime(forecast.get("date"), errors="coerce").dt.normalize()
+    forecast = forecast.dropna(subset=["date"])
+    if forecast.empty:
+        return forecast
+
+    trimmed_frames: list[pd.DataFrame] = []
+    for sku, group in forecast.groupby("resource_code"):
+        inv_series = _total_inventory_series(
+            inv_actual,
+            inv_forecast,
+            sku=sku,
+            start=start,
+            end=end,
+        )
+        if inv_series.empty:
+            trimmed_frames.append(group)
+            continue
+
+        zero_candidates = inv_series.loc[inv_series.index >= forecast_start]
+        zero_dates = zero_candidates[zero_candidates <= 0]
+        if zero_dates.empty:
+            trimmed_frames.append(group)
+            continue
+
+        cutoff = zero_dates.index[0]
+        trimmed = group[group["date"] <= cutoff]
+        trimmed_frames.append(trimmed)
+
+    if not trimmed_frames:
+        return forecast.iloc[0:0]
+
+    result = pd.concat(trimmed_frames, ignore_index=True)
+    result = result.sort_values(["resource_code", "date"]).reset_index(drop=True)
+    return result
 
 def _inventory_matrix(
     snap_long: pd.DataFrame,
@@ -885,11 +1089,67 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
     future_sales = future_sales[
         (future_sales["date"] > ctx.today) & (future_sales["date"] <= ctx.end)
     ]
+    chart_start = pd.to_datetime(ctx.start).normalize()
+    chart_end = pd.to_datetime(ctx.end).normalize()
+
     future_grouped = (
         future_sales.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
         if not future_sales.empty
         else pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
     )
+
+    forecast_start = (ctx.today + pd.Timedelta(days=1)).normalize()
+    future_grouped = _trim_sales_forecast_to_inventory(
+        future_grouped,
+        ctx.inv_actual,
+        ctx.inv_forecast,
+        start=chart_start,
+        end=chart_end,
+        forecast_start=forecast_start,
+    )
+
+    if future_grouped.empty and not hist_grouped.empty and forecast_start <= chart_end:
+        hist_for_forecast = hist_grouped.rename(
+            columns={"sales_ea": "qty_sold"}
+        )
+        fallback_frames: list[pd.DataFrame] = []
+        for raw_sku in ctx.skus:
+            fc = _sales_forecast_ma(
+                hist_for_forecast,
+                sku=str(raw_sku),
+                start=forecast_start,
+                end=chart_end,
+                lookback_days=28,
+                promo_multiplier=1.0,
+            )
+            if not fc.empty:
+                fallback_frames.append(fc)
+
+        if fallback_frames:
+            fallback_df = pd.concat(fallback_frames, ignore_index=True)
+            fallback_df = fallback_df.rename(columns={"qty_pred": "sales_ea"})
+            fallback_df["sales_ea"] = (
+                pd.to_numeric(fallback_df.get("sales_ea"), errors="coerce")
+                .fillna(0)
+                .clip(lower=0)
+                .round()
+                .astype(int)
+            )
+            future_grouped = _trim_sales_forecast_to_inventory(
+                fallback_df,
+                ctx.inv_actual,
+                ctx.inv_forecast,
+                start=chart_start,
+                end=chart_end,
+                forecast_start=forecast_start,
+            )
+        else:
+            future_grouped = pd.DataFrame(
+                columns=["date", "resource_code", "sales_ea"]
+            )
+
+    if not future_grouped.empty:
+        future_grouped["resource_code"] = future_grouped["resource_code"].astype(str)
 
     bar_opacity = 0.55 if hist_source == "실측" else 0.45
     for sku, group in hist_grouped.groupby("resource_code"):
@@ -912,13 +1172,14 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         group = group.sort_values("date")
         if group.empty:
             continue
+        marker_color = colors.get(sku, PALETTE[0])
         fig.add_trace(
             go.Bar(
                 x=group["date"],
                 y=group["sales_ea"],
                 name=f"{sku} 판매(예측)",
-                marker_color=colors.get(sku, PALETTE[0]),
-                opacity=0.35,
+                marker=dict(color=marker_color, pattern=dict(shape="/")),
+                opacity=0.4,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>예상 판매 %{y:,} EA<extra></extra>",
             ),
             secondary_y=False,
