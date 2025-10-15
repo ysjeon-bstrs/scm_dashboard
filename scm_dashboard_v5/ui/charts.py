@@ -554,15 +554,27 @@ def _sales_from_snapshot_raw(
     df = snap_raw.copy()
 
     rename_map: dict[str, str] = {}
+    date_candidates = {"snapshot_date", "date", "스냅샷일자", "스냅샷 일자", "스냅샷일"}
+    center_candidates = {"center", "센터", "창고", "창고명", "warehouse"}
+    sku_candidates = {"resource_code", "sku", "상품코드", "product_code"}
+    output_candidates = {
+        "fba_output_stock",
+        "fba출고",
+        "출고수량",
+        "출고",
+        "fba_output",
+        "출고 ea",
+    }
+
     for col in df.columns:
         key = str(col).strip().lower()
-        if key in {"snapshot_date", "date", "스냅샷일자", "스냅샷 일자"}:
+        if key in date_candidates:
             rename_map[col] = "date"
-        elif key in {"center", "센터", "창고", "창고명"}:
+        elif key in center_candidates:
             rename_map[col] = "center"
-        elif key in {"resource_code", "sku", "상품코드", "product_code"}:
+        elif key in sku_candidates:
             rename_map[col] = "resource_code"
-        elif "fba_output_stock" in key:
+        elif key in output_candidates or "fba_output_stock" in key:
             rename_map[col] = "fba_output_stock"
 
     df = df.rename(columns=rename_map)
@@ -1303,14 +1315,15 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         group = group.sort_values("date")
         if group.empty:
             continue
-        marker_color = colors.get(sku, PALETTE[0])
+        base_color = colors.get(sku, PALETTE[0])
+        forecast_color = _tint(base_color, 1.35)
         fig.add_trace(
             go.Bar(
                 x=group["date"],
                 y=group["sales_ea"],
                 name=f"{sku} 판매(예측)",
-                marker=dict(color=marker_color, pattern=dict(shape="/")),
-                opacity=0.4,
+                marker_color=forecast_color,
+                opacity=0.45,
                 hovertemplate="날짜 %{x|%Y-%m-%d}<br>예상 판매 %{y:,} EA<extra></extra>",
             ),
             secondary_y=False,
