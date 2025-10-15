@@ -22,12 +22,13 @@ from scm_dashboard_v4.processing import (
 from scm_dashboard_v5.core import build_timeline as build_core_timeline
 from scm_dashboard_v5.forecast import (
     apply_consumption_with_events,
+    build_amazon_forecast_context,
     estimate_daily_consumption,
     forecast_sales_and_inventory,
     load_amazon_daily_sales_from_snapshot_raw,
 )
 from scm_dashboard_v5.ui import (
-    render_amazon_panel,
+    render_amazon_sales_vs_inventory,
     render_step_chart,
     render_sku_summary_cards,
 )
@@ -546,50 +547,29 @@ def main() -> None:
         for c in selected_centers
         if isinstance(c, str) and (c.upper().startswith("AMZ") or "AMAZON" in c.upper())
     ]
+    if not amazon_centers and "AMZUS" in selected_centers:
+        amazon_centers = ["AMZUS"]
 
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
 
-    amz_daily_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
-    amz_sales_fc = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
-    amz_inv_fc = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-
-    if amazon_centers:
+    if not amazon_centers:
+        st.info("Amazon 계열 센터가 선택되지 않았습니다.")
+    else:
         snapshot_raw_df = load_snapshot_raw()
-        amz_daily_sales = load_amazon_daily_sales_from_snapshot_raw(
-            snapshot_raw_df,
-            centers=tuple(amazon_centers),
+        amz_ctx = build_amazon_forecast_context(
+            snap_long=snapshot_df,
+            moves=data.moves,
+            snapshot_raw=snapshot_raw_df,
+            centers=amazon_centers,
             skus=selected_skus,
-        )
-
-        timeline_amazon = timeline_actual[
-            timeline_actual["center"].isin(amazon_centers)
-            & timeline_actual["resource_code"].isin(selected_skus)
-        ]
-
-        fc_start = max(today_norm + pd.Timedelta(days=1), start_ts)
-        amz_sales_fc, amz_inv_fc = forecast_sales_and_inventory(
-            amz_daily_sales,
-            timeline_amazon,
-            start=fc_start,
+            start=start_ts,
             end=end_ts,
+            today=today_norm,
             lookback_days=int(lookback_days),
-            uplift_events=events,
+            promotion_events=events,
         )
-
-    render_amazon_panel(
-        timeline_actual=timeline_actual,
-        timeline_forecast=timeline_forecast if use_cons_forecast else timeline_actual,
-        centers=amazon_centers,
-        skus=selected_skus,
-        start=start_ts,
-        end=end_ts,
-        today=today_norm,
-        lookback_days=int(lookback_days),
-        daily_sales=amz_daily_sales,
-        sales_forecast=amz_sales_fc,
-        inv_forecast=amz_inv_fc,
-    )
+        render_amazon_sales_vs_inventory(amz_ctx)
 
 
 
