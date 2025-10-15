@@ -29,6 +29,9 @@ class AmazonForecastContext:
     sales_forecast: pd.DataFrame
     snapshot_raw: pd.DataFrame = field(default_factory=pd.DataFrame)
     snapshot_long: pd.DataFrame = field(default_factory=pd.DataFrame)
+    moves: pd.DataFrame = field(default_factory=pd.DataFrame)
+    lookback_days: int = 28
+    promotion_multiplier: float = 1.0
 
 
 def load_amazon_daily_sales_from_snapshot_raw(
@@ -355,6 +358,19 @@ def build_amazon_forecast_context(
     empty_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
     snapshot_raw_df = snapshot_raw.copy() if snapshot_raw is not None else pd.DataFrame()
     snapshot_long_df = snap_long.copy()
+    moves_df = moves.copy() if moves is not None else pd.DataFrame()
+
+    promo_multiplier = 1.0
+    if promotion_events:
+        for event in promotion_events:
+            try:
+                uplift_val = float(event.get("uplift", 0.0))
+            except (TypeError, ValueError):
+                continue
+            uplift_val = min(3.0, max(-1.0, uplift_val))
+            promo_multiplier *= 1.0 + uplift_val
+    if not np.isfinite(promo_multiplier) or promo_multiplier <= 0:
+        promo_multiplier = 1.0
 
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
@@ -383,6 +399,9 @@ def build_amazon_forecast_context(
             sales_forecast=empty_sales.copy(),
             snapshot_raw=snapshot_raw_df.copy(),
             snapshot_long=snapshot_long_df.copy(),
+            moves=moves_df.copy(),
+            lookback_days=int(lookback_days),
+            promotion_multiplier=float(promo_multiplier),
         )
 
     snapshot_cols = {c.lower(): c for c in snap_long.columns}
@@ -425,6 +444,9 @@ def build_amazon_forecast_context(
             sales_forecast=empty_sales.copy(),
             snapshot_raw=snapshot_raw_df.copy(),
             snapshot_long=snapshot_long_df.copy(),
+            moves=moves_df.copy(),
+            lookback_days=int(lookback_days),
+            promotion_multiplier=float(promo_multiplier),
         )
 
     timeline = timeline[timeline["center"].isin(center_list)].copy()
@@ -589,6 +611,9 @@ def build_amazon_forecast_context(
         sales_forecast=sales_forecast.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
         snapshot_raw=snapshot_raw_df.reset_index(drop=True),
         snapshot_long=snapshot_long_df.reset_index(drop=True),
+        moves=moves_df.reset_index(drop=True),
+        lookback_days=int(lookback_days),
+        promotion_multiplier=float(promo_multiplier),
     )
 
 def estimate_daily_consumption(sales: pd.DataFrame, *, window: int = 28) -> pd.DataFrame:

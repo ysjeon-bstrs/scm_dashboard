@@ -89,10 +89,11 @@ def normalize_moves(df: pd.DataFrame) -> pd.DataFrame:
 def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
     cols = {str(c).strip().lower(): c for c in df_ref.columns}
 
-    date_col = next((cols[k] for k in ["date", "날짜", "snapshot_date", "스냅샷일"] if k in cols), None)
+    date_col = next((cols[k] for k in ["date", "날짜", "snapshot_date", "스냅샷일", "스냅샷 일자"] if k in cols), None)
     center_col = next((cols[k] for k in ["center", "센터", "창고", "warehouse"] if k in cols), None)
     resource_col = next((cols[k] for k in ["resource_code", "resource_cc", "sku", "상품코드", "product_code"] if k in cols), None)
     stock_col = next((cols[k] for k in ["stock_qty", "qty", "수량", "재고", "quantity"] if k in cols), None)
+    sales_col = next((cols[k] for k in ["sales_qty", "sale_qty", "판매량", "출고수량", "출고", "출고 수량"] if k in cols), None)
     name_col = next((cols[k] for k in ["resource_name", "품명", "상품명", "product_name"] if k in cols), None)
 
     missing = [
@@ -109,23 +110,33 @@ def normalize_refined_snapshot(df_ref: pd.DataFrame) -> pd.DataFrame:
         st.error(f"'snap_정제' 시트에 누락된 컬럼: {missing}")
         st.stop()
 
-    result = df_ref.rename(
-        columns={
-            date_col: "date",
-            center_col: "center",
-            resource_col: "resource_code",
-            stock_col: "stock_qty",
-            **({name_col: "resource_name"} if name_col else {}),
-        }
-    ).copy()
+    rename_map = {
+        date_col: "date",
+        center_col: "center",
+        resource_col: "resource_code",
+        stock_col: "stock_qty",
+    }
+    if sales_col:
+        rename_map[sales_col] = "sales_qty"
+    if name_col:
+        rename_map[name_col] = "resource_name"
+
+    result = df_ref.rename(columns=rename_map).copy()
 
     result["date"] = pd.to_datetime(result["date"], errors="coerce").dt.normalize()
     result["center"] = normalize_center_series(result["center"])
     result["resource_code"] = result["resource_code"].astype(str)
     result["stock_qty"] = pd.to_numeric(result["stock_qty"], errors="coerce").fillna(0).astype(int)
 
+    if "sales_qty" in result.columns:
+        result["sales_qty"] = pd.to_numeric(result["sales_qty"], errors="coerce").fillna(0).astype(int)
+    else:
+        result["sales_qty"] = 0
+
     if "resource_name" in result.columns:
-        result["resource_name"] = result["resource_name"].astype(str).str.strip().replace({"nan": "", "None": ""})
+        result["resource_name"] = (
+            result["resource_name"].astype(str).str.strip().replace({"nan": "", "None": ""})
+        )
 
     return result.dropna(subset=["date", "center", "resource_code"])
 
