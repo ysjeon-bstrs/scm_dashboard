@@ -151,9 +151,9 @@ def forecast_sales_and_inventory(
             filtered_sales["center"] = inferred_center
 
     if filtered_sales.empty:
-        pivot = pd.DataFrame(
-            index=pd.DatetimeIndex([], name="date"), columns=pd.Index([], name="resource_code")
-        )
+        pivot = pd.DataFrame(index=index)
+        pivot.index.name = "date"
+        pivot.columns = pd.Index([], name="resource_code")
     else:
         filtered_sales["date"] = pd.to_datetime(
             filtered_sales["date"], errors="coerce"
