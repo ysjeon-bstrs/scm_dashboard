@@ -62,7 +62,24 @@ def load_amazon_daily_sales_from_snapshot_raw(
             rename_map[col] = "fba_output_stock"
 
     df = df.rename(columns=rename_map)
-    required = {"date", "center", "resource_code", "fba_output_stock"}
+
+    # Allow missing center in snapshot_raw for Amazon-only sheets by inferring a default
+    # centre from the requested centres (defaults to AMZUS). This keeps historical
+    # bars visible in environments where the column is omitted.
+    if "center" not in df.columns:
+        inferred_center = None
+        if centers:
+            # pick the first requested centre after normalisation
+            for ct in centers:
+                norm = normalize_center_value(ct)
+                if norm:
+                    inferred_center = norm
+                    break
+        if inferred_center is None:
+            inferred_center = "AMZUS"
+        df["center"] = inferred_center
+
+    required = {"date", "resource_code", "fba_output_stock", "center"}
     missing = required - set(df.columns)
     if missing:
         return pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
