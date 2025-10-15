@@ -1,6 +1,7 @@
 import pandas as pd
 
 from scm_dashboard_v5.forecast import AmazonForecastContext
+from scm_dashboard_v5.forecast import consumption
 from scm_dashboard_v5.ui import charts
 
 
@@ -156,3 +157,75 @@ def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
     assert sales_traces, "판매 막대가 렌더링되어야 합니다."
     for tr in sales_traces:
         assert all(float(v).is_integer() for v in tr.y), "판매 막대는 정수여야 합니다."
+
+
+def test_build_amazon_context_skips_forecast_when_disabled(monkeypatch):
+    timeline = pd.DataFrame(
+        [
+            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 100},
+            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 90},
+            {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 80},
+            {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 70},
+        ]
+    )
+
+    monkeypatch.setattr(
+        consumption,
+        "build_timeline",
+        lambda *args, **kwargs: timeline.copy(),
+    )
+
+    apply_called = {"flag": False}
+
+    def fake_apply(*args, **kwargs):
+        apply_called["flag"] = True
+        return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    monkeypatch.setattr(consumption, "apply_consumption_with_events", fake_apply)
+
+    snap_long = pd.DataFrame(
+        [
+            {
+                "snapshot_date": "2023-01-02",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 90,
+            }
+        ]
+    )
+
+    snapshot_raw = pd.DataFrame(
+        [
+            {
+                "snapshot_date": "2023-01-01",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "fba_output_stock": 5,
+            },
+            {
+                "snapshot_date": "2023-01-02",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "fba_output_stock": 6,
+            },
+        ]
+    )
+
+    ctx = consumption.build_amazon_forecast_context(
+        snap_long=snap_long,
+        moves=pd.DataFrame(),
+        snapshot_raw=snapshot_raw,
+        centers=["AMZUS"],
+        skus=["SKU1"],
+        start=pd.Timestamp("2023-01-01"),
+        end=pd.Timestamp("2023-01-05"),
+        today=pd.Timestamp("2023-01-02"),
+        lookback_days=7,
+        promotion_events=None,
+        use_consumption_forecast=False,
+    )
+
+    assert apply_called["flag"] is False
+    assert ctx.inv_forecast.empty
+    assert ctx.sales_forecast.empty
+    assert not ctx.inv_actual.empty

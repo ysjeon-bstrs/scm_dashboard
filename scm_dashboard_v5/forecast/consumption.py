@@ -316,6 +316,7 @@ def build_amazon_forecast_context(
     today: pd.Timestamp,
     lookback_days: int = 28,
     promotion_events: Optional[Iterable[dict]] = None,
+    use_consumption_forecast: bool = True,
 ) -> AmazonForecastContext:
     """Return a fully-populated Amazon forecast bundle for charts and KPIs."""
 
@@ -389,16 +390,20 @@ def build_amazon_forecast_context(
 
     inv_actual = timeline[timeline["date"] <= today_norm].copy()
 
-    inv_projected = apply_consumption_with_events(
-        timeline,
-        snap_long,
-        centers=center_list,
-        skus=sku_list,
-        start=start_norm,
-        end=end_norm,
-        lookback_days=lookback_days,
-        events=promotion_events or [],
-    )
+    inv_projected = empty_inv.copy()
+    if use_consumption_forecast:
+        projected = apply_consumption_with_events(
+            timeline,
+            snap_long,
+            centers=center_list,
+            skus=sku_list,
+            start=start_norm,
+            end=end_norm,
+            lookback_days=lookback_days,
+            events=promotion_events or [],
+        )
+        if projected is not None and not projected.empty:
+            inv_projected = projected.copy()
 
     inv_projected = inv_projected[inv_projected["center"].isin(center_list)].copy()
     inv_projected["date"] = pd.to_datetime(inv_projected["date"], errors="coerce").dt.normalize()
@@ -411,8 +416,9 @@ def build_amazon_forecast_context(
     inv_actual["stock_qty"] = inv_actual["stock_qty"].round().clip(lower=0).astype(int)
     inv_forecast["stock_qty"] = inv_forecast["stock_qty"].round().clip(lower=0).astype(int)
 
+    sales_source = snapshot_raw if snapshot_raw is not None else pd.DataFrame()
     sales_hist = load_amazon_daily_sales_from_snapshot_raw(
-        snapshot_raw or pd.DataFrame(),
+        sales_source,
         centers=tuple(center_list),
         skus=sku_list,
     )
@@ -426,7 +432,7 @@ def build_amazon_forecast_context(
 
     future_index = (
         pd.date_range(today_norm + pd.Timedelta(days=1), end_norm, freq="D")
-        if today_norm < end_norm
+        if today_norm < end_norm and use_consumption_forecast
         else pd.DatetimeIndex([], dtype="datetime64[ns]")
     )
 

@@ -568,6 +568,7 @@ def main() -> None:
             today=today_norm,
             lookback_days=int(lookback_days),
             promotion_events=events,
+            use_consumption_forecast=use_cons_forecast,
         )
         render_amazon_sales_vs_inventory(amz_ctx)
 
