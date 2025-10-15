@@ -155,14 +155,27 @@ def forecast_sales_and_inventory(
     if filtered_sales.empty:
         pivot = pd.DataFrame(index=index)
         pivot.index.name = "date"
-        pivot.columns = pd.Index([], name="resource_code")
+        pivot.columns = pd.MultiIndex(
+            levels=[[], []], codes=[[], []], names=["center", "resource_code"]
+        )
     else:
         filtered_sales["date"] = pd.to_datetime(
             filtered_sales["date"], errors="coerce"
         ).dt.normalize()
+        grouped_sales = (
+            filtered_sales.groupby(["date", "center", "resource_code"], as_index=False)[
+                "sales_ea"
+            ]
+            .sum()
+            .sort_values("date")
+        )
         pivot = (
-            filtered_sales.groupby(["resource_code", "date"], as_index=False)["sales_ea"].sum()
-            .pivot(index="date", columns="resource_code", values="sales_ea")
+            grouped_sales.pivot_table(
+                index="date",
+                columns=["center", "resource_code"],
+                values="sales_ea",
+                aggfunc="sum",
+            )
             .sort_index()
         )
         pivot.index = pd.DatetimeIndex(pivot.index)
@@ -205,7 +218,7 @@ def forecast_sales_and_inventory(
         deltas = series.diff().fillna(0.0)
         inbound_future = deltas.loc[cons_start:].clip(lower=0)
 
-        base_rate = float(mean_rate.get(sku, 0.0))
+        base_rate = float(mean_rate.get((center_value, sku), 0.0))
         if base_rate < 0:
             base_rate = 0.0
 
@@ -262,7 +275,8 @@ def forecast_sales_and_inventory(
     forecast_inv["stock_qty"] = forecast_inv["stock_qty"].fillna(0).round().clip(lower=0).astype(int)
 
     history = filtered_sales[["date", "center", "resource_code", "sales_ea"]].copy()
-    history["sales_ea"] = history["sales_ea"].fillna(0).round().clip(lower=0).astype(int)
+    history["sales_ea"] = pd.to_numeric(history["sales_ea"], errors="coerce").fillna(0)
+    history["sales_ea"] = history["sales_ea"].round().clip(lower=0).astype(int)
 
     combined_sales = pd.concat([history, forecast_sales], ignore_index=True)
     combined_sales = combined_sales.sort_values(["resource_code", "date"]).drop_duplicates(

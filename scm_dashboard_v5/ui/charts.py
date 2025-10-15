@@ -637,23 +637,28 @@ def render_amazon_panel(
 
     if hist_range.empty:
         fallback_rows: list[pd.DataFrame] = []
-        for sku, group in actual.groupby("resource_code"):
+        for (sku, center), group in actual.groupby(["resource_code", "center"]):
             subset = group[(group["date"] >= start) & (group["date"] <= history_limit)]
             if subset.empty:
                 continue
-            qty = subset.sort_values("date")["stock_qty"].astype(float).values
+            subset = subset.sort_values("date")
+            qty = subset["stock_qty"].astype(float).values
             dec = np.clip(np.diff(qty, prepend=qty[0]), a_min=None, a_max=0) * -1.0
             fallback_rows.append(
                 pd.DataFrame(
                     {
-                        "date": subset.sort_values("date")["date"],
+                        "date": subset["date"],
+                        "center": center,
                         "resource_code": sku,
                         "sales_ea": np.rint(dec).astype(int),
                     }
                 )
             )
         if fallback_rows:
-            hist_range = pd.concat(fallback_rows, ignore_index=True)
+            fallback_hist = pd.concat(fallback_rows, ignore_index=True)
+            hist_range = (
+                fallback_hist.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+            )
 
     future_sales = sales_fc[
         (sales_fc["date"] > today) & (sales_fc["date"] <= end)
@@ -669,7 +674,7 @@ def render_amazon_panel(
         start_future = max(today + pd.Timedelta(days=1), start)
         if start_future <= end:
             idx_future = pd.date_range(start_future, end, freq="D")
-            for sku, group in actual.groupby("resource_code"):
+            for (sku, center), group in actual.groupby(["resource_code", "center"]):
                 past = group[group["date"] <= today].sort_values("date")
                 if past.empty:
                     continue
@@ -677,7 +682,8 @@ def render_amazon_panel(
                 dec = np.clip(np.diff(qty, prepend=qty[0]), a_min=None, a_max=0) * -1.0
                 if dec.size == 0:
                     continue
-                tail = dec[-int(min(len(dec), max(1, lookback_days))):]
+                window = int(min(len(dec), max(1, lookback_days)))
+                tail = dec[-window:]
                 rate = int(np.rint(tail.mean())) if tail.size else 0
                 if rate < 0:
                     rate = 0
@@ -685,13 +691,17 @@ def render_amazon_panel(
                     pd.DataFrame(
                         {
                             "date": idx_future,
+                            "center": center,
                             "resource_code": sku,
                             "sales_ea": np.full(len(idx_future), rate, dtype=int),
                         }
                     )
                 )
         if fallback_future:
-            future_sales = pd.concat(fallback_future, ignore_index=True)
+            fallback_future_df = pd.concat(fallback_future, ignore_index=True)
+            future_sales = (
+                fallback_future_df.groupby(["date", "resource_code"], as_index=False)["sales_ea"].sum()
+            )
 
     bars_hist = []
     for sku, group in hist_range.groupby("resource_code"):
