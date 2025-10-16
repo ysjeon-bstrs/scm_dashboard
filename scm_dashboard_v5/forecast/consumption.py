@@ -34,6 +34,42 @@ class AmazonForecastContext:
     promotion_multiplier: float = 1.0
 
 
+def make_forecast_sales_capped(
+    base_daily_pred: pd.Series,
+    latest_stock: float,
+    inbound_by_day: pd.Series | None = None,
+) -> pd.Series:
+    """Return a forecast series clipped by available stock and inbound events."""
+
+    if base_daily_pred is None:
+        return pd.Series(dtype=float)
+
+    base = base_daily_pred.astype(float).copy()
+    if base.empty:
+        return pd.Series(dtype=float, index=base.index)
+
+    inbound: pd.Series
+    if inbound_by_day is None:
+        inbound = pd.Series(0.0, index=base.index, dtype=float)
+    else:
+        inbound = (
+            inbound_by_day.astype(float)
+            .reindex(base.index, fill_value=0.0)
+        )
+
+    remain = float(max(latest_stock, 0.0))
+    capped: list[float] = []
+
+    for day in base.index:
+        remain += float(inbound.loc[day])
+        want = float(base.loc[day])
+        sale = min(want, max(remain, 0.0))
+        capped.append(sale)
+        remain -= sale
+
+    return pd.Series(capped, index=base.index, dtype=float)
+
+
 def load_amazon_daily_sales_from_snapshot_raw(
     snapshot_raw: pd.DataFrame,
     centers: Tuple[str, ...] = ("AMZUS",),
@@ -455,6 +491,16 @@ def build_amazon_forecast_context(
 
     inv_actual = timeline[timeline["date"] <= today_norm].copy()
 
+    latest_stock_lookup: dict[tuple[str, str], float] = {}
+    if not inv_actual.empty:
+        latest_stock_lookup = (
+            inv_actual.sort_values("date")
+            .groupby(["center", "resource_code"])["stock_qty"]
+            .last()
+            .astype(float)
+            .to_dict()
+        )
+
     inv_projected = empty_inv.copy()
     if use_consumption_forecast:
         projected = apply_consumption_with_events(
@@ -501,6 +547,67 @@ def build_amazon_forecast_context(
         else pd.DatetimeIndex([], dtype="datetime64[ns]")
     )
 
+    inbound_lookup: dict[tuple[str, str], pd.Series] = {}
+    if not future_index.empty and not moves_df.empty:
+        move_cols = {str(c).strip().lower(): c for c in moves_df.columns}
+        event_col = move_cols.get("event_date")
+        to_center_col = move_cols.get("to_center")
+        sku_col = move_cols.get("resource_code") or move_cols.get("sku")
+        qty_col = move_cols.get("qty_ea") or move_cols.get("qty")
+
+        if event_col and to_center_col and sku_col and qty_col:
+            inbound_norm = moves_df.rename(
+                columns={
+                    event_col: "event_date",
+                    to_center_col: "to_center",
+                    sku_col: "resource_code",
+                    qty_col: "qty_ea",
+                }
+            ).copy()
+            inbound_norm["event_date"] = pd.to_datetime(
+                inbound_norm.get("event_date"), errors="coerce"
+            ).dt.normalize()
+            inbound_norm = inbound_norm.dropna(subset=["event_date"])
+            inbound_norm["to_center"] = inbound_norm.get("to_center", "").apply(
+                normalize_center_value
+            )
+            inbound_norm["resource_code"] = inbound_norm.get(
+                "resource_code", ""
+            ).astype(str)
+            inbound_norm["qty_ea"] = pd.to_numeric(
+                inbound_norm.get("qty_ea"), errors="coerce"
+            ).fillna(0.0)
+
+            inbound_norm = inbound_norm[
+                inbound_norm["to_center"].isin(center_list)
+                & inbound_norm["resource_code"].isin(sku_list)
+            ]
+
+            if not inbound_norm.empty:
+                start_future = future_index[0]
+                end_future = future_index[-1]
+                inbound_norm = inbound_norm[
+                    (inbound_norm["event_date"] >= start_future)
+                    & (inbound_norm["event_date"] <= end_future)
+                ]
+
+                if not inbound_norm.empty:
+                    inbound_grouped = (
+                        inbound_norm.groupby(
+                            ["to_center", "resource_code", "event_date"],
+                            as_index=False,
+                        )["qty_ea"].sum()
+                    )
+
+                    for (ct, sku), chunk in inbound_grouped.groupby(
+                        ["to_center", "resource_code"], dropna=True
+                    ):
+                        series = (
+                            chunk.set_index("event_date")["qty_ea"]
+                            .reindex(future_index, fill_value=0.0)
+                        )
+                        inbound_lookup[(ct, sku)] = series
+
     uplift = pd.Series(1.0, index=future_index, dtype=float)
     if promotion_events and not uplift.empty:
         for event in promotion_events:
@@ -540,6 +647,13 @@ def build_amazon_forecast_context(
             fc_values = pd.Series(base_rate, index=future_index, dtype=float)
             if not uplift.empty:
                 fc_values = fc_values * uplift.reindex(future_index, fill_value=1.0)
+            inbound_series = inbound_lookup.get((center, sku))
+            latest_stock = latest_stock_lookup.get((center, sku), 0.0)
+            fc_values = make_forecast_sales_capped(
+                base_daily_pred=fc_values,
+                latest_stock=latest_stock,
+                inbound_by_day=inbound_series,
+            )
             fc_df = (
                 fc_values.to_frame("sales_ea")
                 .reset_index()
