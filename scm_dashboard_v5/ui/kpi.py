@@ -1103,6 +1103,8 @@ def render_sku_summary_cards(
         for column in ["onboard_date", "event_date"]:
             if column in wf.columns:
                 wf[column] = pd.to_datetime(wf[column], errors="coerce")
+            else:
+                wf[column] = pd.NaT
         if "carrier_mode" in wf.columns:
             wf["carrier_mode"] = wf["carrier_mode"].astype(str).str.upper()
         else:
