@@ -1226,8 +1226,74 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
     fcst_sales_rows: list[pd.DataFrame] = []
     fcst_inv_rows: list[pd.DataFrame] = []
 
-    if fcst_start <= end:
-        for sku in skus:
+    missing_sales_skus: set[str] = set(skus)
+    missing_inv_skus: set[str] = set(skus)
+
+    inv_forecast_ctx = getattr(ctx, "inv_forecast", pd.DataFrame()).copy()
+    if not inv_forecast_ctx.empty:
+        inv_forecast_ctx["date"] = pd.to_datetime(
+            inv_forecast_ctx.get("date"), errors="coerce"
+        ).dt.normalize()
+        inv_forecast_ctx["center"] = inv_forecast_ctx.get("center", "").astype(str)
+        inv_forecast_ctx["resource_code"] = inv_forecast_ctx.get("resource_code", "").astype(str)
+        inv_forecast_ctx["stock_qty"] = pd.to_numeric(
+            inv_forecast_ctx.get("stock_qty"), errors="coerce"
+        ).fillna(0.0)
+        inv_forecast_ctx = inv_forecast_ctx[
+            inv_forecast_ctx["center"].isin(target_centers)
+            & inv_forecast_ctx["resource_code"].isin(skus)
+            & (inv_forecast_ctx["date"] >= fcst_start)
+            & (inv_forecast_ctx["date"] <= end)
+        ]
+        if not inv_forecast_ctx.empty:
+            grouped = (
+                inv_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
+                    "stock_qty"
+                ].sum()
+            )
+            fcst_inv_rows.append(grouped)
+            missing_inv_skus = missing_inv_skus - set(grouped["resource_code"].unique())
+
+    sales_forecast_ctx = getattr(ctx, "sales_forecast", pd.DataFrame()).copy()
+    if not sales_forecast_ctx.empty:
+        sales_forecast_ctx["date"] = pd.to_datetime(
+            sales_forecast_ctx.get("date"), errors="coerce"
+        ).dt.normalize()
+        sales_forecast_ctx["center"] = sales_forecast_ctx.get("center", "").astype(str)
+        sales_forecast_ctx["resource_code"] = (
+            sales_forecast_ctx.get("resource_code", "").astype(str)
+        )
+        value_col: str | None = None
+        if "sales_ea" in sales_forecast_ctx.columns:
+            value_col = "sales_ea"
+        elif "sales_qty" in sales_forecast_ctx.columns:
+            value_col = "sales_qty"
+
+        if value_col is not None:
+            sales_forecast_ctx[value_col] = pd.to_numeric(
+                sales_forecast_ctx.get(value_col), errors="coerce"
+            ).fillna(0.0)
+            sales_forecast_ctx = sales_forecast_ctx[
+                sales_forecast_ctx["center"].isin(target_centers)
+                & sales_forecast_ctx["resource_code"].isin(skus)
+                & (sales_forecast_ctx["date"] >= fcst_start)
+                & (sales_forecast_ctx["date"] <= end)
+            ]
+            if not sales_forecast_ctx.empty:
+                grouped_sales = (
+                    sales_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
+                        value_col
+                    ].sum()
+                ).rename(columns={value_col: "sales_qty"})
+                fcst_sales_rows.append(grouped_sales)
+                missing_sales_skus = missing_sales_skus - set(
+                    grouped_sales["resource_code"].unique()
+                )
+
+    fallback_skus = sorted((missing_sales_skus | missing_inv_skus))
+
+    if fcst_start <= end and fallback_skus:
+        for sku in fallback_skus:
             base_stock = float(last_stock_by_sku.get(sku, 0.0))
             inbound_map = {
                 pd.to_datetime(day): float(qty)
@@ -1244,7 +1310,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                 daily_demand=daily_demand,
             )
 
-            if not fcst_sales.empty:
+            if sku in missing_sales_skus and not fcst_sales.empty:
                 fcst_sales_rows.append(
                     pd.DataFrame(
                         {
@@ -1254,7 +1320,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                         }
                     )
                 )
-            if not inv_series.empty:
+            if sku in missing_inv_skus and not inv_series.empty:
                 fcst_inv_rows.append(
                     pd.DataFrame(
                         {
