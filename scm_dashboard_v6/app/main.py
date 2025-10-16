@@ -1,8 +1,8 @@
 """
-SCM Dashboard v6 — Streamlit 엔트리 (초기 스캐폴드)
+SCM Dashboard v6 — Streamlit 엔트리
 
-- v5를 유지한 상태로, v6 구조를 점진 도입하기 위한 진입점이다.
-- 실제 데이터 로딩/컨트롤/렌더링은 후속 커밋에서 연결한다.
+- v6 구조 검증: 컨트롤 수집 → 타임라인 섹션 → (옵션) 아마존/인벤토리 섹션 호출
+- 데이터 로딩은 일단 v5 로더를 위임 사용하고, 후속 단계에서 v6 data로 전환
 """
 
 from __future__ import annotations
@@ -10,13 +10,102 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from scm_dashboard_v6.ui.controls import collect_sidebar_controls
+from scm_dashboard_v6.features.timeline import render_timeline_section
+from scm_dashboard_v6.features.amazon import render_amazon_panel
+from scm_dashboard_v6.features.inventory_view import render_inventory_pivot
+from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw
+
 
 def main() -> None:
     st.set_page_config(page_title="SCM Dashboard v6", layout="wide")
-    st.title("SCM Dashboard v6 (스캐폴드)")
-    st.caption("v6 구조 도입 준비 중 — Step 2/3에서 실제 기능 연결 예정")
+    st.title("SCM Dashboard v6")
+    st.caption("v6 구조 도입 — v5 동작을 유지하면서 경계/모듈 분리")
 
-    st.info("이 페이지는 v6 구조 검증용 자리 표시자입니다. v5는 그대로 사용 가능합니다.")
+    st.markdown("### 데이터 소스")
+    st.caption("초기 단계에서는 v5 로더 위임 — 후속 단계에서 v6 data로 전환")
+    try:
+        with st.spinner("Google Sheets 데이터 불러오는 중..."):
+            df_move, df_ref, df_incoming = load_gsheet()
+    except Exception as exc:
+        st.error(f"데이터 로딩 실패: {exc}")
+        return
+
+    # 스냅샷 정규화: date 컬럼 통일
+    snapshot_df = df_ref.copy()
+    if "date" in snapshot_df.columns:
+        snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+    elif "snapshot_date" in snapshot_df.columns:
+        snapshot_df["date"] = pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
+    else:
+        snapshot_df["date"] = pd.NaT
+
+    # 선택 옵션 후보 계산 (간단화)
+    centers = sorted(snapshot_df.get("center", pd.Series([], dtype=str)).dropna().astype(str).unique().tolist())
+    skus = sorted(snapshot_df.get("resource_code", pd.Series([], dtype=str)).dropna().astype(str).unique().tolist())
+
+    if not centers or not skus:
+        st.warning("센터 또는 SKU 정보를 찾을 수 없습니다.")
+        return
+
+    today = pd.Timestamp.today().normalize()
+    latest_dt = snapshot_df["date"].dropna().max() if not snapshot_df.empty else pd.NaT
+    bound_min = max(today - pd.Timedelta(days=42), snapshot_df["date"].min()) if not snapshot_df.empty else today
+    bound_max = min(today + pd.Timedelta(days=42), snapshot_df["date"].max()) if not snapshot_df.empty else today
+
+    ui = collect_sidebar_controls(
+        centers=centers,
+        skus=skus,
+        bound_min=pd.Timestamp(bound_min).normalize(),
+        bound_max=pd.Timestamp(bound_max).normalize(),
+    )
+
+    st.subheader("타임라인")
+    timeline = render_timeline_section(
+        snapshot=snapshot_df,
+        moves=df_move,
+        centers=ui.centers,
+        skus=ui.skus,
+        start=ui.start,
+        end=ui.end,
+        today=today,
+        lookback_days=ui.lookback_days,
+        show_production=ui.show_production,
+        show_in_transit=ui.show_in_transit,
+    )
+
+    st.divider()
+    st.subheader("Amazon US 일별 판매 vs. 재고")
+    snapshot_raw_df = load_snapshot_raw()
+    render_amazon_panel(
+        snapshot_long=snapshot_df,
+        moves=df_move,
+        snapshot_raw=snapshot_raw_df,
+        centers=[c for c in ui.centers if c.upper().startswith("AMZ") or "AMAZON" in c.upper()],
+        skus=ui.skus,
+        start=ui.start,
+        end=ui.end,
+        today=today,
+        lookback_days=ui.lookback_days,
+        promotion_events=None,
+        use_consumption_forecast=True,
+    )
+
+    st.divider()
+    st.subheader("선택 센터 현재 재고 (최신 스냅샷)")
+    # 간단 품명 매핑 (있으면)
+    name_map: dict[str, str] = {}
+    if "resource_name" in snapshot_df.columns:
+        rows = snapshot_df.loc[snapshot_df["resource_name"].notna(), ["resource_code", "resource_name"]].copy()
+        if not rows.empty:
+            name_map = rows.drop_duplicates("resource_code").set_index("resource_code")["resource_name"].to_dict()
+
+    _ = render_inventory_pivot(
+        snapshot=snapshot_df,
+        centers=ui.centers,
+        latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
+        resource_name_map=name_map,
+    )
 
 
 if __name__ == "__main__":
