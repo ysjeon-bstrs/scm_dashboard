@@ -677,23 +677,46 @@ def build_amazon_forecast_context(
     )
     sales_forecast["date"] = pd.to_datetime(sales_forecast.get("date"), errors="coerce").dt.normalize()
 
-    if not sales_forecast.empty and not inv_projected.empty:
+    if not sales_forecast.empty:
         depletion_dates: dict[tuple[str, str], pd.Timestamp] = {}
-        inv_for_clip = inv_projected[
-            inv_projected["center"].isin(center_list)
-            & inv_projected["resource_code"].isin(sku_list)
-        ]
-        for (center, sku), grp in inv_for_clip.groupby(["center", "resource_code"], dropna=True):
-            series = (
+        tol = 1e-6
+
+        for (center, sku), grp in sales_forecast.groupby([
+            "center",
+            "resource_code",
+        ], dropna=True):
+            fc_series = (
                 grp.sort_values("date")
-                .set_index("date")["stock_qty"]
-                .asfreq("D")
-                .ffill()
+                .set_index("date")["sales_ea"]
+                .astype(float)
             )
-            series = series.loc[series.index >= today_norm]
-            zero_dates = series.index[series <= 0]
-            if len(zero_dates) > 0:
-                depletion_dates[(center, sku)] = zero_dates[0]
+            if fc_series.empty:
+                continue
+
+            latest_stock = float(latest_stock_lookup.get((center, sku), 0.0))
+            inbound_series = inbound_lookup.get((center, sku))
+            if inbound_series is None:
+                inbound_series = pd.Series(0.0, index=fc_series.index, dtype=float)
+            else:
+                inbound_series = inbound_series.reindex(fc_series.index, fill_value=0.0).astype(float)
+
+            remain = max(latest_stock, 0.0)
+            remain_after: list[float] = []
+            for day in fc_series.index:
+                remain += float(inbound_series.loc[day])
+                want = float(fc_series.loc[day])
+                sale = min(want, max(remain, 0.0))
+                remain -= sale
+                remain_after.append(remain)
+
+            if remain_after:
+                remain_series = pd.Series(remain_after, index=fc_series.index, dtype=float)
+                if (remain_series <= tol).any():
+                    remain_array = remain_series.to_numpy()
+                    suffix_max = np.maximum.accumulate(remain_array[::-1])[::-1]
+                    final_mask = (remain_array <= tol) & (suffix_max <= tol)
+                    if final_mask.any():
+                        depletion_dates[(center, sku)] = remain_series.index[int(np.argmax(final_mask))]
 
         if depletion_dates:
             mask_center = sales_forecast[["center", "resource_code"]].apply(tuple, axis=1)
