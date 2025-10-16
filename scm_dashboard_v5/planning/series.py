@@ -64,7 +64,10 @@ def build_center_series(
     for (ct, sku), grp in snapshot.groupby(["center", "resource_code"]):
         if ct not in centers_set or sku not in skus_set:
             continue
-        grp = grp.sort_values("date")
+        grp = grp.dropna(subset=["date"]).sort_values("date")
+        if grp.empty:
+            continue
+        grp = grp.groupby("date", as_index=False).agg({"stock_qty": "last"})
         last_dt = grp["date"].max()
 
         ts = pd.DataFrame(index=idx)
