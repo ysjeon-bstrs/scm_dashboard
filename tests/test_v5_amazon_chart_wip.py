@@ -306,3 +306,114 @@ def test_build_amazon_context_skips_forecast_when_disabled(monkeypatch):
     assert ctx.inv_forecast.empty
     assert ctx.sales_forecast.empty
     assert not ctx.inv_actual.empty
+
+
+def test_sales_forecast_caps_to_available_inventory(monkeypatch):
+    timeline = pd.DataFrame(
+        [
+            {
+                "date": "2023-01-01",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 7000,
+            },
+            {
+                "date": "2023-01-02",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 5000,
+            },
+            {
+                "date": "2023-01-03",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 3000,
+            },
+            {
+                "date": "2023-01-04",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 1000,
+            },
+            {
+                "date": "2023-01-05",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 0,
+            },
+        ]
+    )
+
+    projected = timeline.copy()
+    projected = pd.concat(
+        [
+            projected,
+            pd.DataFrame(
+                [
+                    {
+                        "date": "2023-01-06",
+                        "center": "AMZUS",
+                        "resource_code": "SKU1",
+                        "stock_qty": 0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    monkeypatch.setattr(
+        consumption,
+        "build_timeline",
+        lambda *args, **kwargs: timeline.copy(),
+    )
+
+    monkeypatch.setattr(
+        consumption,
+        "apply_consumption_with_events",
+        lambda *args, **kwargs: projected.copy(),
+    )
+
+    snapshot_raw = pd.DataFrame(
+        [
+            {
+                "snapshot_date": (pd.Timestamp("2022-12-26") + pd.Timedelta(days=i)),
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "fba_output_stock": 2000,
+            }
+            for i in range(7)
+        ]
+    )
+
+    snap_long = pd.DataFrame(
+        [
+            {
+                "snapshot_date": "2023-01-01",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 7000,
+                "sales_qty": 2000,
+            }
+        ]
+    )
+
+    ctx = consumption.build_amazon_forecast_context(
+        snap_long=snap_long,
+        moves=pd.DataFrame(),
+        snapshot_raw=snapshot_raw,
+        centers=["AMZUS"],
+        skus=["SKU1"],
+        start=pd.Timestamp("2023-01-01"),
+        end=pd.Timestamp("2023-01-06"),
+        today=pd.Timestamp("2023-01-01"),
+        lookback_days=7,
+    )
+
+    sales_forecast = (
+        ctx.sales_forecast[ctx.sales_forecast["resource_code"] == "SKU1"]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    assert sales_forecast["sales_ea"].tolist() == [2000, 2000, 2000, 1000, 0]
