@@ -604,7 +604,9 @@ def _build_center_card(center_info: Mapping[str, object]) -> str:
             _format_number(center_info["in_transit"]) if center_info["show_in_transit"] else "-",
             compact=True,
         ),
-        _build_metric_card("생산중", _format_number(center_info["wip"]), compact=True),
+        _build_metric_card(
+            "생산중(30일 내 완료)", _format_number(center_info["wip"]), compact=True
+        ),
         _build_metric_card("예상 소진일수", _format_days(center_info["coverage"]), compact=True),
         _build_metric_card("소진 예상일", _format_date(center_info["sellout_date"]), compact=True),
     ]
@@ -990,8 +992,8 @@ def render_sku_summary_cards(
     snapshot_view["center"] = snapshot_view["center"].astype(str)
     snapshot_view["resource_code"] = snapshot_view["resource_code"].astype(str)
 
-    centers_list = [str(center) for center in centers if str(center).strip()]
-    sku_list = [str(sku) for sku in skus if str(sku).strip()]
+    centers_list = [str(center).strip() for center in centers if str(center).strip()]
+    sku_list = [str(sku).strip() for sku in skus if str(sku).strip()]
     centers_all = sorted(
         {
             str(center).strip()
@@ -1092,6 +1094,82 @@ def render_sku_summary_cards(
 
     latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
     today_dt = pd.to_datetime(today).normalize()
+    window_end = today_dt + pd.Timedelta(days=30)
+
+    wip_pipeline_totals: Dict[str, int] = {}
+    wip_30d_by_center: Dict[tuple[str, str], int] = {}
+    if moves is not None and not moves.empty and sku_list:
+        wf = moves.copy()
+        for column in ["onboard_date", "event_date"]:
+            if column in wf.columns:
+                wf[column] = pd.to_datetime(wf[column], errors="coerce")
+        if "carrier_mode" in wf.columns:
+            wf["carrier_mode"] = wf["carrier_mode"].astype(str).str.upper()
+        else:
+            wf["carrier_mode"] = ""
+        if "to_center" in wf.columns:
+            wf["to_center"] = wf["to_center"].astype(str).str.strip()
+        else:
+            wf["to_center"] = ""
+        if "resource_code" in wf.columns:
+            wf["resource_code"] = wf["resource_code"].astype(str).str.strip()
+        else:
+            wf["resource_code"] = ""
+        if "qty_ea" in wf.columns:
+            wf["qty_ea"] = (
+                pd.to_numeric(wf["qty_ea"], errors="coerce").fillna(0).astype(int)
+            )
+        else:
+            wf["qty_ea"] = 0
+        if "status" in wf.columns:
+            wf = wf[wf["status"].astype(str).str.upper() != "CANCEL"]
+
+        wf = wf[wf["resource_code"].isin(sku_list)]
+
+        if not wf.empty:
+            pipeline_mask = (wf["carrier_mode"] == "WIP") & (wf["event_date"] > today_dt)
+            wip_pipeline_series = (
+                wf.loc[pipeline_mask].groupby("resource_code")["qty_ea"].sum()
+            )
+
+            center_mask = (
+                (wf["carrier_mode"] == "WIP")
+                & (wf["to_center"].isin(centers_list))
+                & (wf["event_date"] >= today_dt)
+                & (wf["event_date"] <= window_end)
+            )
+            wip_30d_series = (
+                wf.loc[center_mask]
+                .groupby(["resource_code", "to_center"], as_index=True)["qty_ea"]
+                .sum()
+            )
+            pipeline_dict = (
+                wip_pipeline_series.astype(int).to_dict()
+                if not wip_pipeline_series.empty
+                else {}
+            )
+            wip_30d_dict = (
+                wip_30d_series.astype(int).to_dict()
+                if not wip_30d_series.empty
+                else {}
+            )
+
+            if "__TOTAL__" in sku_list:
+                total_pipeline_sum = int(
+                    sum(value for key, value in pipeline_dict.items() if key != "__TOTAL__")
+                )
+                pipeline_dict["__TOTAL__"] = total_pipeline_sum
+                total_center_series = (
+                    wip_30d_series.groupby(level=1).sum()
+                    if not wip_30d_series.empty
+                    else pd.Series(dtype=int)
+                )
+                for center_name in centers_list:
+                    center_total_value = int(total_center_series.get(center_name, 0))
+                    wip_30d_dict[("__TOTAL__", center_name)] = center_total_value
+
+            wip_pipeline_totals = pipeline_dict
+            wip_30d_by_center = wip_30d_dict
 
     start_dt = (
         pd.to_datetime(start).normalize()
@@ -1162,7 +1240,7 @@ def render_sku_summary_cards(
 
     daily_demand_series, total_demand_series = _extract_daily_demand(latest_snapshot_rows)
 
-    in_transit_series, wip_series = _movement_breakdown_per_center(
+    in_transit_series, _ = _movement_breakdown_per_center(
         moves_view,
         centers_list,
         sku_list,
@@ -1171,9 +1249,8 @@ def render_sku_summary_cards(
     )
 
     global_in_transit_series = pd.Series(dtype=float)
-    global_wip_series = pd.Series(dtype=float)
     if centers_all:
-        global_in_transit_series, global_wip_series = _movement_breakdown_per_center(
+        global_in_transit_series, _ = _movement_breakdown_per_center(
             moves_global,
             centers_all,
             sku_list,
@@ -1184,11 +1261,6 @@ def render_sku_summary_cards(
     global_in_transit_totals = (
         global_in_transit_series.groupby(level=0).sum()
         if not global_in_transit_series.empty
-        else pd.Series(dtype=float)
-    )
-    global_wip_totals = (
-        global_wip_series.groupby(level=0).sum()
-        if not global_wip_series.empty
         else pd.Series(dtype=float)
     )
 
@@ -1212,7 +1284,6 @@ def render_sku_summary_cards(
         else:
             total_current_all = total_current
         total_transit = int(kpi_df.at[sku, "in_transit"]) if sku in kpi_df.index else 0
-        total_wip = int(kpi_df.at[sku, "wip"]) if sku in kpi_df.index else 0
         if not global_in_transit_totals.empty:
             transit_all_val = global_in_transit_totals.get(sku, float("nan"))
             total_transit_all = (
@@ -1223,21 +1294,16 @@ def render_sku_summary_cards(
         else:
             total_transit_all = total_transit
 
-        if not global_wip_totals.empty:
-            wip_all_val = global_wip_totals.get(sku, float("nan"))
-            total_wip_all = (
-                int(round(wip_all_val))
-                if pd.notna(wip_all_val)
-                else total_wip
-            )
-        else:
-            total_wip_all = total_wip
+        wip_pipeline_value = int(wip_pipeline_totals.get(sku, 0))
 
         summary_cards = [
             _build_metric_card("전체 센터 재고 합계", _format_number(total_current_all)),
             _build_metric_card("선택 센터 재고 합계", _format_number(total_current)),
             _build_metric_card("전체 이동중 재고 합계", _format_number(total_transit_all)),
-            _build_metric_card("전체 생산중 재고 합계", _format_number(total_wip_all)),
+            _build_metric_card(
+                "전체 생산중 재고 합계(파이프라인)",
+                _format_number(wip_pipeline_value),
+            ),
         ]
         summary_html = _build_grid(
             summary_cards,
@@ -1253,7 +1319,7 @@ def render_sku_summary_cards(
             center_transit = (
                 int(in_transit_series.get((sku, center), 0)) if not in_transit_series.empty else 0
             )
-            center_wip = int(wip_series.get((sku, center), 0)) if not wip_series.empty else 0
+            center_wip_30d = int(wip_30d_by_center.get((sku, center), 0))
             center_demand = float(daily_demand_series.get((sku, center), float("nan")))
             center_depletion = center_depletion_map.get((sku, center), {})
             center_coverage = center_depletion.get("days_to_depletion")
@@ -1268,7 +1334,7 @@ def render_sku_summary_cards(
                         "center": center,
                         "current": center_current,
                         "in_transit": center_transit,
-                        "wip": center_wip,
+                        "wip": center_wip_30d,
                         "coverage": center_coverage,
                         "sellout_date": center_sellout_date,
                         "show_in_transit": _should_show_in_transit(center, center_transit),
@@ -1314,6 +1380,8 @@ def render_sku_summary_cards(
     cards_html = _build_grid(sku_cards_html, min_width=sku_min_width, extra_class="kpi-grid--sku")
     st.markdown(cards_html, unsafe_allow_html=True)
     st.caption(
-        f"※ {pd.to_datetime(latest_snapshot).normalize():%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다."
+        f"※ {pd.to_datetime(latest_snapshot).normalize():%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다.\n"
+        "※ 전체 생산중 재고 합계(파이프라인)은 오늘 이후 완료 예정인 모든 생산분(센터 무관)입니다.\n"
+        "※ 센터별 생산중(30일 내 완료)은 해당 센터 기준, 오늘부터 30일 이내 완료 예정 WIP 합계입니다."
     )
     return kpi_df
