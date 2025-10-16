@@ -773,6 +773,9 @@ def _sales_forecast_from_inventory_projection(
     if combined.empty:
         return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
 
+    if not (combined["date"] > today_norm).any():
+        return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
+
     pivot = (
         combined.groupby(["date", "resource_code"])["stock_qty"].sum().unstack("resource_code")
     )
