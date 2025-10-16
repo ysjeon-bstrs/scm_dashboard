@@ -64,16 +64,20 @@ def build_center_series(
     for (ct, sku), grp in snapshot.groupby(["center", "resource_code"]):
         if ct not in centers_set or sku not in skus_set:
             continue
-        grp = grp.sort_values("date")
+        grp = grp.dropna(subset=["date"]).sort_values("date")
+        if grp.empty:
+            continue
+        grp = grp.groupby("date", as_index=False).agg({"stock_qty": "last"})
         last_dt = grp["date"].max()
 
-        ts = pd.DataFrame({"date": idx})
+        ts = pd.DataFrame(index=idx)
         ts["center"] = ct
         ts["resource_code"] = sku
-        stock_series = grp.set_index("date")["stock_qty"].astype(float)
-        ts = ts.merge(stock_series.rename("stock_qty"), on="date", how="left")
-        ts["stock_qty"] = pd.to_numeric(ts["stock_qty"], errors="coerce")
-        ts["stock_qty"] = ts["stock_qty"].ffill().fillna(0.0)
+        stock_series = (
+            grp.set_index("date")["stock_qty"].astype(float).reindex(idx)
+        )
+        stock_series = stock_series.ffill().fillna(0.0)
+        ts["stock_qty"] = stock_series
 
         mv_sku = mv[mv["resource_code"] == sku]
         if not mv_sku.empty:
@@ -103,8 +107,10 @@ def build_center_series(
 
             eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
             if not eff_all.empty:
-                delta_series = eff_all.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
-                ts["stock_qty"] = ts["stock_qty"] + delta_series.cumsum().values
+                delta_series = (
+                    eff_all.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
+                )
+                ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
 
         if "event_date" in mv_sku.columns:
             wip_mask = (
@@ -120,13 +126,15 @@ def build_center_series(
                 wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum()
                 .rename(columns={"event_date": "date", "qty_ea": "delta"})
             )
-            delta_series = wip_add.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
-            ts["stock_qty"] = ts["stock_qty"] + delta_series.cumsum().values
+            delta_series = (
+                wip_add.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
+            )
+            ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
 
         ts["stock_qty"] = ts["stock_qty"].fillna(0)
         ts["stock_qty"] = ts["stock_qty"].replace([np.inf, -np.inf], 0)
         ts["stock_qty"] = ts["stock_qty"].clip(lower=0)
-        lines.append(ts)
+        lines.append(ts.reset_index().rename(columns={"index": "date"}))
 
     if not lines:
         return _empty_timeline()
