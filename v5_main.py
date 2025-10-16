@@ -386,8 +386,7 @@ def main() -> None:
     with st.sidebar:
         st.header("필터")
         st.caption(
-            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−10일 ~ +30일."
-            " 해당 항목이 없으면 전체 데이터를 기준으로 표시합니다."
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−20일 ~ +30일."
         )
         preset_centers = ["태광KR", "AMZUS"]
         default_centers = [c for c in preset_centers if c in centers]
