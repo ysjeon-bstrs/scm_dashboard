@@ -1512,7 +1512,7 @@ def render_amazon_sales_vs_inventory(
 
     fig.update_layout(
          # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
-        title=None,
+        title="AMZUS",
         barmode="stack",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         # 상단 여백 축소해 겹침 방지
