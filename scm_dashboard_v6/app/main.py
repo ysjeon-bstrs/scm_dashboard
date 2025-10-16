@@ -7,6 +7,14 @@ SCM Dashboard v6 — Streamlit 엔트리
 
 from __future__ import annotations
 
+# 패키지 임포트 경로 부트스트랩: 파일 실행 경로에서 상위 프로젝트 루트를 sys.path에 추가
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import pandas as pd
 import streamlit as st
 
