@@ -348,7 +348,7 @@ def main() -> None:
     latest_snapshot_dt = (
         None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
     )
-    default_past_days = 10
+    default_past_days = 20
     default_future_days = 30
     base_past_days = 42
     base_future_days = 42
