@@ -1763,7 +1763,15 @@ def render_step_chart(
         xaxis_title="날짜",
         yaxis_title="재고 (EA)",
         legend_title_text="SKU @ Center / 생산중",
-        margin=dict(l=10, r=10, t=60, b=10),
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=-0.25,
+            yanchor="top",
+            bgcolor="rgba(255,255,255,0.6)",
+        ),
+        margin=dict(l=20, r=20, t=40, b=90),
         height=520,
     )
 
