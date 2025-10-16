@@ -23,7 +23,7 @@ metrics automatically wrap when the available width becomes narrow.  The
         centers=["Amazon US", "태광KR"],
         skus=["BA00021"],
         today=today,
-        lag_days=7,
+        lag_days=5,
         chunk_size=3,
     )
 
