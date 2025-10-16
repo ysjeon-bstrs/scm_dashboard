@@ -1514,9 +1514,17 @@ def render_amazon_sales_vs_inventory(
          # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
         title="AMZUS",
         barmode="stack",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=-0.25,
+            yanchor="top",
+            traceorder="normal",
+            bgcolor="rgba(255,255,255,0.6)",
+        ),
         # 상단 여백 축소해 겹침 방지
-        margin=dict(l=30, r=20, t=10, b=20),
+        margin=dict(l=30, r=20, t=10, b=90),
         hovermode="x unified",
         xaxis=dict(title="Date"),
         yaxis=dict(title="판매량 (EA/Day)", tickformat=",.0f"),
@@ -1755,7 +1763,15 @@ def render_step_chart(
         xaxis_title="날짜",
         yaxis_title="재고 (EA)",
         legend_title_text="SKU @ Center / 생산중",
-        margin=dict(l=10, r=10, t=60, b=10),
+        legend=dict(
+            orientation="h",
+            x=0,
+            xanchor="left",
+            y=-0.25,
+            yanchor="top",
+            bgcolor="rgba(255,255,255,0.6)",
+        ),
+        margin=dict(l=20, r=20, t=40, b=90),
         height=520,
     )
 
