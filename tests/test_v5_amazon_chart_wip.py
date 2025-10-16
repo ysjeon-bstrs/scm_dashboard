@@ -229,8 +229,10 @@ def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
 
     fig = captured["fig"]
     trace_names = [tr.name for tr in fig.data]
-    assert "재고(실측)" in trace_names
-    assert "재고(예측)" in trace_names
+    assert "SKU1 재고(실측)" in trace_names
+    assert "SKU1 재고(예측)" in trace_names
+    assert "재고(실측)" not in trace_names
+    assert "재고(예측)" not in trace_names
 
     sales_traces = [tr for tr in fig.data if "판매(" in (tr.name or "")]
     assert sales_traces, "판매 막대가 렌더링되어야 합니다."
@@ -239,9 +241,18 @@ def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
 
     actual_bar = next(tr for tr in sales_traces if tr.name == "SKU1 판매(실측)")
     assert max(pd.to_datetime(actual_bar.x)) <= pd.Timestamp("2023-01-02")
+    assert actual_bar.marker.color
 
     forecast_bar = next(tr for tr in sales_traces if tr.name == "SKU1 판매(예측)")
     assert min(pd.to_datetime(forecast_bar.x)) > pd.Timestamp("2023-01-02")
+    assert forecast_bar.opacity == 0.3
+    assert forecast_bar.marker.color == actual_bar.marker.color
+
+    actual_stock = next(tr for tr in fig.data if tr.name == "SKU1 재고(실측)")
+    forecast_stock = next(tr for tr in fig.data if tr.name == "SKU1 재고(예측)")
+    assert actual_stock.yaxis == "y2"
+    assert forecast_stock.yaxis == "y2"
+    assert actual_stock.line.color == forecast_stock.line.color
 
 
 def test_build_amazon_context_skips_forecast_when_disabled(monkeypatch):

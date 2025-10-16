@@ -36,6 +36,9 @@ PALETTE = [
 ]
 
 
+_LAST_STEP_SKU_COLORS: Dict[str, str] = {}
+
+
 def _hex_to_rgb(hx: str) -> Tuple[int, int, int]:
     hx = hx.lstrip("#")
     if len(hx) == 3:
@@ -83,6 +86,55 @@ def _shade_for(center: str, index: int) -> float:
     if index % 2 == 1:
         return 1.0 + step
     return max(0.4, 1.0 - step)
+
+
+def _register_step_sku_colors(mapping: Dict[str, str]) -> None:
+    """Remember the most recent SKU 색상 매핑 for other charts (e.g., Amazon)."""
+
+    global _LAST_STEP_SKU_COLORS
+    if not mapping:
+        return
+    updated = _LAST_STEP_SKU_COLORS.copy()
+    updated.update({str(k): str(v) for k, v in mapping.items()})
+    _LAST_STEP_SKU_COLORS = updated
+
+
+def _resolve_sku_colors(skus: Sequence[str]) -> Dict[str, str]:
+    """Return a deterministic color map, preferring the latest step chart mapping."""
+
+    seen = {str(k): str(v) for k, v in _LAST_STEP_SKU_COLORS.items()}
+    result: Dict[str, str] = {}
+    used = set(seen.values())
+
+    palette_cycle = iter(PALETTE)
+
+    def _next_color() -> str:
+        for color in palette_cycle:
+            if color not in used:
+                used.add(color)
+                return color
+        # 팔레트가 고갈되면 재시작 (중복 허용)
+        for color in PALETTE:
+            if color not in used:
+                used.add(color)
+                return color
+        fallback_color = PALETTE[len(result) % len(PALETTE)]
+        used.add(fallback_color)
+        return fallback_color
+
+    for sku in skus:
+        key = str(sku)
+        if key in seen:
+            result[key] = seen[key]
+            continue
+        color = _next_color()
+        result[key] = color
+        seen[key] = color
+
+    if result:
+        _register_step_sku_colors(result)
+
+    return result
 
 _PLOTLY_WARNING_EMITTED = False
 
@@ -1146,8 +1198,14 @@ def render_amazon_panel(
         st.info("Amazon 계열 센터와 SKU를 선택하세요.")
         return
 
+    centers = [str(c) for c in centers]
+    skus = [str(s) for s in skus]
+    sku_colors = _resolve_sku_colors(skus)
+
     sales_df = _load_amazon_sales_from_refined(snap_long, centers, skus)
     sales_df = sales_df[(sales_df["date"] >= start) & (sales_df["date"] <= end)]
+    if not sales_df.empty:
+        sales_df["resource_code"] = sales_df["resource_code"].astype(str)
 
     ma_df = (
         sales_df.set_index("date")
@@ -1163,6 +1221,10 @@ def render_amazon_panel(
         f_dates = pd.DatetimeIndex([])
 
     core = core_timeline.copy()
+    if not core.empty:
+        core["center"] = core["center"].astype(str)
+        core["resource_code"] = core["resource_code"].astype(str)
+        core["date"] = pd.to_datetime(core["date"]).dt.normalize()
     core = core[(core["center"].isin(centers)) & (core["resource_code"].isin(skus))]
 
     inv0_df = (
@@ -1219,6 +1281,9 @@ def render_amazon_panel(
         proj_stock[sku] = (inv_series - sold_cum).clip(lower=0.0)
 
     proj_df = pd.DataFrame(proj_stock).fillna(0.0)
+    if not proj_df.empty:
+        proj_df.index = pd.to_datetime(proj_df.index).tz_localize(None)
+        proj_df = proj_df.reindex(columns=skus, fill_value=0.0)
 
     act = (
         sales_df[sales_df["date"] <= today]
@@ -1238,55 +1303,78 @@ def render_amazon_panel(
         s = act[act["resource_code"] == sku].set_index("date")["sales_qty"]
         if s.empty:
             continue
+        color = sku_colors.get(sku, PALETTE[0])
         fig.add_bar(
             x=s.index,
             y=s.values,
             name=f"{sku} 판매(실측)",
-            marker_line_width=0.5,
-            marker_line_color="rgba(0,0,0,0.15)",
+            marker=dict(color=color, line=dict(width=0.5, color="rgba(0,0,0,0.15)")),
+            legendgroup=sku,
         )
 
     for sku in skus:
         s = fcast[fcast["resource_code"] == sku].set_index("date")["sales_qty"]
         if s.empty:
             continue
+        color = sku_colors.get(sku, PALETTE[0])
         fig.add_bar(
             x=s.index,
             y=s.values,
             name=f"{sku} 판매(예측)",
-            marker_pattern_shape="/",
-            opacity=0.6,
+            marker=dict(color=color, line=dict(width=0)),
+            opacity=0.3,
+            legendgroup=sku,
         )
 
     real_range_end = min(today, end)
-    if real_range_end >= start:
-        inv_real = (
-            core[core["date"] <= today]
-            .groupby("date", as_index=True)["stock_qty"].sum()
-            .reindex(pd.date_range(start, real_range_end, freq="D"))
+    inv_real_df = pd.DataFrame(index=pd.DatetimeIndex([]))
+    if real_range_end >= start and not core.empty:
+        real_dates = pd.date_range(start, real_range_end, freq="D")
+        inv_real_df = (
+            core[(core["date"] >= start) & (core["date"] <= real_range_end)]
+            .groupby(["date", "resource_code"], as_index=False)["stock_qty"].sum()
+            .pivot(index="date", columns="resource_code", values="stock_qty")
+            .reindex(real_dates)
             .ffill()
+            .reindex(columns=skus, fill_value=0.0)
         )
-    else:
-        inv_real = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
-    if not getattr(inv_real, "empty", True) and not inv_real.dropna().empty:
+        inv_real_df.index = pd.to_datetime(inv_real_df.index).tz_localize(None)
+
+    for sku in skus:
+        color = sku_colors.get(sku, PALETTE[0])
+        series = None if inv_real_df.empty else inv_real_df.get(sku)
+        if series is None:
+            continue
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            continue
         fig.add_scatter(
-            x=inv_real.index,
-            y=inv_real.values,
-            name="재고(실측)",
+            x=numeric.index,
+            y=numeric.values,
+            name=f"{sku} 재고(실측)",
             mode="lines",
-            line=dict(width=2.0, color="#444"),
+            line=dict(width=2.4, color=color),
+            yaxis="y2",
+            legendgroup=sku,
         )
 
-    inv_fore = proj_df.sum(axis=1)
-    if not inv_fore.empty:
-        inv_fore = inv_fore.reindex(f_dates).dropna()
-    if not inv_fore.empty:
+    for sku in skus:
+        color = sku_colors.get(sku, PALETTE[0])
+        series = None if proj_df.empty else proj_df.get(sku)
+        if series is None:
+            continue
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if numeric.empty:
+            continue
         fig.add_scatter(
-            x=inv_fore.index,
-            y=inv_fore.values,
-            name="재고(예측)",
+            x=numeric.index,
+            y=numeric.values,
+            name=f"{sku} 재고(예측)",
             mode="lines",
-            line=dict(width=2.0, color="#444", dash="dot"),
+            line=dict(width=2.4, color=color, dash="dot"),
+            yaxis="y2",
+            legendgroup=sku,
+            opacity=0.9,
         )
 
     fig.update_layout(
@@ -1305,10 +1393,6 @@ def render_amazon_panel(
         margin=dict(l=10, r=10, t=40, b=20),
         title="Amazon US 일별 판매 vs. 재고",
     )
-
-    if len(fig.data) >= 2:
-        fig["data"][-1]["yaxis"] = "y2"
-        fig["data"][-2]["yaxis"] = "y2"
 
     today_line = pd.to_datetime(today).normalize().to_pydatetime()
     fig.add_shape(
@@ -1464,6 +1548,7 @@ def render_step_chart(
         color_labels.extend([f"{sku} @ 태광KR" for sku in wip_skus_for_colors])
 
     sku_colors = _step_sku_color_map(color_labels)
+    _register_step_sku_colors(sku_colors)
     sku_center_seen: Dict[str, Dict[str, int]] = {}
     for tr in fig.data:
         name = tr.name or ""
