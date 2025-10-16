@@ -18,7 +18,7 @@ def build_timeline(
     start: pd.Timestamp,
     end: pd.Timestamp,
     today: pd.Timestamp,
-    lag_days: int = 7,
+    lag_days: int = 5,
     horizon_days: int = 0,
     move_fallback_days: int = 1,
 ) -> pd.DataFrame:
