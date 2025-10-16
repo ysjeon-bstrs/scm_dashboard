@@ -7,7 +7,9 @@ v6 차트 공통 유틸 (임시 래퍼)
 
 from __future__ import annotations
 
-from typing import Dict, Sequence
+from typing import Dict, Sequence, Iterable, List, Any
+
+import pandas as pd
 
 
 # 간단한 팔레트 정의 (v5 PALETTE와 동일 톤 유지)
@@ -33,5 +35,19 @@ def sku_color_map(skus: Sequence[str]) -> Dict[str, str]:
             mapping[sku] = _PALETTE[i % len(_PALETTE)]
             i += 1
     return mapping
+
+
+def to_plot_list(values: Any) -> List:
+    """Plotly 입력을 위한 값들을 리스트로 정제한다."""
+
+    if values is None:
+        return []
+    if isinstance(values, (pd.Index, pd.Series)):
+        return values.dropna().tolist()
+    if hasattr(values, "tolist"):
+        return [v for v in values.tolist() if not pd.isna(v)]
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+        return [v for v in values if not pd.isna(v)]
+    return [] if pd.isna(values) else [values]
 
 
