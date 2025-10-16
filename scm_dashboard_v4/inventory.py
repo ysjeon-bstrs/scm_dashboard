@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -13,6 +13,7 @@ def pivot_inventory_cost_from_raw(
     snap_raw: pd.DataFrame,
     _latest_dt: pd.Timestamp,
     centers: List[str],
+    center_latest_dates: Optional[Dict[str, pd.Timestamp]] = None,
 ) -> pd.DataFrame:
     if snap_raw is None or snap_raw.empty:
         return pd.DataFrame(columns=["resource_code"] + [f"{c}_재고자산" for c in centers])
@@ -30,11 +31,23 @@ def pivot_inventory_cost_from_raw(
     df[col_sku] = df[col_sku].astype(str)
     df[col_cogs] = pd.to_numeric(df[col_cogs], errors="coerce").fillna(0).clip(lower=0)
 
-    today = pd.Timestamp.today().normalize()
-    sub = df[df[col_date] == today].copy()
-    if sub.empty:
-        latest_date = df[col_date].max()
-        sub = df[df[col_date] == latest_date].copy()
+    normalized_center_dates: Dict[str, pd.Timestamp] = {}
+    if center_latest_dates:
+        for ct, dt in center_latest_dates.items():
+            if pd.isna(dt):
+                continue
+            normalized_center_dates[ct] = pd.to_datetime(dt).normalize()
+
+    if normalized_center_dates:
+        relevant_dates = list({dt for dt in normalized_center_dates.values() if pd.notna(dt)})
+        sub = df[df[col_date].isin(relevant_dates)].copy()
+    else:
+        today = pd.Timestamp.today().normalize()
+        sub = df[df[col_date] == today].copy()
+        if sub.empty:
+            latest_date = df[col_date].max()
+            sub = df[df[col_date] == latest_date].copy()
+
     if sub.empty:
         return pd.DataFrame(columns=["resource_code"] + [f"{c}_재고자산" for c in centers])
 
@@ -43,9 +56,20 @@ def pivot_inventory_cost_from_raw(
         src_col = CENTER_COL.get(ct)
         if not src_col or src_col not in sub.columns:
             continue
-        qty = pd.to_numeric(sub[src_col], errors="coerce").fillna(0).clip(lower=0)
-        cost = sub[col_cogs] * qty
-        g = sub[[col_sku]].copy()
+        if normalized_center_dates:
+            target_date = normalized_center_dates.get(ct)
+            if pd.isna(target_date):
+                continue
+            center_sub = sub[sub[col_date] == target_date].copy()
+        else:
+            center_sub = sub.copy()
+        if center_sub.empty:
+            continue
+        qty = pd.to_numeric(center_sub[src_col], errors="coerce").fillna(0).clip(lower=0)
+        if qty.empty:
+            continue
+        cost = center_sub[col_cogs] * qty
+        g = center_sub[[col_sku]].copy()
         g[f"{ct}_재고자산"] = cost
         cost_cols[ct] = g.groupby(col_sku, as_index=False)[f"{ct}_재고자산"].sum()
 
