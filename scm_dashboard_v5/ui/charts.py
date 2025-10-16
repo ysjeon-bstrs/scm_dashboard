@@ -1086,13 +1086,6 @@ def _clamped_forecast_series(
 
         inv.loc[d] = max(remain, 0.0)
 
-        if remain <= 0:
-            if d != idx[-1]:
-                remainder = slice(d + pd.Timedelta(days=1), idx[-1])
-                fcst_sales.loc[remainder] = 0.0
-                inv.loc[remainder] = 0.0
-            break
-
     return fcst_sales, inv
 
 
