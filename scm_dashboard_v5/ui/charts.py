@@ -1511,10 +1511,12 @@ def render_amazon_sales_vs_inventory(
     fig.add_vline(x=today, line_color="crimson", line_dash="dash", line_width=2)
 
     fig.update_layout(
-        title="Amazon US 일별 판매 vs. 재고",
+         # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
+        title=None,
         barmode="stack",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=30, r=20, t=40, b=20),
+        # 상단 여백 축소해 겹침 방지
+        margin=dict(l=30, r=20, t=10, b=20),
         hovermode="x unified",
         xaxis=dict(title="Date"),
         yaxis=dict(title="판매량 (EA/Day)", tickformat=",.0f"),
