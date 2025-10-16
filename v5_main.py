@@ -450,7 +450,7 @@ def main() -> None:
                 "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
                 min_value=0,
                 max_value=21,
-                value=7,
+                value=5,
                 step=1,
             )
         )
