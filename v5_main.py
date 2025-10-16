@@ -784,22 +784,47 @@ def main() -> None:
     latest_dt_str = latest_dt.strftime("%Y-%m-%d")
     st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
 
-    current_snapshot = snapshot_df[
-        (snapshot_df["date"] == latest_dt) & (snapshot_df["center"].isin(selected_centers))
+    center_latest_series = (
+        snapshot_df[snapshot_df["center"].isin(selected_centers)]
+        .groupby("center")["date"]
+        .max()
+    )
+    center_latest_dates = {
+        center: ts.normalize()
+        for center, ts in center_latest_series.items()
+        if pd.notna(ts)
+    }
+
+    if not center_latest_series.empty:
+        caption_items = [
+            f"{center}: {center_latest_dates[center].strftime('%Y-%m-%d')}"
+            for center in selected_centers
+            if center in center_latest_dates
+        ]
+        if caption_items:
+            st.caption("센터별 최신 스냅샷: " + " / ".join(caption_items))
+    else:
+        center_latest_dates = {}
+
+    sub = snapshot_df[
+        (snapshot_df["date"] <= latest_dt) & (snapshot_df["center"].isin(selected_centers))
     ].copy()
 
+    if not sub.empty:
+        sub["center"] = sub["center"].astype(str).str.strip()
+        sub = (
+            sub.sort_values(["center", "resource_code", "date"])
+            .groupby(["center", "resource_code"], as_index=False)
+            .tail(1)
+        )
+
     pivot = (
-        current_snapshot.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
+        sub.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
         .pivot(index="resource_code", columns="center", values="stock_qty")
+        .reindex(columns=selected_centers)
         .fillna(0)
     )
 
-    for center in selected_centers:
-        if center not in pivot.columns:
-            pivot[center] = 0
-    if pivot.empty:
-        pivot = pivot.reindex(columns=selected_centers)
-    pivot = pivot.reindex(columns=selected_centers, fill_value=0)
     pivot = pivot.astype(int)
     pivot["총합"] = pivot.sum(axis=1)
 
@@ -834,7 +859,9 @@ def main() -> None:
 
     if show_cost:
         snap_raw_df = load_snapshot_raw()
-        cost_pivot = pivot_inventory_cost_from_raw(snap_raw_df, latest_dt, selected_centers)
+        cost_pivot = pivot_inventory_cost_from_raw(
+            snap_raw_df, latest_dt, selected_centers, center_latest_dates
+        )
         if cost_pivot.empty:
             st.warning(
                 "재고자산 계산을 위한 'snapshot_raw' 데이터를 불러올 수 없어 수량만 표시합니다. (엑셀에 'snapshot_raw' 시트가 있으면 자동 사용됩니다)"
@@ -930,35 +957,81 @@ def main() -> None:
                 st.caption("해당 조건의 로트 상세가 없습니다.")
             else:
                 raw_df[col_date] = pd.to_datetime(raw_df[col_date], errors="coerce").dt.normalize()
-                lot_subset = raw_df[
-                    (raw_df[col_date] == latest_dt) & (raw_df[col_sku].astype(str) == str(lot_sku))
-                ].copy()
-                if lot_subset.empty:
-                    st.markdown(
-                        f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                lot_snapshot_dates = {
+                    center: center_latest_dates.get(center)
+                    for center in used_centers
+                    if center in center_latest_dates
+                }
+                lot_title_dates = (
+                    " / ".join(
+                        f"{ct}: {dt.strftime('%Y-%m-%d')}"
+                        for ct, dt in lot_snapshot_dates.items()
+                        if pd.notna(dt)
                     )
+                    or latest_dt_str
+                )
+                st.markdown(
+                    f"### 로트 상세 (스냅샷 {lot_title_dates} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                )
+
+                lot_tables = []
+                for center in used_centers:
+                    src_col = CENTER_COL.get(center)
+                    if not src_col or src_col not in raw_df.columns:
+                        continue
+                    target_date = lot_snapshot_dates.get(center)
+                    if lot_snapshot_dates and pd.isna(target_date):
+                        continue
+                    if lot_snapshot_dates:
+                        center_subset = raw_df[
+                            (raw_df[col_date] == target_date)
+                            & (raw_df[col_sku].astype(str) == str(lot_sku))
+                        ].copy()
+                    else:
+                        center_subset = raw_df[
+                            (raw_df[col_date] == latest_dt)
+                            & (raw_df[col_sku].astype(str) == str(lot_sku))
+                        ].copy()
+                    if center_subset.empty:
+                        continue
+                    center_subset[src_col] = (
+                        pd.to_numeric(center_subset[src_col], errors="coerce").fillna(0).clip(lower=0)
+                    )
+                    center_table = (
+                        center_subset[[col_lot, src_col]]
+                        .groupby(col_lot, as_index=False)[src_col]
+                        .sum()
+                    )
+                    center_table = center_table.rename(columns={col_lot: "lot", src_col: center})
+                    lot_tables.append(center_table)
+
+                if not lot_tables:
                     st.caption("해당 조건의 로트 상세가 없습니다.")
                 else:
-                    for center in used_centers:
-                        src_col = CENTER_COL.get(center)
-                        lot_subset[src_col] = (
-                            pd.to_numeric(lot_subset[src_col], errors="coerce").fillna(0).clip(lower=0)
-                        )
-                    lot_table = pd.DataFrame({"lot": lot_subset[col_lot].astype(str).fillna("(no lot)")})
-                    for center in used_centers:
-                        src_col = CENTER_COL.get(center)
-                        lot_table[center] = lot_subset.groupby(col_lot)[src_col].transform("sum")
-                    lot_table = lot_table.drop_duplicates()
-                    lot_table["합계"] = lot_table[used_centers].sum(axis=1)
-                    lot_table = lot_table[lot_table["합계"] > 0]
-                    st.markdown(
-                        f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}**)"
+                    lot_table = lot_tables[0]
+                    for tbl in lot_tables[1:]:
+                        lot_table = lot_table.merge(tbl, on="lot", how="outer")
+                    lot_table["lot"] = (
+                        lot_table["lot"].fillna("(no lot)")
+                        .astype(str)
+                        .str.strip()
+                        .replace({"": "(no lot)", "nan": "(no lot)"})
                     )
+                    for center in used_centers:
+                        if center not in lot_table.columns:
+                            lot_table[center] = 0
+                    value_cols = [c for c in lot_table.columns if c != "lot"]
+                    lot_table[value_cols] = lot_table[value_cols].fillna(0)
+                    lot_table[value_cols] = lot_table[value_cols].applymap(lambda x: int(round(x)))
+                    lot_table["합계"] = lot_table[[c for c in used_centers if c in lot_table.columns]].sum(axis=1)
+                    lot_table = lot_table[lot_table["합계"] > 0]
                     if lot_table.empty:
                         st.caption("해당 조건의 로트 상세가 없습니다.")
                     else:
+                        ordered_cols = ["lot"] + [c for c in used_centers if c in lot_table.columns]
+                        ordered_cols.append("합계")
                         st.dataframe(
-                            lot_table[["lot"] + used_centers + ["합계"]]
+                            lot_table[ordered_cols]
                             .sort_values("합계", ascending=False)
                             .reset_index(drop=True),
                             use_container_width=True,
