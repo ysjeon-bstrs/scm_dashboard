@@ -1173,6 +1173,10 @@ def render_amazon_sales_vs_inventory(
         & (df["date"] <= end)
     ]
 
+    # === 날짜 경계 ===
+    display_start = start
+    display_end = end
+
     df["kind"] = np.where(df["date"] <= today, "actual", "future")
 
     inv_actual_snapshot = (
@@ -1396,6 +1400,44 @@ def render_amazon_sales_vs_inventory(
     else:
         ma = pd.DataFrame(columns=["date", "resource_code", "sales_ma7"])
 
+    # --- 실측→예측 연결용 앵커 추가 ---
+    if (
+        display_start <= today <= display_end
+        and not inv_actual_df.empty
+        and not inv_forecast_df.empty
+    ):
+        last_actual = (
+            inv_actual_df[inv_actual_df["date"] <= today]
+            .sort_values(["resource_code", "date"])
+            .groupby("resource_code", as_index=False)
+            .last()[["resource_code", "stock_qty"]]
+        )
+        if not last_actual.empty:
+            anchor = last_actual.assign(date=pd.to_datetime(today).normalize())
+            inv_forecast_df = pd.concat(
+                [anchor[["date", "resource_code", "stock_qty"]], inv_forecast_df],
+                ignore_index=True,
+            )
+            inv_forecast_df = (
+                inv_forecast_df.sort_values(["resource_code", "date"])
+                .drop_duplicates(subset=["resource_code", "date"], keep="last")
+            )
+
+    # 표시용으로만 [start, end]로 슬라이스
+    def _trim_range(df_in: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        if df_in is None or df_in.empty:
+            return df_in
+        out = df_in[
+            (df_in["date"] >= display_start) & (df_in["date"] <= display_end)
+        ].copy()
+        return out
+
+    inv_actual_df = _trim_range(inv_actual_df)
+    inv_forecast_df = _trim_range(inv_forecast_df)
+    sales_actual = _trim_range(sales_actual)
+    sales_forecast_df = _trim_range(sales_forecast_df)
+    ma = _trim_range(ma) if ma is not None and not ma.empty else ma
+
     colors = sku_colors or _sku_color_map(skus)
     fig = go.Figure()
 
@@ -1453,7 +1495,7 @@ def render_amazon_sales_vs_inventory(
                 )
             )
 
-    if show_ma7 and not ma.empty:
+    if show_ma7 and ma is not None and not ma.empty:
         for sku, group in ma.groupby("resource_code"):
             color = colors.get(sku, "#6BA3FF")
             fig.add_trace(
@@ -1487,6 +1529,8 @@ def render_amazon_sales_vs_inventory(
             tickformat=",.0f",
         ),
     )
+
+    fig.update_xaxes(range=[display_start, display_end])
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
 
