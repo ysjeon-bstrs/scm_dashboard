@@ -784,22 +784,41 @@ def main() -> None:
     latest_dt_str = latest_dt.strftime("%Y-%m-%d")
     st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
 
-    current_snapshot = snapshot_df[
-        (snapshot_df["date"] == latest_dt) & (snapshot_df["center"].isin(selected_centers))
+    last_dates = (
+        snapshot_df[snapshot_df["center"].isin(selected_centers)]
+        .groupby("center")["date"]
+        .max()
+        .dt.strftime("%Y-%m-%d")
+        .to_dict()
+    )
+    if last_dates:
+        caption_items = [
+            f"{center}: {last_dates[center]}"
+            for center in selected_centers
+            if center in last_dates
+        ]
+        if caption_items:
+            st.caption("센터별 최신 스냅샷: " + " / ".join(caption_items))
+
+    sub = snapshot_df[
+        (snapshot_df["date"] <= latest_dt) & (snapshot_df["center"].isin(selected_centers))
     ].copy()
 
+    if not sub.empty:
+        sub["center"] = sub["center"].astype(str).str.strip()
+        sub = (
+            sub.sort_values(["center", "resource_code", "date"])
+            .groupby(["center", "resource_code"], as_index=False)
+            .tail(1)
+        )
+
     pivot = (
-        current_snapshot.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
+        sub.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
         .pivot(index="resource_code", columns="center", values="stock_qty")
+        .reindex(columns=selected_centers)
         .fillna(0)
     )
 
-    for center in selected_centers:
-        if center not in pivot.columns:
-            pivot[center] = 0
-    if pivot.empty:
-        pivot = pivot.reindex(columns=selected_centers)
-    pivot = pivot.reindex(columns=selected_centers, fill_value=0)
     pivot = pivot.astype(int)
     pivot["총합"] = pivot.sum(axis=1)
 
