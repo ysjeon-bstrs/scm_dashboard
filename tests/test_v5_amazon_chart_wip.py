@@ -1,6 +1,5 @@
 import pandas as pd
 
-from scm_dashboard_v5.forecast import AmazonForecastContext
 from scm_dashboard_v5.forecast import consumption
 from scm_dashboard_v5.ui import charts
 
@@ -183,57 +182,66 @@ def test_render_amazon_panel_renders_actual_and_forecast(monkeypatch):
                 "date": "2023-01-01",
                 "center": "AMZUS",
                 "resource_code": "SKU1",
-                "stock_qty": 100,
-                "sales_qty": 12,
+                "stock_qty": 5000,
+                "sales_qty": 1200,
             },
             {
                 "date": "2023-01-02",
                 "center": "AMZUS",
                 "resource_code": "SKU1",
-                "stock_qty": 90,
-                "sales_qty": 8,
+                "stock_qty": 4200,
+                "sales_qty": 1300,
+            },
+            {
+                "date": "2023-01-03",
+                "center": "AMZUS",
+                "resource_code": "SKU1",
+                "stock_qty": 3600,
+                "sales_qty": 1100,
             },
         ]
     )
+    snapshot_long["date"] = pd.to_datetime(snapshot_long["date"])
 
-    moves = pd.DataFrame(
+    core_timeline = pd.DataFrame(
         [
-            {
-                "event_date": "2023-01-04",
-                "to_center": "AMZUS",
-                "resource_code": "SKU1",
-                "qty_ea": 500,
-            }
+            {"date": "2023-01-01", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 5000},
+            {"date": "2023-01-02", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 4200},
+            {"date": "2023-01-03", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 3600},
+            {"date": "2023-01-04", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 3000},
+            {"date": "2023-01-05", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 2600},
+            {"date": "2023-01-06", "center": "AMZUS", "resource_code": "SKU1", "stock_qty": 2000},
         ]
     )
+    core_timeline["date"] = pd.to_datetime(core_timeline["date"])
 
-    ctx = AmazonForecastContext(
-        start=pd.Timestamp("2023-01-01"),
-        end=pd.Timestamp("2023-01-06"),
-        today=pd.Timestamp("2023-01-02"),
+    charts.render_amazon_panel(
+        snap_long=snapshot_long,
+        moves=pd.DataFrame(),
+        core_timeline=core_timeline,
         centers=["AMZUS"],
         skus=["SKU1"],
-        inv_actual=pd.DataFrame(),
-        inv_forecast=pd.DataFrame(),
-        sales_hist=pd.DataFrame(),
-        sales_ma7=pd.DataFrame(),
-        sales_forecast=pd.DataFrame(),
-        snapshot_long=snapshot_long,
-        moves=moves,
-        lookback_days=7,
+        start=pd.Timestamp("2023-01-01"),
+        end=pd.Timestamp("2023-01-06"),
+        lookback_days=3,
+        today=pd.Timestamp("2023-01-02"),
     )
-
-    charts.render_amazon_sales_vs_inventory(ctx)
 
     fig = captured["fig"]
     trace_names = [tr.name for tr in fig.data]
-    assert "SKU1 재고(실측)" in trace_names
-    assert "SKU1 재고(예측)" in trace_names
+    assert "재고(실측)" in trace_names
+    assert "재고(예측)" in trace_names
 
     sales_traces = [tr for tr in fig.data if "판매(" in (tr.name or "")]
     assert sales_traces, "판매 막대가 렌더링되어야 합니다."
     for tr in sales_traces:
         assert all(float(v) >= 0 for v in tr.y)
+
+    actual_bar = next(tr for tr in sales_traces if tr.name == "SKU1 판매(실측)")
+    assert max(pd.to_datetime(actual_bar.x)) <= pd.Timestamp("2023-01-02")
+
+    forecast_bar = next(tr for tr in sales_traces if tr.name == "SKU1 판매(예측)")
+    assert min(pd.to_datetime(forecast_bar.x)) > pd.Timestamp("2023-01-02")
 
 
 def test_build_amazon_context_skips_forecast_when_disabled(monkeypatch):

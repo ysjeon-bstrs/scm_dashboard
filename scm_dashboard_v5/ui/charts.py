@@ -1056,326 +1056,283 @@ def _sku_color_map(skus):
 
 
 
-def _clamped_forecast_series(
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    base_stock: float,
-    inbound_by_day: dict[pd.Timestamp, float],
-    daily_demand: float,
-) -> tuple[pd.Series, pd.Series]:
-    """Return paired (sales, inventory) series respecting remaining stock."""
+def _load_amazon_sales_from_refined(
+    snap_long: pd.DataFrame,
+    centers: list[str],
+    skus: list[str],
+) -> pd.DataFrame:
+    """
+    snap_정제(DataFrame)에서 date/center/resource_code/sales_qty를 추출.
+    sales_qty 컬럼이 없으면 빈 DF 반환.
+    """
 
-    if pd.isna(start_date) or pd.isna(end_date) or end_date < start_date:
-        empty_index = pd.DatetimeIndex([], dtype="datetime64[ns]")
-        return pd.Series(dtype=float, index=empty_index), pd.Series(dtype=float, index=empty_index)
+    df = snap_long.copy()
+    cols = {c.lower(): c for c in df.columns}
+    need = {
+        "date": ["date", "snapshot_date", "스냅샷일", "스냅샷 일자"],
+        "center": ["center", "센터", "창고"],
+        "sku": ["resource_code", "sku", "상품코드", "product_code"],
+        "sales": ["sales_qty", "판매량", "sell_qty", "출고량"],
+    }
+    picked: dict[str, str | None] = {}
+    lowered = {str(col).lower(): col for col in df.columns}
+    for key, cand in need.items():
+        picked[key] = next((lowered.get(c.lower()) for c in cand if lowered.get(c.lower())), None)
+    if not picked["sales"]:
+        return pd.DataFrame(columns=["date", "center", "resource_code", "sales_qty"])
 
-    idx = pd.date_range(start_date, end_date, freq="D")
-    fcst_sales = pd.Series(0.0, index=idx, dtype=float)
-    inv = pd.Series(np.nan, index=idx, dtype=float)
-
-    remain = float(base_stock)
-    demand = max(0.0, float(daily_demand))
-
-    for d in idx:
-        inbound_qty = float(inbound_by_day.get(pd.to_datetime(d), 0.0))
-        remain += inbound_qty
-
-        sell = min(demand, max(remain, 0.0))
-        fcst_sales.loc[d] = sell
-        remain -= sell
-
-        inv.loc[d] = max(remain, 0.0)
-
-    return fcst_sales, inv
+    out = df.rename(
+        columns={
+            picked["date"]: "date",
+            picked["center"]: "center",
+            picked["sku"]: "resource_code",
+            picked["sales"]: "sales_qty",
+        }
+    )[["date", "center", "resource_code", "sales_qty"]].copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out["sales_qty"] = pd.to_numeric(out["sales_qty"], errors="coerce").fillna(0).astype(int)
+    return out[(out["center"].isin(centers)) & (out["resource_code"].isin(skus))]
 
 
-def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
-    """Draw the Amazon US panel using actual sales and clamped forecasts."""
+def _cap_forecast_by_inventory(
+    rate: pd.Series,
+    inv0: float,
+    events: pd.Series,
+) -> pd.Series:
+    """
+    rate        : 예측 판매 ‘속도’(일자 index)
+    inv0        : 시작 재고 (rate.index[0] 시점의 재고)
+    events      : 입출고 이벤트(= '입출고만 반영한' 타임라인의 일자별 증감). index는 rate와 동일.
+    반환        : 재고 cap을 적용한 일별 예측판매량
+    """
+
+    sold: list[float] = []
+    rem = float(inv0)
+    for i, _ in enumerate(rate.index):
+        if i > 0:
+            rem += float(events.iloc[i])
+        q = min(float(rate.iloc[i]), max(rem, 0.0))
+        sold.append(q)
+        rem -= q
+    return pd.Series(sold, index=rate.index)
+
+
+def render_amazon_panel(
+    snap_long: pd.DataFrame,
+    moves: pd.DataFrame,
+    core_timeline: pd.DataFrame,
+    centers: list[str],
+    skus: list[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    lookback_days: int = 7,
+    today: pd.Timestamp | None = None,
+):
+    """
+    - 실판매: snap_정제.sales_qty
+    - 예측판매: 최근 lookback_days MA → 재고 cap
+    - 예측재고: core_timeline(입출고만 반영) - 예측판매 누적
+    """
 
     if not _ensure_plotly_available() or go is None:
         return
 
-    if ctx is None:
-        st.info("아마존 데이터가 없습니다.")
+    if today is None:
+        today = pd.Timestamp.today().normalize()
+    start = pd.to_datetime(start).normalize()
+    end = pd.to_datetime(end).normalize()
+
+    if not centers or not skus:
+        st.info("Amazon 계열 센터와 SKU를 선택하세요.")
         return
 
-    skus = [str(sku) for sku in getattr(ctx, "skus", []) if str(sku).strip()]
-    if not skus:
-        st.info("SKU를 선택하세요.")
-        return
+    sales_df = _load_amazon_sales_from_refined(snap_long, centers, skus)
+    sales_df = sales_df[(sales_df["date"] >= start) & (sales_df["date"] <= end)]
 
-    target_centers = [normalize_center_value(c) for c in getattr(ctx, "centers", [])]
-    target_centers = [c for c in target_centers if c]
-    if not target_centers:
-        target_centers = ["AMZUS"]
-
-    snap_long = getattr(ctx, "snapshot_long", pd.DataFrame()).copy()
-    if snap_long.empty:
-        st.info("AMZUS 데이터가 없습니다.")
-        return
-
-    cols_lower = {str(c).strip().lower(): c for c in snap_long.columns}
-    date_col = cols_lower.get("date") or cols_lower.get("snapshot_date")
-    center_col = cols_lower.get("center")
-    sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
-    stock_col = cols_lower.get("stock_qty") or cols_lower.get("qty")
-    sales_col = cols_lower.get("sales_qty") or cols_lower.get("sale_qty")
-
-    if not all([date_col, center_col, sku_col, stock_col]):
-        st.warning("정제 스냅샷 형식이 예상과 다릅니다.")
-        return
-
-    rename_map = {
-        date_col: "date",
-        center_col: "center",
-        sku_col: "resource_code",
-        stock_col: "stock_qty",
-    }
-    if sales_col:
-        rename_map[sales_col] = "sales_qty"
-
-    df = snap_long.rename(columns=rename_map).copy()
-    if "sales_qty" not in df.columns:
-        df["sales_qty"] = 0
-
-    df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.normalize()
-    df = df.dropna(subset=["date"])
-    df["center"] = df.get("center", "").astype(str)
-    df["resource_code"] = df.get("resource_code", "").astype(str)
-    df["stock_qty"] = pd.to_numeric(df.get("stock_qty"), errors="coerce").fillna(0)
-    df["sales_qty"] = pd.to_numeric(df.get("sales_qty"), errors="coerce").fillna(0)
-
-    df = df[
-        df["center"].isin(target_centers)
-        & df["resource_code"].isin(skus)
-    ].copy()
-
-    if df.empty:
-        st.info("AMZUS 데이터가 없습니다.")
-        return
-
-    start = pd.to_datetime(getattr(ctx, "start", df["date"].min())).normalize()
-    end = pd.to_datetime(getattr(ctx, "end", df["date"].max())).normalize()
-    today = pd.to_datetime(getattr(ctx, "today", pd.Timestamp.today())).normalize()
-    lookback_days = int(getattr(ctx, "lookback_days", 28) or 28)
-    lookback_days = max(1, lookback_days)
-    promo_multiplier = float(getattr(ctx, "promotion_multiplier", 1.0) or 1.0)
-    if not np.isfinite(promo_multiplier) or promo_multiplier <= 0:
-        promo_multiplier = 1.0
-
-    df = df[
-        (df["date"] >= start - pd.Timedelta(days=lookback_days + 2))
-        & (df["date"] <= end)
-    ]
-
-    df["kind"] = np.where(df["date"] <= today, "actual", "future")
-
-    inv_actual = (
-        df[df["kind"] == "actual"]
-        .groupby(["date", "resource_code"], as_index=False)["stock_qty"]
-        .sum()
+    ma_df = (
+        sales_df.set_index("date")
+        .groupby("resource_code")["sales_qty"]
+        .rolling(window=lookback_days, min_periods=max(1, lookback_days // 2))
+        .mean()
+        .reset_index()
     )
+    ma_df = ma_df.rename(columns={"sales_qty": "ma_rate"})
 
-    sales_actual = (
-        df[df["kind"] == "actual"]
+    f_dates = pd.date_range(max(today + pd.Timedelta(days=1), start), end, freq="D")
+    if len(f_dates) == 0:
+        f_dates = pd.DatetimeIndex([])
+
+    core = core_timeline.copy()
+    core = core[(core["center"].isin(centers)) & (core["resource_code"].isin(skus))]
+
+    inv0_df = (
+        core.groupby(["resource_code", "date"], as_index=False)["stock_qty"].sum()
+        .pivot(index="date", columns="resource_code", values="stock_qty")
+        .sort_index()
+    )
+    if inv0_df.empty:
+        inv0_df = pd.DataFrame(index=pd.DatetimeIndex([]), columns=skus, dtype=float)
+    else:
+        inv0_df.index = pd.to_datetime(inv0_df.index, errors="coerce").tz_localize(None)
+        inv0_df = inv0_df[inv0_df.index.notna()]
+        inv0_df = inv0_df.reindex(columns=skus, fill_value=0.0)
+
+    base_start = inv0_df.index.min() if not inv0_df.empty else None
+
+    rate_tbl: dict[str, pd.Series] = {}
+    for sku in skus:
+        sku_ma = ma_df[ma_df["resource_code"] == sku]
+        last_ma = (
+            sku_ma.set_index("date")["ma_rate"].dropna().iloc[-1:]
+            if not sku_ma.empty
+            else pd.Series(dtype=float)
+        )
+        base_rate = float(last_ma.iloc[-1]) if not last_ma.empty else 0.0
+        rate_tbl[sku] = pd.Series(base_rate, index=f_dates)
+
+    rate_df = pd.DataFrame(rate_tbl)
+
+    capped_tbl: dict[str, pd.Series] = {}
+    for sku in skus:
+        if base_start is None or pd.isna(base_start):
+            inv_series = pd.Series(0.0, index=f_dates)
+        else:
+            base_range = pd.date_range(base_start, end, freq="D")
+            inv_series = inv0_df.get(sku, pd.Series(dtype=float)).reindex(base_range).ffill()
+            inv_series = inv_series.reindex(f_dates).fillna(0.0)
+        events = inv_series.diff().fillna(0.0)
+        inv_start = float(inv_series.iloc[0]) if len(inv_series) else 0.0
+        rate = rate_df[sku] if sku in rate_df.columns else pd.Series(0.0, index=f_dates)
+        capped_tbl[sku] = _cap_forecast_by_inventory(rate, inv_start, events)
+
+    capped_df = pd.DataFrame(capped_tbl).fillna(0.0)
+
+    proj_stock: dict[str, pd.Series] = {}
+    for sku in skus:
+        if base_start is None or pd.isna(base_start):
+            inv_series = pd.Series(0.0, index=f_dates)
+        else:
+            base_range = pd.date_range(base_start, end, freq="D")
+            inv_series = inv0_df.get(sku, pd.Series(dtype=float)).reindex(base_range).ffill()
+            inv_series = inv_series.reindex(f_dates).fillna(0.0)
+        sold_cum = capped_df[sku].cumsum() if sku in capped_df else pd.Series(0.0, index=f_dates)
+        proj_stock[sku] = (inv_series - sold_cum).clip(lower=0.0)
+
+    proj_df = pd.DataFrame(proj_stock).fillna(0.0)
+
+    act = (
+        sales_df[sales_df["date"] <= today]
         .groupby(["date", "resource_code"], as_index=False)["sales_qty"]
         .sum()
     )
-
-    avg_demand_by_sku: dict[str, float] = {}
-    last_stock_by_sku: dict[str, float] = {}
-    for sku, group in df.groupby("resource_code"):
-        history = group[group["date"] <= today].sort_values("date")
-        tail = history.tail(lookback_days)
-        avg = float(tail["sales_qty"].mean() or 0.0)
-        avg_demand_by_sku[sku] = max(0.0, avg)
-
-        if not history.empty:
-            last_stock_by_sku[sku] = float(history.iloc[-1]["stock_qty"])
-        else:
-            last_stock_by_sku[sku] = 0.0
-
-    moves_df = getattr(ctx, "moves", pd.DataFrame()).copy()
-    if not moves_df.empty:
-        mv_cols = {str(c).lower(): c for c in moves_df.columns}
-        rename_moves = {mv_cols.get("event_date", "event_date"): "event_date"}
-        for name in ["to_center", "resource_code", "qty_ea"]:
-            if name in mv_cols:
-                rename_moves[mv_cols[name]] = name
-        moves_df = moves_df.rename(columns=rename_moves)
-        moves_df["event_date"] = pd.to_datetime(
-            moves_df.get("event_date"), errors="coerce"
-        ).dt.normalize()
-        moves_df = moves_df.dropna(subset=["event_date"])
-        moves_df["to_center"] = moves_df.get("to_center", "").astype(str)
-        moves_df["resource_code"] = moves_df.get("resource_code", "").astype(str)
-        moves_df["qty_ea"] = pd.to_numeric(moves_df.get("qty_ea"), errors="coerce").fillna(0)
-        moves_df = moves_df[
-            moves_df["to_center"].isin(target_centers)
-            & moves_df["resource_code"].isin(skus)
-            & (moves_df["event_date"] >= today + pd.Timedelta(days=1))
-            & (moves_df["event_date"] <= end)
-        ]
-    else:
-        moves_df = pd.DataFrame(columns=["event_date", "resource_code", "qty_ea"])
-
-    inbound = (
-        moves_df.groupby(["resource_code", "event_date"], as_index=False)["qty_ea"].sum()
-        if not moves_df.empty
-        else pd.DataFrame(columns=["resource_code", "event_date", "qty_ea"])
+    fcast = (
+        capped_df.stack()
+        .rename("sales_qty")
+        .rename_axis(index=["date", "resource_code"])
+        .reset_index()
     )
-
-    fcst_start = max(today + pd.Timedelta(days=1), start)
-    fcst_sales_rows: list[pd.DataFrame] = []
-    fcst_inv_rows: list[pd.DataFrame] = []
-
-    if fcst_start <= end:
-        for sku in skus:
-            base_stock = float(last_stock_by_sku.get(sku, 0.0))
-            inbound_map = {
-                pd.to_datetime(day): float(qty)
-                for day, qty in inbound[inbound["resource_code"] == sku][["event_date", "qty_ea"]]
-                .itertuples(index=False, name=None)
-            }
-
-            daily_demand = avg_demand_by_sku.get(sku, 0.0) * promo_multiplier
-            fcst_sales, inv_series = _clamped_forecast_series(
-                start_date=fcst_start,
-                end_date=end,
-                base_stock=base_stock,
-                inbound_by_day=inbound_map,
-                daily_demand=daily_demand,
-            )
-
-            if not fcst_sales.empty:
-                fcst_sales_rows.append(
-                    pd.DataFrame(
-                        {
-                            "date": fcst_sales.index,
-                            "resource_code": sku,
-                            "sales_qty": fcst_sales.values,
-                        }
-                    )
-                )
-            if not inv_series.empty:
-                fcst_inv_rows.append(
-                    pd.DataFrame(
-                        {
-                            "date": inv_series.index,
-                            "resource_code": sku,
-                            "stock_qty": inv_series.values,
-                        }
-                    )
-                )
-
-    sales_forecast = (
-        pd.concat(fcst_sales_rows, ignore_index=True)
-        if fcst_sales_rows
-        else pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
-    )
-
-    inv_forecast = (
-        pd.concat(fcst_inv_rows, ignore_index=True)
-        if fcst_inv_rows
-        else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
-    )
-
-    show_ma7 = bool(getattr(ctx, "show_ma7", True))
-    if show_ma7 and not sales_actual.empty:
-        ma = (
-            sales_actual.set_index("date")
-            .groupby("resource_code")["sales_qty"]
-            .apply(lambda s: s.rolling(7, min_periods=1).mean())
-            .reset_index()
-            .rename(columns={"sales_qty": "sales_ma7"})
-        )
-    else:
-        ma = pd.DataFrame(columns=["date", "resource_code", "sales_ma7"])
 
     fig = go.Figure()
-    colors = _sku_colors(skus)
 
-    if not sales_actual.empty:
-        for sku, group in sales_actual.groupby("resource_code"):
-            fig.add_bar(
-                x=group["date"],
-                y=group["sales_qty"],
-                name=f"{sku} 판매(실측)",
-                marker_color=colors.get(sku, "#6BA3FF"),
-                opacity=0.95,
-            )
+    for sku in skus:
+        s = act[act["resource_code"] == sku].set_index("date")["sales_qty"]
+        if s.empty:
+            continue
+        fig.add_bar(
+            x=s.index,
+            y=s.values,
+            name=f"{sku} 판매(실측)",
+            marker_line_width=0.5,
+            marker_line_color="rgba(0,0,0,0.15)",
+        )
 
-    if not sales_forecast.empty:
-        for sku, group in sales_forecast.groupby("resource_code"):
-            fig.add_bar(
-                x=group["date"],
-                y=group["sales_qty"],
-                name=f"{sku} 판매(예측)",
-                marker=dict(color=colors.get(sku, "#6BA3FF"), pattern=dict(shape="/")),
-                opacity=0.6,
-            )
+    for sku in skus:
+        s = fcast[fcast["resource_code"] == sku].set_index("date")["sales_qty"]
+        if s.empty:
+            continue
+        fig.add_bar(
+            x=s.index,
+            y=s.values,
+            name=f"{sku} 판매(예측)",
+            marker_pattern_shape="/",
+            opacity=0.6,
+        )
 
-    if not inv_actual.empty:
-        for sku, group in inv_actual.groupby("resource_code"):
-            fig.add_trace(
-                go.Scatter(
-                    x=group["date"],
-                    y=group["stock_qty"],
-                    mode="lines",
-                    name=f"{sku} 재고(실측)",
-                    line=dict(color="#F28E2B", width=2),
-                    yaxis="y2",
-                )
-            )
+    real_range_end = min(today, end)
+    if real_range_end >= start:
+        inv_real = (
+            core[core["date"] <= today]
+            .groupby("date", as_index=True)["stock_qty"].sum()
+            .reindex(pd.date_range(start, real_range_end, freq="D"))
+            .ffill()
+        )
+    else:
+        inv_real = pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+    if not getattr(inv_real, "empty", True) and not inv_real.dropna().empty:
+        fig.add_scatter(
+            x=inv_real.index,
+            y=inv_real.values,
+            name="재고(실측)",
+            mode="lines",
+            line=dict(width=2.0, color="#444"),
+        )
 
-    if not inv_forecast.empty:
-        for sku, group in inv_forecast.groupby("resource_code"):
-            fig.add_trace(
-                go.Scatter(
-                    x=group["date"],
-                    y=group["stock_qty"],
-                    mode="lines",
-                    name=f"{sku} 재고(예측)",
-                    line=dict(color="#F28E2B", width=2, dash="dot"),
-                    yaxis="y2",
-                )
-            )
-
-    if show_ma7 and not ma.empty:
-        for sku, group in ma.groupby("resource_code"):
-            fig.add_trace(
-                go.Scatter(
-                    x=group["date"],
-                    y=group["sales_ma7"],
-                    mode="lines",
-                    name=f"{sku} 판매 7일 평균",
-                    line=dict(color=colors.get(sku, "#6BA3FF"), dash="dash"),
-                )
-            )
-
-    fig.add_vline(x=today, line_color="crimson", line_dash="dash", line_width=2)
+    inv_fore = proj_df.sum(axis=1)
+    if not inv_fore.empty:
+        inv_fore = inv_fore.reindex(f_dates).dropna()
+    if not inv_fore.empty:
+        fig.add_scatter(
+            x=inv_fore.index,
+            y=inv_fore.values,
+            name="재고(예측)",
+            mode="lines",
+            line=dict(width=2.0, color="#444", dash="dot"),
+        )
 
     fig.update_layout(
-        title="Amazon US 일별 판매 vs. 재고",
         barmode="stack",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=30, r=20, t=40, b=20),
-        hovermode="x unified",
         xaxis=dict(title="Date"),
-        yaxis=dict(title="판매량 (EA/Day)"),
+        yaxis=dict(title="판매량 (EA/Day)", tickformat=","),
         yaxis2=dict(
             title="재고 (EA)",
             overlaying="y",
             side="right",
+            tickformat=",",
             showgrid=False,
-            zeroline=False,
-            showline=False,
-            tickfont=dict(color="#666"),
         ),
+        legend_title_text="시리즈",
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=40, b=20),
+        title="Amazon US 일별 판매 vs. 재고",
+    )
+
+    if len(fig.data) >= 2:
+        fig["data"][-1]["yaxis"] = "y2"
+        fig["data"][-2]["yaxis"] = "y2"
+
+    today_line = pd.to_datetime(today).normalize().to_pydatetime()
+    fig.add_shape(
+        type="line",
+        x0=today_line,
+        x1=today_line,
+        xref="x",
+        y0=0,
+        y1=1,
+        yref="paper",
+        line=dict(color="crimson", width=1.5, dash="dot"),
+    )
+    fig.add_annotation(
+        x=today_line,
+        xref="x",
+        y=1.0,
+        yref="paper",
+        yshift=6,
+        text="오늘",
+        showarrow=False,
+        font=dict(color="crimson"),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-
 
 # --- STEP CHART (v5_main이 호출하는 공개 API) ---------------------------------
 # 충분히 긴 팔레트 (SKU별 고정색)
