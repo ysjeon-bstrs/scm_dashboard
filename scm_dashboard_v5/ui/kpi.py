@@ -1303,7 +1303,7 @@ def render_sku_summary_cards(
             _build_metric_card("선택 센터 재고 합계", _format_number(total_current)),
             _build_metric_card("전체 이동중 재고 합계", _format_number(total_transit_all)),
             _build_metric_card(
-                "전체 생산중 재고 합계(파이프라인)",
+                "전체 생산 예정 재고 합계",
                 _format_number(wip_pipeline_value),
             ),
         ]
