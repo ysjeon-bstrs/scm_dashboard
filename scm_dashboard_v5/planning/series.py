@@ -67,15 +67,18 @@ def build_center_series(
         grp = grp.dropna(subset=["date"]).sort_values("date")
         if grp.empty:
             continue
-        grp = grp.groupby("date", as_index=False).agg({"stock_qty": "last"})
+        grp = (
+            grp.groupby("date", as_index=False)["stock_qty"].last().sort_values("date")
+        )
+        grp = grp.drop_duplicates(subset="date", keep="last")
         last_dt = grp["date"].max()
 
         ts = pd.DataFrame(index=idx)
         ts["center"] = ct
         ts["resource_code"] = sku
-        stock_series = (
-            grp.set_index("date")["stock_qty"].astype(float).reindex(idx)
-        )
+        stock_series = grp.set_index("date")["stock_qty"].astype(float)
+        stock_series = stock_series[~stock_series.index.duplicated(keep="last")]
+        stock_series = stock_series.reindex(idx)
         stock_series = stock_series.ffill().fillna(0.0)
         ts["stock_qty"] = stock_series
 

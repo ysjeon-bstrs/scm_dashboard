@@ -28,7 +28,18 @@ def estimate_daily_consumption(
         return rates
 
     for (ct, sku), g in hist.groupby(["center", "resource_code"]):
-        ts = g.sort_values("date").set_index("date")["stock_qty"].asfreq("D").ffill()
+        series = (
+            g.dropna(subset=["date"])  # drop rows without a usable date
+            .sort_values("date")
+            .groupby("date", as_index=False)["stock_qty"]
+            .last()
+        )
+        if series.empty:
+            continue
+
+        ts = (
+            series.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
+        )
         if ts.dropna().shape[0] < max(7, lookback_days // 2):
             continue
         x = np.arange(len(ts), dtype=float)
