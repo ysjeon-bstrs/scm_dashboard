@@ -20,7 +20,7 @@ class TimelineContext:
     start: pd.Timestamp
     end: pd.Timestamp
     today: pd.Timestamp
-    lag_days: int = 7
+    lag_days: int = 5
     horizon_days: int = 0
 
     @property
