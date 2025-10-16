@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -32,6 +32,7 @@ from scm_dashboard_v5.ui import (
     render_step_chart,
     render_sku_summary_cards,
 )
+from scm_dashboard_v5.ui.charts import _sku_color_map, _timeline_inventory_matrix
 
 
 def _validate_timeline_inputs(
@@ -541,6 +542,23 @@ def main() -> None:
         show_in_transit=show_transit,
         today=today_norm,
     )
+
+    def _tidy_from_pivot(
+        pivot: Optional[pd.DataFrame], mask: Optional[Sequence[bool]]
+    ) -> pd.DataFrame:
+        if pivot is None or pivot.empty:
+            return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+        subset = pivot if mask is None else pivot.loc[mask]
+        if subset.empty:
+            return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+        tidy = (
+            subset.stack()
+            .reset_index()
+            .rename(columns={"level_0": "date", "level_1": "resource_code", 0: "stock_qty"})
+        )
+        tidy["date"] = pd.to_datetime(tidy["date"]).dt.normalize()
+        tidy["stock_qty"] = pd.to_numeric(tidy["stock_qty"], errors="coerce").fillna(0)
+        return tidy
     # -------------------- Amazon US sales vs. inventory --------------------
     amazon_centers = [
         c
@@ -556,6 +574,23 @@ def main() -> None:
     if not amazon_centers:
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
     else:
+        amz_inv_pivot = _timeline_inventory_matrix(
+            timeline_for_chart,
+            centers=amazon_centers,
+            skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+        )
+        if amz_inv_pivot is not None:
+            mask_actual = amz_inv_pivot.index <= today_norm
+            mask_forecast = amz_inv_pivot.index > today_norm
+        else:
+            mask_actual = None
+            mask_forecast = None
+        inv_actual_from_step = _tidy_from_pivot(amz_inv_pivot, mask_actual)
+        inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
+        sku_colors_map = _sku_color_map(selected_skus)
+
         snapshot_raw_df = load_snapshot_raw()
         amz_ctx = build_amazon_forecast_context(
             snap_long=snapshot_df,
@@ -570,7 +605,13 @@ def main() -> None:
             promotion_events=events,
             use_consumption_forecast=use_cons_forecast,
         )
-        render_amazon_sales_vs_inventory(amz_ctx)
+        render_amazon_sales_vs_inventory(
+            amz_ctx,
+            inv_actual=inv_actual_from_step,
+            inv_forecast=inv_forecast_from_step,
+            sku_colors=sku_colors_map,
+            use_inventory_for_sales=True,
+        )
 
 
 
