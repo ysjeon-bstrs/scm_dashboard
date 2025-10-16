@@ -252,6 +252,26 @@ def build_wip_series(
         delta = pd.concat(deltas, ignore_index=True)
         delta_series = delta.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
         series = delta_series.cumsum().clip(lower=0)
+
+        onboard_dates = pd.to_datetime(grp[start_col], errors="coerce")
+        event_dates = (
+            pd.to_datetime(grp.get("event_date"), errors="coerce")
+            if "event_date" in grp
+            else pd.Series(pd.NaT, index=grp.index, dtype="datetime64[ns]")
+        )
+        carry_mask = (
+            onboard_dates.notna()
+            & (onboard_dates < idx[0])
+            & event_dates.fillna(pd.Timestamp.max).ge(idx[0])
+        )
+        if carry_mask.any():
+            carry = int(
+                pd.to_numeric(grp.loc[carry_mask, "qty_ea"], errors="coerce")
+                .fillna(0)
+                .sum()
+            )
+            if carry:
+                series = (series + carry).clip(lower=0)
         if not series.any():
             continue
 
