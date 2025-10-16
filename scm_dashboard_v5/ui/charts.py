@@ -1045,9 +1045,10 @@ def _timeline_inventory_matrix(
 # ---------------- Public renderer ----------------
 
 def _sku_color_map(skus):
-    m = {}
-    for i, s in enumerate(skus):
-        m[s] = PALETTE[i % len(PALETTE)]
+    m: dict[str, str] = {}
+    for i, sku in enumerate([str(s) for s in skus]):
+        if sku not in m:
+            m[sku] = _STEP_PALETTE[i % len(_STEP_PALETTE)]
     return m
 
 
@@ -1086,8 +1087,15 @@ def _clamped_forecast_series(
     return fcst_sales, inv
 
 
-def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
-    """Draw the Amazon US panel using actual sales and clamped forecasts."""
+def render_amazon_sales_vs_inventory(
+    ctx: "AmazonForecastContext",
+    *,
+    inv_actual: Optional[pd.DataFrame] = None,
+    inv_forecast: Optional[pd.DataFrame] = None,
+    sku_colors: Optional[Dict[str, str]] = None,
+    use_inventory_for_sales: bool = True,
+) -> None:
+    """Draw the Amazon US panel, optionally using a precomputed inventory timeline."""
 
     if not _ensure_plotly_available() or go is None:
         return
@@ -1167,7 +1175,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
 
     df["kind"] = np.where(df["date"] <= today, "actual", "future")
 
-    inv_actual = (
+    inv_actual_snapshot = (
         df[df["kind"] == "actual"]
         .groupby(["date", "resource_code"], as_index=False)["stock_qty"]
         .sum()
@@ -1223,8 +1231,8 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
     )
 
     fcst_start = max(today + pd.Timedelta(days=1), start)
-    fcst_sales_rows: list[pd.DataFrame] = []
-    fcst_inv_rows: list[pd.DataFrame] = []
+    fallback_sales_rows: list[pd.DataFrame] = []
+    fallback_inv_rows: list[pd.DataFrame] = []
 
     missing_sales_skus: set[str] = set(skus)
     missing_inv_skus: set[str] = set(skus)
@@ -1251,7 +1259,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                     "stock_qty"
                 ].sum()
             )
-            fcst_inv_rows.append(grouped)
+            fallback_inv_rows.append(grouped)
             missing_inv_skus = missing_inv_skus - set(grouped["resource_code"].unique())
 
     sales_forecast_ctx = getattr(ctx, "sales_forecast", pd.DataFrame()).copy()
@@ -1285,7 +1293,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                         value_col
                     ].sum()
                 ).rename(columns={value_col: "sales_qty"})
-                fcst_sales_rows.append(grouped_sales)
+                fallback_sales_rows.append(grouped_sales)
                 missing_sales_skus = missing_sales_skus - set(
                     grouped_sales["resource_code"].unique()
                 )
@@ -1311,7 +1319,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             )
 
             if sku in missing_sales_skus and not fcst_sales.empty:
-                fcst_sales_rows.append(
+                fallback_sales_rows.append(
                     pd.DataFrame(
                         {
                             "date": fcst_sales.index,
@@ -1321,7 +1329,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                     )
                 )
             if sku in missing_inv_skus and not inv_series.empty:
-                fcst_inv_rows.append(
+                fallback_inv_rows.append(
                     pd.DataFrame(
                         {
                             "date": inv_series.index,
@@ -1331,17 +1339,50 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
                     )
                 )
 
-    sales_forecast = (
-        pd.concat(fcst_sales_rows, ignore_index=True)
-        if fcst_sales_rows
+    sales_forecast_df = (
+        pd.concat(fallback_sales_rows, ignore_index=True)
+        if fallback_sales_rows
         else pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
     )
 
-    inv_forecast = (
-        pd.concat(fcst_inv_rows, ignore_index=True)
-        if fcst_inv_rows
+    inv_forecast_df = (
+        pd.concat(fallback_inv_rows, ignore_index=True)
+        if fallback_inv_rows
         else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
     )
+
+    default_center = target_centers[0] if target_centers else None
+    inv_actual_df = _normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
+    inv_forecast_df = _normalize_inventory_frame(inv_forecast_df, default_center=default_center)
+
+    override_inventory = False
+    if inv_actual is not None:
+        override_inventory = True
+        inv_actual_df = _normalize_inventory_frame(inv_actual, default_center=default_center)
+    if inv_forecast is not None:
+        override_inventory = True
+        inv_forecast_df = _normalize_inventory_frame(inv_forecast, default_center=default_center)
+
+    if override_inventory and inv_forecast is None:
+        # When only actuals are injected we should not keep stale fallback forecasts.
+        inv_forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    if use_inventory_for_sales and not inv_actual_df.empty and not inv_forecast_df.empty:
+        derived_sales = _sales_forecast_from_inventory_projection(
+            inv_actual_df,
+            inv_forecast_df,
+            centers=target_centers,
+            skus=skus,
+            start=start,
+            end=end,
+            today=today,
+        )
+        if not derived_sales.empty:
+            sales_forecast_df = (
+                derived_sales.rename(columns={"sales_ea": "sales_qty"})
+                if "sales_ea" in derived_sales.columns
+                else derived_sales.copy()
+            )
 
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
     if show_ma7 and not sales_actual.empty:
@@ -1355,64 +1396,73 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
     else:
         ma = pd.DataFrame(columns=["date", "resource_code", "sales_ma7"])
 
+    colors = sku_colors or _sku_color_map(skus)
     fig = go.Figure()
-    colors = _sku_colors(skus)
 
     if not sales_actual.empty:
         for sku, group in sales_actual.groupby("resource_code"):
+            color = colors.get(sku, "#6BA3FF")
             fig.add_bar(
                 x=group["date"],
                 y=group["sales_qty"],
                 name=f"{sku} 판매(실측)",
-                marker_color=colors.get(sku, "#6BA3FF"),
+                marker_color=color,
                 opacity=0.95,
+                hovertemplate="날짜: %{x|%Y-%m-%d}<br>판매: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
             )
 
-    if not sales_forecast.empty:
-        for sku, group in sales_forecast.groupby("resource_code"):
+    if not sales_forecast_df.empty:
+        for sku, group in sales_forecast_df.groupby("resource_code"):
+            color = colors.get(sku, "#6BA3FF")
             fig.add_bar(
                 x=group["date"],
                 y=group["sales_qty"],
                 name=f"{sku} 판매(예측)",
-                marker=dict(color=colors.get(sku, "#6BA3FF"), pattern=dict(shape="/")),
-                opacity=0.6,
+                marker_color=color,
+                opacity=0.45,
+                hovertemplate="날짜: %{x|%Y-%m-%d}<br>판매: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
             )
 
-    if not inv_actual.empty:
-        for sku, group in inv_actual.groupby("resource_code"):
+    if not inv_actual_df.empty:
+        for sku, group in inv_actual_df.groupby("resource_code"):
+            color = colors.get(sku, "#6BA3FF")
             fig.add_trace(
                 go.Scatter(
                     x=group["date"],
                     y=group["stock_qty"],
                     mode="lines",
                     name=f"{sku} 재고(실측)",
-                    line=dict(color="#F28E2B", width=2),
+                    line=dict(color=color, width=2),
                     yaxis="y2",
+                    hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
                 )
             )
 
-    if not inv_forecast.empty:
-        for sku, group in inv_forecast.groupby("resource_code"):
+    if not inv_forecast_df.empty:
+        for sku, group in inv_forecast_df.groupby("resource_code"):
+            color = colors.get(sku, "#6BA3FF")
             fig.add_trace(
                 go.Scatter(
                     x=group["date"],
                     y=group["stock_qty"],
                     mode="lines",
                     name=f"{sku} 재고(예측)",
-                    line=dict(color="#F28E2B", width=2, dash="dot"),
+                    line=dict(color=color, width=2, dash="dot"),
                     yaxis="y2",
+                    hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
                 )
             )
 
     if show_ma7 and not ma.empty:
         for sku, group in ma.groupby("resource_code"):
+            color = colors.get(sku, "#6BA3FF")
             fig.add_trace(
                 go.Scatter(
                     x=group["date"],
                     y=group["sales_ma7"],
                     mode="lines",
                     name=f"{sku} 판매 7일 평균",
-                    line=dict(color=colors.get(sku, "#6BA3FF"), dash="dash"),
+                    line=dict(color=color, dash="dash"),
                 )
             )
 
@@ -1425,7 +1475,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
         margin=dict(l=30, r=20, t=40, b=20),
         hovermode="x unified",
         xaxis=dict(title="Date"),
-        yaxis=dict(title="판매량 (EA/Day)"),
+        yaxis=dict(title="판매량 (EA/Day)", tickformat=",.0f"),
         yaxis2=dict(
             title="재고 (EA)",
             overlaying="y",
@@ -1434,6 +1484,7 @@ def render_amazon_sales_vs_inventory(ctx: "AmazonForecastContext") -> None:
             zeroline=False,
             showline=False,
             tickfont=dict(color="#666"),
+            tickformat=",.0f",
         ),
     )
 
