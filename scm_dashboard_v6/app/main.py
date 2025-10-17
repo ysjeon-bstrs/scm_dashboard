@@ -147,6 +147,19 @@ def main() -> None:
         bound_min=pd.Timestamp(bound_min).normalize(),
         bound_max=pd.Timestamp(bound_max).normalize(),
     )
+    # 프로모션 설정 (전역)
+    promo_enabled = bool(getattr(ui, "promotion_enabled", False))
+    promo_events = (
+        [
+            {
+                "start": pd.to_datetime(getattr(ui, "promotion_start", today)).normalize(),
+                "end": pd.to_datetime(getattr(ui, "promotion_end", today)).normalize(),
+                "uplift": float(getattr(ui, "promotion_percent", 0.0)) / 100.0,
+            }
+        ]
+        if promo_enabled
+        else None
+    )
 
     # 요약 KPI (v5와 동일 호출)
     st.subheader("요약 KPI")
@@ -200,21 +213,6 @@ def main() -> None:
     inv_forecast_tidy = (
         timeline[(timeline["date"] > today) & (timeline["center"].isin(amazon_centers))]
         if isinstance(timeline, pd.DataFrame)
-        else None
-    )
-
-    # 프로모션 설정에서 이벤트와 소비기반 예측 사용 여부 결정
-    promo_enabled = bool(getattr(ui, "promotion_enabled", False))
-    promo_events = (
-        [
-            {
-                "start": pd.to_datetime(getattr(ui, "promotion_start", today)).normalize(),
-                "end": pd.to_datetime(getattr(ui, "promotion_end", today)).normalize(),
-                # v5 컨텍스트는 'uplift' 비율을 기대 (예: 0.3 => +30%)
-                "uplift": float(getattr(ui, "promotion_percent", 0.0)) / 100.0,
-            }
-        ]
-        if promo_enabled
         else None
     )
 
