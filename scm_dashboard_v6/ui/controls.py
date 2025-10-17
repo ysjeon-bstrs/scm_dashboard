@@ -18,6 +18,8 @@ class UiSelections:
     start: pd.Timestamp
     end: pd.Timestamp
     lookback_days: int
+    promotion_percent: float
+    inbound_lead_days: int
     show_production: bool
     show_in_transit: bool
 
@@ -78,12 +80,32 @@ def collect_sidebar_controls(
             )
         )
 
+        promo_percent = float(
+            st.number_input(
+                "프로모션 가중치(+%)", min_value=0.0, max_value=500.0, value=0.0, step=5.0, key="trend_promo_percent"
+            )
+        )
+
+        st.subheader("입고 반영 가정")
+        inbound_lead_days = int(
+            st.number_input(
+                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
+                min_value=0,
+                max_value=30,
+                value=5,
+                step=1,
+                key="inbound_lead_days",
+            )
+        )
+
     return UiSelections(
         centers=[str(c) for c in sel_centers if str(c).strip()],
         skus=[str(s) for s in sel_skus if str(s).strip()],
         start=start_ts,
         end=end_ts,
         lookback_days=lookback_days,
+        promotion_percent=promo_percent,
+        inbound_lead_days=inbound_lead_days,
         show_production=bool(show_prod),
         show_in_transit=bool(show_transit),
     )

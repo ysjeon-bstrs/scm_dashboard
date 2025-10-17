@@ -51,6 +51,12 @@ def render_amazon_panel(
         use_consumption_forecast=bool(use_consumption_forecast),
     )
 
+    # 사이드바 프로모션 가중치(+%)가 있다면 컨텍스트에 반영 (v5 렌더러가 읽어 사용)
+    try:
+        setattr(ctx, "promotion_multiplier", 1.0 + float(getattr(ctx, "promotion_percent", 0.0)) / 100.0)
+    except Exception:
+        pass
+
     # v5 차트 내부에서 moves_df의 event_date 가공을 기대하는 경로가 있어
     # 클라우드 환경 스키마 차이로 오류가 발생하는 경우를 회피: moves 사용 비활성화
     try:

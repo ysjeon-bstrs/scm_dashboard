@@ -157,7 +157,7 @@ def main() -> None:
         skus=ui.skus,
         today=today,
         latest_snapshot=latest_dt,
-        lag_days=7,
+        lag_days=int(getattr(ui, "inbound_lead_days", 7) or 7),
         start=ui.start,
         end=ui.end,
         lookback_days=ui.lookback_days,
@@ -228,7 +228,7 @@ def main() -> None:
     # 확정 입고 / WIP 진행 현황 표 표시
     window_start = ui.start
     window_end = ui.end
-    lag_days = 7
+    lag_days = int(getattr(ui, "inbound_lead_days", 7) or 7)
     st.divider()
     render_upcoming_inbound(
         moves=df_move,
