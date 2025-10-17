@@ -85,6 +85,11 @@ def main() -> None:
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
     snapshot_raw_df = load_snapshot_raw()
+    # v5 차트가 내부에서 moves_df 가공 시 event_date를 기대하는 부분을 회피하기 위해
+    # 스텝 차트에서 얻은 피벗 기반 tidy(실측/예측)를 전달한다.
+    inv_actual_tidy = timeline[(timeline["date"] <= today)] if isinstance(timeline, pd.DataFrame) else None
+    inv_forecast_tidy = timeline[(timeline["date"] > today)] if isinstance(timeline, pd.DataFrame) else None
+
     render_amazon_panel(
         snapshot_long=snapshot_df,
         moves=df_move,
@@ -97,6 +102,8 @@ def main() -> None:
         lookback_days=ui.lookback_days,
         promotion_events=None,
         use_consumption_forecast=True,
+        inv_actual=inv_actual_tidy,
+        inv_forecast=inv_forecast_tidy,
     )
 
     st.divider()

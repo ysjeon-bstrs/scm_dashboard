@@ -28,6 +28,8 @@ def render_amazon_panel(
     lookback_days: int,
     promotion_events: Optional[list[dict]] = None,
     use_consumption_forecast: bool = True,
+    inv_actual: pd.DataFrame | None = None,
+    inv_forecast: pd.DataFrame | None = None,
 ) -> None:
     """아마존 패널을 렌더링한다 (v6).
 
@@ -49,6 +51,13 @@ def render_amazon_panel(
         use_consumption_forecast=bool(use_consumption_forecast),
     )
 
-    render_amazon_sales_vs_inventory(ctx)
+    extra: dict = {}
+    if inv_actual is not None:
+        extra["inv_actual"] = inv_actual
+    if inv_forecast is not None:
+        extra["inv_forecast"] = inv_forecast
+
+    render_amazon_sales_vs_inventory(ctx, **extra)
+
 
 
