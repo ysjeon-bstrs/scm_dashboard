@@ -246,6 +246,7 @@ def main() -> None:
         centers=ui.centers,
         latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
         resource_name_map=name_map,
+        load_snapshot_raw_fn=load_snapshot_raw,
     )
 
 

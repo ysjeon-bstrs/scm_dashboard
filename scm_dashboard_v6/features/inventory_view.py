@@ -7,10 +7,11 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Callable
 
 import pandas as pd
 import streamlit as st
+from scm_dashboard_v4.config import CENTER_COL
 
 
 def render_inventory_pivot(
@@ -19,11 +20,9 @@ def render_inventory_pivot(
     centers: Iterable[str],
     latest_snapshot: pd.Timestamp,
     resource_name_map: Optional[dict[str, str]] = None,
+    load_snapshot_raw_fn: Optional[Callable[[], pd.DataFrame]] = None,
 ) -> pd.DataFrame:
-    """선택 센터의 최신 스냅샷 기준 피벗 테이블을 렌더링한다.
-
-    반환값: 화면 표시용 데이터프레임(다운로드/후속 처리에 재사용 가능)
-    """
+    """선택 센터의 최신 스냅샷 기준 피벗 테이블 + 검색/정렬 + LOT 상세를 렌더링한다."""
 
     if snapshot.empty or pd.isna(latest_snapshot):
         st.info("스냅샷 데이터가 없습니다.")
@@ -31,6 +30,25 @@ def render_inventory_pivot(
 
     selected_centers = [str(c) for c in centers]
 
+    # 헤더: 스냅샷 날짜/센터별 최신 스냅샷
+    latest_dt_str = pd.to_datetime(latest_snapshot).strftime("%Y-%m-%d")
+    st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
+    center_latest_series = (
+        snapshot[snapshot["center"].isin(selected_centers)].groupby("center")["date"].max()
+    )
+    center_latest_dates = {
+        center: ts.normalize() for center, ts in center_latest_series.items() if pd.notna(ts)
+    }
+    if not center_latest_series.empty:
+        caption_items = [
+            f"{center}: {center_latest_dates[center].strftime('%Y-%m-%d')}"
+            for center in selected_centers
+            if center in center_latest_dates
+        ]
+        if caption_items:
+            st.caption("센터별 최신 스냅샷: " + " / ".join(caption_items))
+
+    # 최신값 기준 피벗 생성
     sub = snapshot[(snapshot["date"] <= latest_snapshot) & (snapshot["center"].isin(selected_centers))].copy()
     if not sub.empty:
         sub["center"] = sub["center"].astype(str).str.strip()
@@ -44,11 +62,28 @@ def render_inventory_pivot(
         .reindex(columns=selected_centers)
         .fillna(0)
     )
-
     pivot = pivot.astype(int)
     pivot["총합"] = pivot.sum(axis=1)
 
-    display_df = pivot.reset_index().rename(columns={"resource_code": "SKU"})
+    # 검색/정렬 UI
+    col_filter, col_sort = st.columns([2, 1])
+    with col_filter:
+        sku_query = st.text_input(
+            "SKU 필터 — 품목번호 검색 시 해당 SKU의 센터별 제조번호(LOT) 확인",
+            "",
+            key="v6_sku_filter_text",
+        )
+    with col_sort:
+        sort_candidates = ["총합"] + selected_centers
+        sort_by = st.selectbox("정렬 기준", sort_candidates, index=0)
+
+    view = pivot.copy()
+    if sku_query.strip():
+        view = view[view.index.astype(str).str.contains(sku_query.strip(), case=False, regex=False)]
+    if sort_by in view.columns:
+        view = view.sort_values(by=sort_by, ascending=False)
+
+    display_df = view.reset_index().rename(columns={"resource_code": "SKU"})
     if resource_name_map:
         display_df.insert(1, "품명", display_df["SKU"].map(resource_name_map).fillna(""))
 
@@ -58,9 +93,58 @@ def render_inventory_pivot(
     st.download_button(
         "현재 표 CSV 다운로드",
         data=csv_bytes,
-        file_name=f"centers_{'-'.join(selected_centers)}_snapshot_{latest_snapshot.strftime('%Y-%m-%d')}.csv",
+        file_name=f"centers_{'-'.join(selected_centers)}_snapshot_{latest_dt_str}.csv",
         mime="text/csv",
     )
+
+    # LOT 상세 (단일 SKU 선택 시)
+    filtered_df = (
+        display_df if "SKU" in display_df.columns else view.reset_index().rename(columns={"resource_code": "SKU"})
+    )
+    visible_skus = filtered_df.get("SKU", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    if len(visible_skus) == 1 and load_snapshot_raw_fn is not None:
+        lot_sku = visible_skus[0]
+        raw_df = load_snapshot_raw_fn()
+        if raw_df is None or raw_df.empty:
+            st.caption("해당 조건의 로트 상세가 없습니다. (snapshot_raw 없음)")
+        else:
+            raw = raw_df.copy()
+            cols_map = {str(col).strip().lower(): col for col in raw.columns}
+            col_date = cols_map.get("snapshot_date") or cols_map.get("date")
+            col_sku = cols_map.get("resource_code") or cols_map.get("sku") or cols_map.get("상품코드")
+            col_lot = cols_map.get("lot")
+            used_centers = [ct for ct in selected_centers if CENTER_COL.get(ct) in raw.columns]
+            st.markdown(
+                f"### 로트 상세 (스냅샷 {latest_dt_str} / **{', '.join(selected_centers)}** / **{lot_sku}** )"
+            )
+            if not all([col_date, col_sku, col_lot]) or not used_centers:
+                st.caption("해당 조건의 로트 상세가 없습니다.")
+            else:
+                raw[col_date] = pd.to_datetime(raw[col_date], errors="coerce").dt.normalize()
+                lot_subset = raw[(raw[col_date] == latest_snapshot) & (raw[col_sku].astype(str) == str(lot_sku))].copy()
+                if lot_subset.empty:
+                    st.caption("해당 조건의 로트 상세가 없습니다.")
+                else:
+                    for center in used_centers:
+                        src_col = CENTER_COL.get(center)
+                        lot_subset[src_col] = pd.to_numeric(lot_subset[src_col], errors="coerce").fillna(0).clip(lower=0)
+                    lot_table = pd.DataFrame({"lot": lot_subset[col_lot].astype(str).fillna("(no lot)")})
+                    for center in used_centers:
+                        src_col = CENTER_COL.get(center)
+                        lot_table[center] = lot_subset.groupby(col_lot)[src_col].transform("sum")
+                    lot_table = lot_table.drop_duplicates()
+                    lot_table["합계"] = lot_table[used_centers].sum(axis=1)
+                    lot_table = lot_table[lot_table["합계"] > 0]
+                    if lot_table.empty:
+                        st.caption("해당 조건의 로트 상세가 없습니다.")
+                    else:
+                        st.dataframe(
+                            lot_table[["lot"] + used_centers + ["합계"]]
+                            .sort_values("합계", ascending=False)
+                            .reset_index(drop=True),
+                            use_container_width=True,
+                            height=320,
+                        )
 
     return display_df
 
