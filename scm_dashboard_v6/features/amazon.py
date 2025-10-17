@@ -30,6 +30,7 @@ def render_amazon_panel(
     use_consumption_forecast: bool = True,
     inv_actual: pd.DataFrame | None = None,
     inv_forecast: pd.DataFrame | None = None,
+    use_inventory_for_sales: bool = True,
 ) -> None:
     """아마존 패널을 렌더링한다 (v6).
 
@@ -68,7 +69,7 @@ def render_amazon_panel(
     except Exception:
         pass
 
-    extra: dict = {}
+    extra: dict = {"use_inventory_for_sales": bool(use_inventory_for_sales)}
     if inv_actual is not None:
         extra["inv_actual"] = inv_actual
     if inv_forecast is not None:
