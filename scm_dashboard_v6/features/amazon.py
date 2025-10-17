@@ -51,12 +51,13 @@ def render_amazon_panel(
         use_consumption_forecast=bool(use_consumption_forecast),
     )
 
-    # promotion_events가 있으면 첫 요소의 multiplier를 컨텍스트 힌트로도 남겨둔다
+    # v5 컨텍스트는 내부에서 promotion_events의 'uplift'를 읽어 멀티플라이어를 구성한다.
+    # 별도 힌트는 불필요하나, 디버그용으로 첫 이벤트의 상승률을 남겨둔다.
     if promotion_events:
         try:
             first = promotion_events[0]
-            mult = float(first.get("multiplier", 1.0))
-            setattr(ctx, "promotion_multiplier", mult)
+            uplift = float(first.get("uplift", 0.0))
+            setattr(ctx, "promotion_uplift_debug", uplift)
         except Exception:
             pass
 

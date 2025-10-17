@@ -202,6 +202,21 @@ def main() -> None:
         else None
     )
 
+    # 프로모션 설정에서 이벤트와 소비기반 예측 사용 여부 결정
+    promo_enabled = bool(getattr(ui, "promotion_enabled", False))
+    promo_events = (
+        [
+            {
+                "start": pd.to_datetime(getattr(ui, "promotion_start", today)).normalize(),
+                "end": pd.to_datetime(getattr(ui, "promotion_end", today)).normalize(),
+                # v5 컨텍스트는 'uplift' 비율을 기대 (예: 0.3 => +30%)
+                "uplift": float(getattr(ui, "promotion_percent", 0.0)) / 100.0,
+            }
+        ]
+        if promo_enabled
+        else None
+    )
+
     render_amazon_panel(
         snapshot_long=snapshot_df,
         moves=df_move,
@@ -212,18 +227,9 @@ def main() -> None:
         end=ui.end,
         today=today,
         lookback_days=ui.lookback_days,
-        promotion_events=(
-            [
-                {
-                    "start": pd.to_datetime(getattr(ui, "promotion_start", today)).normalize(),
-                    "end": pd.to_datetime(getattr(ui, "promotion_end", today)).normalize(),
-                    "multiplier": 1.0 + float(getattr(ui, "promotion_percent", 0.0)) / 100.0,
-                }
-            ]
-            if bool(getattr(ui, "promotion_enabled", False))
-            else None
-        ),
-        use_consumption_forecast=True,
+        promotion_events=promo_events,
+        # 프로모션 적용 시 소비기반 예측을 사용해 uplift가 반영되도록 함
+        use_consumption_forecast=not promo_enabled,
         inv_actual=inv_actual_tidy,
         inv_forecast=inv_forecast_tidy,
     )
