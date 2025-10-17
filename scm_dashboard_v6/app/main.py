@@ -52,7 +52,7 @@ def main() -> None:
             try:
                 wip_df = load_wip_from_incoming(df_incoming)
                 if wip_df is not None and not wip_df.empty:
-                df_move = merge_wip_as_moves(df_move, wip_df)
+                    df_move = merge_wip_as_moves(df_move, wip_df)
             except Exception:
                 pass
     except Exception as exc:
