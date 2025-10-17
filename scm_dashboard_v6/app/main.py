@@ -42,33 +42,40 @@ def main() -> None:
 
     st.markdown("### 데이터 소스")
     st.caption("초기 단계에서는 v5 로더 위임 — 후속 단계에서 v6 data로 전환")
+    # 기본값: 비어 있는 프레임으로 초기화(업로드 전용 화면 유지)
+    df_move = pd.DataFrame()
+    df_ref = pd.DataFrame()
+    df_incoming = pd.DataFrame()
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
-            df_move, df_ref, df_incoming = load_gsheet()
+            g_mv, g_ref, g_in = load_gsheet()
             # v5와 동일하게 정규화 (단, 이미 정규화된 경우는 중복 적용하지 않음)
-            df_move = normalize_moves(df_move)
+            g_mv = normalize_moves(g_mv)
             required_snap = {"date", "center", "resource_code", "stock_qty"}
-            if not required_snap.issubset(set(map(str, df_ref.columns))):
-                df_ref = normalize_refined_snapshot(df_ref)
-            # WIP를 moves로 병합 (v5 동작 유지)
+            if not required_snap.issubset(set(map(str, g_ref.columns))):
+                g_ref = normalize_refined_snapshot(g_ref)
+            # WIP 병합
             try:
-                wip_df = load_wip_from_incoming(df_incoming)
+                wip_df = load_wip_from_incoming(g_in)
                 if wip_df is not None and not wip_df.empty:
-                    df_move = merge_wip_as_moves(df_move, wip_df)
+                    g_mv = merge_wip_as_moves(g_mv, wip_df)
             except Exception:
                 pass
+            df_move, df_ref, df_incoming = g_mv, g_ref, g_in
+            st.success("Google Sheets 데이터가 로드되었습니다.")
     except Exception as exc:
-        st.error(f"데이터 로딩 실패: {exc}")
-        return
+        # 시크릿 부재 등으로 실패해도 업로드 경로를 노출해야 하므로 경고만 표시
+        st.warning("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다. 아래에서 엑셀 업로드를 이용하세요.")
 
     # 스냅샷 정규화: date 컬럼 통일
     snapshot_df = df_ref.copy()
-    if "date" in snapshot_df.columns:
-        snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
-    elif "snapshot_date" in snapshot_df.columns:
-        snapshot_df["date"] = pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
-    else:
-        snapshot_df["date"] = pd.NaT
+    if not snapshot_df.empty:
+        if "date" in snapshot_df.columns:
+            snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+        elif "snapshot_date" in snapshot_df.columns:
+            snapshot_df["date"] = pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
+        else:
+            snapshot_df["date"] = pd.NaT
 
     # (선택) 엑셀 업로드로 데이터 교체
     with st.expander("엑셀 파일 업로드 (선택)", expanded=False):
@@ -100,6 +107,12 @@ def main() -> None:
                 st.success("엑셀 데이터가 로드되었습니다.")
             except Exception as exc:
                 st.error(f"엑셀 데이터 로딩 실패: {exc}")
+
+    # 업로드/GS가 모두 실패한 경우에는 여기서 종료
+    required_snap = {"date", "center", "resource_code", "stock_qty"}
+    if snapshot_df.empty or not required_snap.issubset(set(map(str, snapshot_df.columns))):
+        st.info("스냅샷 데이터가 없습니다. 엑셀을 업로드해 주세요.")
+        return
 
     # 선택 옵션 후보 계산 (간단화)
     centers = sorted(snapshot_df.get("center", pd.Series([], dtype=str)).dropna().astype(str).unique().tolist())
