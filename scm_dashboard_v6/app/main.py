@@ -272,11 +272,12 @@ def main() -> None:
         today=today,
         lookback_days=ui.lookback_days,
         promotion_events=promo_events,
-        # 프로모션 시 내부 소비예측을 사용하고, 차트에서는 인벤토리기반 판매치 사용을 끈다
+        # 판매 예측은 v5 소비예측(추세+프로모션)을 사용
         use_consumption_forecast=True,
         inv_actual=inv_actual_param,
         inv_forecast=inv_forecast_param,
-        use_inventory_for_sales=not promo_enabled,
+        # 인벤토리 기반 판매 유도는 끈다(추세/프로모션 반영 우선)
+        use_inventory_for_sales=False,
     )
 
     # --- 아래부터 표/테이블 섹션 ---
