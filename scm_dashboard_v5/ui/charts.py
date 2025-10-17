@@ -1523,8 +1523,15 @@ def render_amazon_sales_vs_inventory(
     fig.add_vline(x=today, line_color="crimson", line_dash="dash", line_width=2)
 
     fig.update_layout(
-         # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
-        title="AMZUS",
+        # 내부 제목을 명확히 표시하되, 상단 여백/패딩을 늘려 겹침 방지
+        title=dict(
+            text="AMZ 일간 판매량 x 재고 흐름 (추세 반영)",
+            y=0.98,
+            x=0.0,
+            xanchor="left",
+            yanchor="top",
+            font=dict(size=16),
+        ),
         barmode="stack",
         legend=dict(
             orientation="h",
@@ -1535,8 +1542,8 @@ def render_amazon_sales_vs_inventory(
             traceorder="normal",
             bgcolor="rgba(255,255,255,0.6)",
         ),
-        # 상단 여백 축소해 겹침 방지
-        margin=dict(l=30, r=20, t=10, b=90),
+        # 상단 여백 확대하여 외부 섹션 헤더와 겹침 방지
+        margin=dict(l=30, r=20, t=60, b=90),
         hovermode="x unified",
         xaxis=dict(title="Date"),
         yaxis=dict(title="판매량 (EA/Day)", tickformat=",.0f"),
