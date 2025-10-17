@@ -77,9 +77,9 @@ def main() -> None:
 
     today = pd.Timestamp.today().normalize()
     latest_dt = snapshot_df["date"].dropna().max() if not snapshot_df.empty else pd.NaT
-    # v5와 동일하게 슬라이더 범위는 오늘 기준 ±42일로 설정 (데이터 범위와 무관)
+    # 스냅샷 과거는 42일, 미래 예측은 60일까지 보이도록 범위 설정
     bound_min = today - pd.Timedelta(days=42)
-    bound_max = today + pd.Timedelta(days=42)
+    bound_max = today + pd.Timedelta(days=60)
 
     ui = collect_sidebar_controls(
         centers=centers,
