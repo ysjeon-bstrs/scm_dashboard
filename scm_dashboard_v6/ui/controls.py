@@ -18,7 +18,10 @@ class UiSelections:
     start: pd.Timestamp
     end: pd.Timestamp
     lookback_days: int
+    promotion_enabled: bool
     promotion_percent: float
+    promotion_start: pd.Timestamp
+    promotion_end: pd.Timestamp
     inbound_lead_days: int
     show_production: bool
     show_in_transit: bool
@@ -80,11 +83,21 @@ def collect_sidebar_controls(
             )
         )
 
-        promo_percent = float(
-            st.number_input(
-                "프로모션 가중치(+%)", min_value=0.0, max_value=500.0, value=0.0, step=5.0, key="trend_promo_percent"
+        with st.expander("프로모션 가중치", expanded=False):
+            promo_enabled = bool(
+                st.checkbox("가중치 적용", value=False, key="promo_enabled")
             )
-        )
+            promo_start = pd.Timestamp(
+                st.date_input("시작일", value=today.to_pydatetime(), key="promo_start")
+            ).normalize()
+            promo_end = pd.Timestamp(
+                st.date_input("종료일", value=today.to_pydatetime(), key="promo_end")
+            ).normalize()
+            promo_percent = float(
+                st.number_input(
+                    "가중치(%)", min_value=0.0, max_value=500.0, value=30.0, step=1.0, format="%.2f", key="promo_percent"
+                )
+            )
 
         st.subheader("입고 반영 가정")
         inbound_lead_days = int(
@@ -104,7 +117,10 @@ def collect_sidebar_controls(
         start=start_ts,
         end=end_ts,
         lookback_days=lookback_days,
+        promotion_enabled=promo_enabled,
         promotion_percent=promo_percent,
+        promotion_start=promo_start,
+        promotion_end=promo_end,
         inbound_lead_days=inbound_lead_days,
         show_production=bool(show_prod),
         show_in_transit=bool(show_transit),

@@ -211,7 +211,17 @@ def main() -> None:
         end=ui.end,
         today=today,
         lookback_days=ui.lookback_days,
-        promotion_events=None,
+        promotion_events=(
+            [
+                {
+                    "start": pd.to_datetime(getattr(ui, "promotion_start", today)).normalize(),
+                    "end": pd.to_datetime(getattr(ui, "promotion_end", today)).normalize(),
+                    "multiplier": 1.0 + float(getattr(ui, "promotion_percent", 0.0)) / 100.0,
+                }
+            ]
+            if bool(getattr(ui, "promotion_enabled", False))
+            else None
+        ),
         use_consumption_forecast=True,
         inv_actual=inv_actual_tidy,
         inv_forecast=inv_forecast_tidy,
