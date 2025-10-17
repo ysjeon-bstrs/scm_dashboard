@@ -175,7 +175,7 @@ def main() -> None:
         end=ui.end,
         lookback_days=ui.lookback_days,
         horizon_pad_days=60,
-        events=[],
+        events=(promo_events or []),
     )
 
     st.subheader("타임라인")
