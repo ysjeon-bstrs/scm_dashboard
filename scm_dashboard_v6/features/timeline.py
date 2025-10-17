@@ -71,8 +71,10 @@ def render_timeline_section(
         start=start,
         end=end,
         today=today,
-        show_production=show_production,
+        # v5 렌더러가 show_wip/ show_production 둘 다 받지만, 명시적으로 show_wip을 전달
+        show_wip=show_production,
         show_in_transit=show_in_transit,
     )
 
     return timeline_adj
+
