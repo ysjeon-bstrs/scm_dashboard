@@ -74,6 +74,7 @@ def render_timeline_section(
         # v5 렌더러가 show_wip/ show_production 둘 다 받지만, 명시적으로 show_wip을 전달
         show_wip=show_production,
         show_in_transit=show_in_transit,
+        title="선택한 SKU × 센터 재고",
     )
 
     return timeline_adj
