@@ -22,7 +22,7 @@ from scm_dashboard_v6.ui.controls import collect_sidebar_controls
 from scm_dashboard_v6.features.timeline import render_timeline_section
 from scm_dashboard_v6.features.amazon import render_amazon_panel
 from scm_dashboard_v6.features.inventory_view import render_inventory_pivot
-from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw
+from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
 
 
 def main() -> None:
@@ -47,6 +47,25 @@ def main() -> None:
         snapshot_df["date"] = pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
     else:
         snapshot_df["date"] = pd.NaT
+
+    # (선택) 엑셀 업로드로 데이터 교체
+    with st.expander("엑셀 파일 업로드 (선택)", expanded=False):
+        st.caption("필요할 때 업로드하면 현재 데이터 소스를 엑셀로 교체합니다.")
+        up = st.file_uploader("엑셀 업로드 (.xlsx)", type=["xlsx"], key="v6_excel")
+        if up is not None:
+            try:
+                df_move_x, df_ref_x, _df_incoming_x, _ = load_excel(up)
+                df_move = df_move_x.copy()
+                snapshot_df = df_ref_x.copy()
+                if "date" in snapshot_df.columns:
+                    snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
+                elif "snapshot_date" in snapshot_df.columns:
+                    snapshot_df["date"] = pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
+                else:
+                    snapshot_df["date"] = pd.NaT
+                st.success("엑셀 데이터가 로드되었습니다.")
+            except Exception as exc:
+                st.error(f"엑셀 데이터 로딩 실패: {exc}")
 
     # 선택 옵션 후보 계산 (간단화)
     centers = sorted(snapshot_df.get("center", pd.Series([], dtype=str)).dropna().astype(str).unique().tolist())
