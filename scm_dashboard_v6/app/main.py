@@ -240,7 +240,6 @@ def main() -> None:
     )
 
     st.divider()
-    st.subheader("선택 센터 현재 재고 (최신 스냅샷)")
     _ = render_inventory_pivot(
         snapshot=snapshot_df,
         centers=ui.centers,
