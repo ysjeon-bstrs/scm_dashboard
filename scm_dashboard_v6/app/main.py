@@ -301,6 +301,25 @@ def main() -> None:
     except Exception:
         pass
 
+    # 오늘 이후 예측 판매 = 예측 재고 감소량으로 강제 동기화할 선택적 프레임 생성
+    sales_from_inv: pd.DataFrame | None = None
+    try:
+        if inv_forecast_tidy is not None and not inv_forecast_tidy.empty:
+            pivot_inv = (
+                inv_forecast_tidy.groupby(["date", "resource_code"]) ["stock_qty"].sum().unstack("resource_code")
+            )
+            pivot_inv = pivot_inv.sort_index().asfreq("D").ffill().fillna(0.0)
+            diff = pivot_inv.diff()
+            sales = (-diff).clip(lower=0.0)
+            future = sales.loc[sales.index > today]
+            if not future.empty:
+                sales_from_inv = (
+                    future.stack().reset_index().rename(columns={"level_0": "date", "level_1": "resource_code", 0: "sales_qty"})
+                )
+                sales_from_inv["date"] = pd.to_datetime(sales_from_inv["date"], errors="coerce").dt.normalize()
+    except Exception:
+        pass
+
     render_amazon_panel(
         snapshot_long=snapshot_for_amazon,
         moves=df_move,
@@ -318,6 +337,7 @@ def main() -> None:
         inv_forecast=inv_forecast_param,
         # 인벤토리 기반 판매 유도는 끈다(추세/프로모션 반영 우선)
         use_inventory_for_sales=False,
+        sales_forecast_from_inventory=sales_from_inv,
     )
 
     # --- 아래부터 표/테이블 섹션 ---

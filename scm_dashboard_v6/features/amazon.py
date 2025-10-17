@@ -31,6 +31,7 @@ def render_amazon_panel(
     inv_actual: pd.DataFrame | None = None,
     inv_forecast: pd.DataFrame | None = None,
     use_inventory_for_sales: bool = True,
+    sales_forecast_from_inventory: Optional[pd.DataFrame] = None,
 ) -> None:
     """아마존 패널을 렌더링한다 (v6).
 
@@ -84,6 +85,17 @@ def render_amazon_panel(
         extra["inv_actual"] = inv_actual
     if inv_forecast is not None:
         extra["inv_forecast"] = inv_forecast
+
+    # v6: 오늘 이후 판매 예측을 inv_forecast 감소량으로 강제 동기화하고 싶을 때 사용
+    if sales_forecast_from_inventory is not None and not sales_forecast_from_inventory.empty:
+        try:
+            # ctx.sales_forecast 형식과 동일 컬럼(date, resource_code, sales_qty)
+            forced = sales_forecast_from_inventory.copy()
+            forced["date"] = pd.to_datetime(forced["date"], errors="coerce").dt.normalize()
+            forced = forced.dropna(subset=["date"]) 
+            setattr(ctx, "sales_forecast", forced)
+        except Exception:
+            pass
 
     render_amazon_sales_vs_inventory(ctx, **extra)
 
