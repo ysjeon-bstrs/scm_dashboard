@@ -206,21 +206,13 @@ def main() -> None:
         inv_forecast=inv_forecast_tidy,
     )
 
-    st.divider()
-    st.subheader("선택 센터 현재 재고 (최신 스냅샷)")
+    # --- 아래부터 표/테이블 섹션 ---
     # 간단 품명 매핑 (있으면)
     name_map: dict[str, str] = {}
     if "resource_name" in snapshot_df.columns:
         rows = snapshot_df.loc[snapshot_df["resource_name"].notna(), ["resource_code", "resource_name"]].copy()
         if not rows.empty:
             name_map = rows.drop_duplicates("resource_code").set_index("resource_code")["resource_name"].to_dict()
-
-    _ = render_inventory_pivot(
-        snapshot=snapshot_df,
-        centers=ui.centers,
-        latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
-        resource_name_map=name_map,
-    )
 
     # 확정 입고 / WIP 진행 현황 표 표시
     window_start = ui.start
@@ -244,6 +236,15 @@ def main() -> None:
         window_start=window_start,
         window_end=window_end,
         today=today,
+        resource_name_map=name_map,
+    )
+
+    st.divider()
+    st.subheader("선택 센터 현재 재고 (최신 스냅샷)")
+    _ = render_inventory_pivot(
+        snapshot=snapshot_df,
+        centers=ui.centers,
+        latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
         resource_name_map=name_map,
     )
 
