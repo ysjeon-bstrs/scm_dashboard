@@ -27,7 +27,12 @@ from scm_dashboard_v6.features.inventory_view import (
     render_wip_progress,
 )
 from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
-from scm_dashboard_v4.processing import load_wip_from_incoming, merge_wip_as_moves
+from scm_dashboard_v4.processing import (
+    load_wip_from_incoming,
+    merge_wip_as_moves,
+    normalize_moves,
+    normalize_refined_snapshot,
+)
 
 
 def main() -> None:
@@ -40,11 +45,14 @@ def main() -> None:
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
             df_move, df_ref, df_incoming = load_gsheet()
+            # v5와 동일하게 정규화
+            df_move = normalize_moves(df_move)
+            df_ref = normalize_refined_snapshot(df_ref)
             # WIP를 moves로 병합 (v5 동작 유지)
             try:
                 wip_df = load_wip_from_incoming(df_incoming)
                 if wip_df is not None and not wip_df.empty:
-                    df_move = merge_wip_as_moves(df_move, wip_df)
+                df_move = merge_wip_as_moves(df_move, wip_df)
             except Exception:
                 pass
     except Exception as exc:
@@ -67,6 +75,9 @@ def main() -> None:
         if up is not None:
             try:
                 df_move_x, df_ref_x, _df_incoming_x, _ = load_excel(up)
+                # 정규화
+                df_move_x = normalize_moves(df_move_x)
+                df_ref_x = normalize_refined_snapshot(df_ref_x)
                 # 업로드에서도 WIP 병합
                 try:
                     wip_x = load_wip_from_incoming(_df_incoming_x)
