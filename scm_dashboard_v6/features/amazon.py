@@ -51,6 +51,13 @@ def render_amazon_panel(
         use_consumption_forecast=bool(use_consumption_forecast),
     )
 
+    # v5 차트 내부에서 moves_df의 event_date 가공을 기대하는 경로가 있어
+    # 클라우드 환경 스키마 차이로 오류가 발생하는 경우를 회피: moves 사용 비활성화
+    try:
+        setattr(ctx, "moves", pd.DataFrame())
+    except Exception:
+        pass
+
     extra: dict = {}
     if inv_actual is not None:
         extra["inv_actual"] = inv_actual
