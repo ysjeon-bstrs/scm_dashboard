@@ -127,7 +127,8 @@ def render_inventory_pivot(
     # 숫자 표기: 3자리 구분(,)
     try:
         num_cols = [c for c in display_df.columns if pd.api.types.is_numeric_dtype(display_df[c])]
-        styled = display_df.style.format({col: "," for col in num_cols})
+        fmt_map = {col: "{:,}" for col in num_cols}
+        styled = display_df.style.format(fmt_map)
         st.dataframe(styled, use_container_width=True, height=380)
     except Exception:
         st.dataframe(display_df, use_container_width=True, height=380)
