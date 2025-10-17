@@ -79,7 +79,12 @@ def collect_sidebar_controls(
         st.subheader("추세 계산 설정")
         lookback_days = int(
             st.number_input(
-                "추세 계산 기간(일)", min_value=7, max_value=56, value=28, step=7, key="trend_lookback_days"
+                "추세 계산 기간(스냅샷 기준 최대 42일)",
+                min_value=7,
+                max_value=42,
+                value=28,
+                step=7,
+                key="trend_lookback_days",
             )
         )
 
