@@ -45,9 +45,11 @@ def main() -> None:
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
             df_move, df_ref, df_incoming = load_gsheet()
-            # v5와 동일하게 정규화
+            # v5와 동일하게 정규화 (단, 이미 정규화된 경우는 중복 적용하지 않음)
             df_move = normalize_moves(df_move)
-            df_ref = normalize_refined_snapshot(df_ref)
+            required_snap = {"date", "center", "resource_code", "stock_qty"}
+            if not required_snap.issubset(set(map(str, df_ref.columns))):
+                df_ref = normalize_refined_snapshot(df_ref)
             # WIP를 moves로 병합 (v5 동작 유지)
             try:
                 wip_df = load_wip_from_incoming(df_incoming)
@@ -75,9 +77,11 @@ def main() -> None:
         if up is not None:
             try:
                 df_move_x, df_ref_x, _df_incoming_x, _ = load_excel(up)
-                # 정규화
+                # 정규화 (이미 정규화된 경우는 생략)
                 df_move_x = normalize_moves(df_move_x)
-                df_ref_x = normalize_refined_snapshot(df_ref_x)
+                required_snap = {"date", "center", "resource_code", "stock_qty"}
+                if not required_snap.issubset(set(map(str, df_ref_x.columns))):
+                    df_ref_x = normalize_refined_snapshot(df_ref_x)
                 # 업로드에서도 WIP 병합
                 try:
                     wip_x = load_wip_from_incoming(_df_incoming_x)
