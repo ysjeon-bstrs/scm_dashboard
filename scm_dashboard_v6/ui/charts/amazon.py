@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 from scm_dashboard_v5.ui.charts import render_amazon_sales_vs_inventory as _v5_render
 
 
@@ -20,6 +21,19 @@ def render_amazon_sales_vs_inventory(ctx: Any, **kwargs: Any) -> None:
     kwargs: 향후 v6 옵션을 전달하기 위한 확장 포인트
     """
 
-    _v5_render(ctx, **kwargs)
+    try:
+        _v5_render(ctx, **kwargs)
+    except AttributeError:
+        # Cloud 환경에서 moves_df의 event_date가 없어 발생하는 경로를 우회
+        try:
+            setattr(
+                ctx,
+                "moves",
+                pd.DataFrame(columns=["event_date", "to_center", "resource_code", "qty_ea"]),
+            )
+        except Exception:
+            pass
+        _v5_render(ctx, **kwargs)
+
 
 
