@@ -82,7 +82,7 @@ def render_inventory_pivot(
     # 표시 옵션: 총합 0 숨기기 / 재고자산(제조원가)
     opt_col1, opt_col2 = st.columns([1, 1])
     with opt_col1:
-        hide_zero = st.checkbox("총합 0 숨기기", value=False, key="v6_hide_zero_total")
+        hide_zero = st.checkbox("총합=0 숨기기", value=True, key="v6_hide_zero_total")
     with opt_col2:
         show_cost = st.checkbox("재고자산(제조원가) 표시", value=False, key="v6_show_cost")
 
@@ -92,7 +92,7 @@ def render_inventory_pivot(
     if sort_by in view.columns:
         view = view.sort_values(by=sort_by, ascending=False)
     if hide_zero and "총합" in view.columns:
-        view = view[view["총합"] != 0]
+        view = view[view["총합"] > 0]
 
     display_df = view.reset_index().rename(columns={"resource_code": "SKU"})
     if resource_name_map:
@@ -124,12 +124,21 @@ def render_inventory_pivot(
                     merged["총합_재고자산"] = merged[cost_cols].sum(axis=1)
                 display_df = merged
 
-    # 숫자 표기: 3자리 구분(,)
+    # 숫자 표기: 수량/총합은 천단위 구분. 비용은 '원' 단위 표기
     try:
-        num_cols = [c for c in display_df.columns if pd.api.types.is_numeric_dtype(display_df[c])]
-        fmt_map = {col: "{:,}" for col in num_cols}
-        styled = display_df.style.format(fmt_map)
-        st.dataframe(styled, use_container_width=True, height=380)
+        cost_cols = [c for c in display_df.columns if str(c).endswith("_재고자산") or c == "총 재고자산"]
+        qty_cols = [
+            c for c in display_df.columns
+            if c not in {"SKU", "품명"} and c not in cost_cols
+        ]
+        df_fmt = display_df.copy()
+        for col in qty_cols:
+            if pd.api.types.is_numeric_dtype(df_fmt[col]):
+                df_fmt[col] = df_fmt[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else x)
+        for col in cost_cols:
+            if pd.api.types.is_numeric_dtype(df_fmt[col]):
+                df_fmt[col] = df_fmt[col].apply(lambda x: f"{int(x):,}원" if pd.notna(x) else x)
+        st.dataframe(df_fmt, use_container_width=True, height=380)
     except Exception:
         st.dataframe(display_df, use_container_width=True, height=380)
 
