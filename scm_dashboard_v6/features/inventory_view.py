@@ -63,3 +63,145 @@ def render_inventory_pivot(
     )
 
     return display_df
+
+
+def _ensure_move_columns(moves: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "carrier_mode",
+        "to_center",
+        "resource_code",
+        "inbound_date",
+        "arrival_date",
+        "onboard_date",
+        "event_date",
+        "lot",
+    ]
+    mv = moves.copy()
+    for col in cols:
+        if col not in mv.columns:
+            if "date" in col:
+                mv[col] = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+            else:
+                mv[col] = ""
+    return mv
+
+
+def _attach_pred_inbound(mv: pd.DataFrame, *, today: pd.Timestamp, lag_days: int) -> pd.DataFrame:
+    mv = mv.copy()
+    pred = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+    if "inbound_date" in mv.columns:
+        mask_in = mv["inbound_date"].notna()
+        pred.loc[mask_in] = mv.loc[mask_in, "inbound_date"]
+    mask_in = mv["inbound_date"].notna() if "inbound_date" in mv.columns else pd.Series(False, index=mv.index)
+    arr = mv.get("arrival_date")
+    mask_arrival = (~mask_in) & arr.notna() if arr is not None else pd.Series(False, index=mv.index)
+    if mask_arrival.any():
+        past_arr = mask_arrival & (arr <= today)
+        if past_arr.any():
+            pred.loc[past_arr] = mv.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+        fut_arr = mask_arrival & (arr > today)
+        if fut_arr.any():
+            pred.loc[fut_arr] = mv.loc[fut_arr, "arrival_date"]
+    mv["pred_inbound_date"] = pred
+    return mv
+
+
+def render_upcoming_inbound(
+    *,
+    moves: pd.DataFrame,
+    centers: Iterable[str],
+    skus: Iterable[str],
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp,
+    today: pd.Timestamp,
+    lag_days: int,
+    resource_name_map: Optional[dict[str, str]] = None,
+) -> None:
+    """확정 입고(Upcoming Inbound) 표를 렌더링한다 (v6)."""
+
+    mv = _ensure_move_columns(moves)
+    mv = _attach_pred_inbound(mv, today=today, lag_days=lag_days)
+    arr_transport = mv[
+        (mv["carrier_mode"] != "WIP")
+        & (mv["to_center"].isin([str(c) for c in centers]))
+        & (mv["resource_code"].isin([str(s) for s in skus]))
+        & (mv["inbound_date"].isna())
+    ].copy()
+    arr_transport["display_date"] = arr_transport["arrival_date"].fillna(arr_transport["onboard_date"])
+    arr_transport = arr_transport[arr_transport["display_date"].notna()]
+    arr_transport = arr_transport[(arr_transport["display_date"] >= window_start) & (arr_transport["display_date"] <= window_end)]
+
+    st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
+    if arr_transport.empty:
+        st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
+        return
+
+    if resource_name_map:
+        arr_transport["resource_name"] = arr_transport["resource_code"].map(resource_name_map).fillna("")
+    arr_transport["days_to_arrival"] = (arr_transport["display_date"].dt.normalize() - today).dt.days
+    arr_transport["days_to_inbound"] = (arr_transport["pred_inbound_date"].dt.normalize() - today).dt.days
+    arr_transport = arr_transport.sort_values(
+        ["display_date", "to_center", "resource_code", "qty_ea"], ascending=[True, True, True, False]
+    )
+    inbound_cols = [
+        "display_date",
+        "days_to_arrival",
+        "to_center",
+        "resource_code",
+        "resource_name",
+        "qty_ea",
+        "carrier_mode",
+        "onboard_date",
+        "pred_inbound_date",
+        "days_to_inbound",
+        "lot",
+    ]
+    inbound_cols = [c for c in inbound_cols if c in arr_transport.columns]
+    st.dataframe(arr_transport[inbound_cols].head(1000), use_container_width=True, height=300)
+    st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
+
+
+def render_wip_progress(
+    *,
+    moves: pd.DataFrame,
+    centers: Iterable[str],
+    skus: Iterable[str],
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp,
+    today: pd.Timestamp,
+    resource_name_map: Optional[dict[str, str]] = None,
+) -> None:
+    """생산중(WIP) 진행 현황 표를 렌더링한다 (v6)."""
+
+    mv = _ensure_move_columns(moves)
+    arr_wip = mv[
+        (mv["carrier_mode"] == "WIP")
+        & (mv["to_center"].isin(["태광KR"]))
+        & (mv["resource_code"].isin([str(s) for s in skus]))
+        & (mv["event_date"].notna())
+        & (mv["event_date"] >= window_start)
+        & (mv["event_date"] <= window_end)
+    ].copy()
+    arr_wip["display_date"] = arr_wip["event_date"]
+
+    st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+    if arr_wip.empty:
+        st.caption("생산중(WIP) 데이터가 없습니다.")
+        return
+
+    if resource_name_map:
+        arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
+    arr_wip = arr_wip.sort_values(["display_date", "resource_code", "qty_ea"], ascending=[True, True, False])
+    arr_wip["days_to_completion"] = (arr_wip["display_date"].dt.normalize() - today).dt.days
+    wip_cols = [
+        "display_date",
+        "days_to_completion",
+        "resource_code",
+        "resource_name",
+        "qty_ea",
+        "pred_inbound_date",
+        "lot",
+    ]
+    wip_cols = [c for c in wip_cols if c in arr_wip.columns]
+    st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
+

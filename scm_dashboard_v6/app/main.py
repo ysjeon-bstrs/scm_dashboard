@@ -21,7 +21,11 @@ import streamlit as st
 from scm_dashboard_v6.ui.controls import collect_sidebar_controls
 from scm_dashboard_v6.features.timeline import render_timeline_section
 from scm_dashboard_v6.features.amazon import render_amazon_panel
-from scm_dashboard_v6.features.inventory_view import render_inventory_pivot
+from scm_dashboard_v6.features.inventory_view import (
+    render_inventory_pivot,
+    render_upcoming_inbound,
+    render_wip_progress,
+)
 from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
 from scm_dashboard_v4.processing import load_wip_from_incoming, merge_wip_as_moves
 
@@ -164,6 +168,31 @@ def main() -> None:
         snapshot=snapshot_df,
         centers=ui.centers,
         latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
+        resource_name_map=name_map,
+    )
+
+    # 확정 입고 / WIP 진행 현황 표 표시
+    window_start = ui.start
+    window_end = ui.end
+    lag_days = 7
+    st.divider()
+    render_upcoming_inbound(
+        moves=df_move,
+        centers=ui.centers,
+        skus=ui.skus,
+        window_start=window_start,
+        window_end=window_end,
+        today=today,
+        lag_days=lag_days,
+        resource_name_map=name_map,
+    )
+    render_wip_progress(
+        moves=df_move,
+        centers=ui.centers,
+        skus=ui.skus,
+        window_start=window_start,
+        window_end=window_end,
+        today=today,
         resource_name_map=name_map,
     )
 
