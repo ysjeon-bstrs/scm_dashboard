@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 
@@ -27,6 +27,7 @@ def render_timeline_section(
     today: pd.Timestamp,
     lookback_days: int,
     lag_days: int,
+    promotion_events: Optional[List[dict]] = None,
     show_production: bool,
     show_in_transit: bool,
 ) -> pd.DataFrame:
@@ -60,7 +61,7 @@ def render_timeline_section(
         start=start,
         end=end,
         lookback_days=int(lookback_days),
-        events=[],
+        events=(promotion_events or []),
     )
     if timeline_adj is None or timeline_adj.empty:
         timeline_adj = timeline

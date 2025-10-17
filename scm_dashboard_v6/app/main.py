@@ -176,6 +176,7 @@ def main() -> None:
         today=today,
         lookback_days=ui.lookback_days,
         lag_days=int(getattr(ui, "inbound_lead_days", 7) or 7),
+        promotion_events=promo_events or [],
         show_production=ui.show_production,
         show_in_transit=ui.show_in_transit,
     )
