@@ -216,6 +216,37 @@ def main() -> None:
         else None
     )
 
+    # 안전장치: 타임라인에 입고 반영이 누락된 경우, moves 기반 입고량을 미래 재고에 가산
+    try:
+        if inv_forecast_tidy is not None and not inv_forecast_tidy.empty and not df_move.empty:
+            mv = df_move.copy()
+            if "event_date" in mv.columns:
+                mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
+            mv["to_center"] = mv.get("to_center", "").astype(str)
+            mv["resource_code"] = mv.get("resource_code", "").astype(str)
+            mv["qty_ea"] = pd.to_numeric(mv.get("qty_ea"), errors="coerce").fillna(0)
+            inbound = mv[
+                (mv["to_center"].isin(amazon_centers))
+                & (mv["event_date"].notna())
+                & (mv["event_date"] > today)
+                & (mv["resource_code"].isin(ui.skus))
+            ][["event_date", "resource_code", "qty_ea"]]
+            if not inbound.empty:
+                inbound = (
+                    inbound.groupby(["event_date", "resource_code"], as_index=False)["qty_ea"].sum()
+                    .rename(columns={"event_date": "date"})
+                )
+                base = inv_forecast_tidy.copy()
+                base["date"] = pd.to_datetime(base["date"], errors="coerce").dt.normalize()
+                base["resource_code"] = base.get("resource_code", "").astype(str)
+                base["stock_qty"] = pd.to_numeric(base.get("stock_qty"), errors="coerce").fillna(0.0)
+                merged = base.merge(inbound, on=["date", "resource_code"], how="left")
+                merged["qty_ea"] = pd.to_numeric(merged.get("qty_ea"), errors="coerce").fillna(0.0)
+                merged["stock_qty"] = (merged["stock_qty"] + merged["qty_ea"]).astype(float)
+                inv_forecast_tidy = merged.drop(columns=["qty_ea"], errors="ignore")
+    except Exception:
+        pass
+
     # 프로모션 여부와 무관하게 인벤토리 추세는 스텝 타임라인 값을 사용해 일관성 유지
     inv_actual_param = inv_actual_tidy
     inv_forecast_param = inv_forecast_tidy
