@@ -124,7 +124,13 @@ def render_inventory_pivot(
                     merged["총합_재고자산"] = merged[cost_cols].sum(axis=1)
                 display_df = merged
 
-    st.dataframe(display_df, use_container_width=True, height=380)
+    # 숫자 표기: 3자리 구분(,)
+    try:
+        num_cols = [c for c in display_df.columns if pd.api.types.is_numeric_dtype(display_df[c])]
+        styled = display_df.style.format({col: "," for col in num_cols})
+        st.dataframe(styled, use_container_width=True, height=380)
+    except Exception:
+        st.dataframe(display_df, use_container_width=True, height=380)
 
     csv_bytes = display_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
