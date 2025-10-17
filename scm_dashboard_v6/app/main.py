@@ -46,13 +46,14 @@ def main() -> None:
     df_move = pd.DataFrame()
     df_ref = pd.DataFrame()
     df_incoming = pd.DataFrame()
+    gsheet_loaded = False
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
             g_mv, g_ref, g_in = load_gsheet()
             # v5와 동일하게 정규화 (단, 이미 정규화된 경우는 중복 적용하지 않음)
             g_mv = normalize_moves(g_mv)
             required_snap = {"date", "center", "resource_code", "stock_qty"}
-            if not required_snap.issubset(set(map(str, g_ref.columns))):
+            if not g_ref.empty and not required_snap.issubset(set(map(str, g_ref.columns))):
                 g_ref = normalize_refined_snapshot(g_ref)
             # WIP 병합
             try:
@@ -62,10 +63,12 @@ def main() -> None:
             except Exception:
                 pass
             df_move, df_ref, df_incoming = g_mv, g_ref, g_in
-            st.success("Google Sheets 데이터가 로드되었습니다.")
+            gsheet_loaded = True
     except Exception as exc:
         # 시크릿 부재 등으로 실패해도 업로드 경로를 노출해야 하므로 경고만 표시
         st.warning("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다. 아래에서 엑셀 업로드를 이용하세요.")
+    if gsheet_loaded:
+        st.success("Google Sheets 데이터가 로드되었습니다.")
 
     # 스냅샷 정규화: date 컬럼 통일
     snapshot_df = df_ref.copy()
@@ -87,7 +90,7 @@ def main() -> None:
                 # 정규화 (이미 정규화된 경우는 생략)
                 df_move_x = normalize_moves(df_move_x)
                 required_snap = {"date", "center", "resource_code", "stock_qty"}
-                if not required_snap.issubset(set(map(str, df_ref_x.columns))):
+                if not df_ref_x.empty and not required_snap.issubset(set(map(str, df_ref_x.columns))):
                     df_ref_x = normalize_refined_snapshot(df_ref_x)
                 # 업로드에서도 WIP 병합
                 try:
@@ -112,6 +115,7 @@ def main() -> None:
     required_snap = {"date", "center", "resource_code", "stock_qty"}
     if snapshot_df.empty or not required_snap.issubset(set(map(str, snapshot_df.columns))):
         st.info("스냅샷 데이터가 없습니다. 엑셀을 업로드해 주세요.")
+        # 업로드 영역은 이미 상단에서 노출되어 있음. 초기에 차트/표 렌더는 건너뜀
         return
 
     # 선택 옵션 후보 계산 (간단화)
