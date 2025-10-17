@@ -63,7 +63,8 @@ def main() -> None:
             except Exception:
                 pass
             df_move, df_ref, df_incoming = g_mv, g_ref, g_in
-            gsheet_loaded = True
+            # 최소 유효성 통과 시에만 성공 메시지 표시
+            gsheet_loaded = (not g_ref.empty) and required_snap.issubset(set(map(str, g_ref.columns)))
     except Exception as exc:
         # 시크릿 부재 등으로 실패해도 업로드 경로를 노출해야 하므로 경고만 표시
         st.warning("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다. 아래에서 엑셀 업로드를 이용하세요.")
