@@ -26,6 +26,7 @@ def render_timeline_section(
     end: pd.Timestamp,
     today: pd.Timestamp,
     lookback_days: int,
+    lag_days: int,
     show_production: bool,
     show_in_transit: bool,
 ) -> pd.DataFrame:
@@ -43,6 +44,7 @@ def render_timeline_section(
         start=start,
         end=end,
         today=today,
+        lag_days=int(lag_days),
         horizon_days=max(0, int((end - today).days)),
     )
 

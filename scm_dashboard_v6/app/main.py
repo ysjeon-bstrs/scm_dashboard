@@ -175,6 +175,7 @@ def main() -> None:
         end=ui.end,
         today=today,
         lookback_days=ui.lookback_days,
+        lag_days=int(getattr(ui, "inbound_lead_days", 7) or 7),
         show_production=ui.show_production,
         show_in_transit=ui.show_in_transit,
     )
