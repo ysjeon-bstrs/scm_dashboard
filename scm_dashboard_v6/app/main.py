@@ -27,6 +27,7 @@ from scm_dashboard_v6.features.inventory_view import (
     render_wip_progress,
 )
 from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
+from scm_dashboard_v5.ui import render_sku_summary_cards
 from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
     merge_wip_as_moves,
@@ -138,6 +139,23 @@ def main() -> None:
         skus=skus,
         bound_min=pd.Timestamp(bound_min).normalize(),
         bound_max=pd.Timestamp(bound_max).normalize(),
+    )
+
+    # 요약 KPI (v5와 동일 호출)
+    st.subheader("요약 KPI")
+    render_sku_summary_cards(
+        snapshot_df,
+        df_move,
+        centers=ui.centers,
+        skus=ui.skus,
+        today=today,
+        latest_snapshot=latest_dt,
+        lag_days=7,
+        start=ui.start,
+        end=ui.end,
+        lookback_days=ui.lookback_days,
+        horizon_pad_days=60,
+        events=[],
     )
 
     st.subheader("타임라인")
