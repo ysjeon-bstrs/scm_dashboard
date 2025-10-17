@@ -1485,6 +1485,7 @@ def render_amazon_sales_vs_inventory(
                     mode="lines",
                     name=f"{sku} 재고(실측)",
                     line=dict(color=color, width=2),
+                    line_shape="hv",
                     yaxis="y2",
                     hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
                 )
@@ -1500,6 +1501,7 @@ def render_amazon_sales_vs_inventory(
                     mode="lines",
                     name=f"{sku} 재고(예측)",
                     line=dict(color=color, width=2, dash="dot"),
+                    line_shape="hv",
                     yaxis="y2",
                     hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
                 )
