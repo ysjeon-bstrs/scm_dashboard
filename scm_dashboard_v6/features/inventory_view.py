@@ -21,6 +21,7 @@ def render_inventory_pivot(
     latest_snapshot: pd.Timestamp,
     resource_name_map: Optional[dict[str, str]] = None,
     load_snapshot_raw_fn: Optional[Callable[[], pd.DataFrame]] = None,
+    snapshot_raw: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """선택 센터의 최신 스냅샷 기준 피벗 테이블 + 검색/정렬 + LOT 상세를 렌더링한다."""
 
@@ -102,9 +103,9 @@ def render_inventory_pivot(
         display_df if "SKU" in display_df.columns else view.reset_index().rename(columns={"resource_code": "SKU"})
     )
     visible_skus = filtered_df.get("SKU", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
-    if len(visible_skus) == 1 and load_snapshot_raw_fn is not None:
+    if len(visible_skus) == 1:
         lot_sku = visible_skus[0]
-        raw_df = load_snapshot_raw_fn()
+        raw_df = snapshot_raw if snapshot_raw is not None else (load_snapshot_raw_fn() if load_snapshot_raw_fn else None)
         if raw_df is None or raw_df.empty:
             st.caption("해당 조건의 로트 상세가 없습니다. (snapshot_raw 없음)")
         else:

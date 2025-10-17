@@ -47,6 +47,7 @@ def main() -> None:
     df_move = pd.DataFrame()
     df_ref = pd.DataFrame()
     df_incoming = pd.DataFrame()
+    snapshot_raw_df = None
     gsheet_loaded = False
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
@@ -66,6 +67,11 @@ def main() -> None:
             df_move, df_ref, df_incoming = g_mv, g_ref, g_in
             # 최소 유효성 통과 시에만 성공 메시지 표시
             gsheet_loaded = (not g_ref.empty) and required_snap.issubset(set(map(str, g_ref.columns)))
+            # GSheet 경로에서는 snapshot_raw를 별도로 로드 (세션 캐시 활용)
+            try:
+                snapshot_raw_df = load_snapshot_raw()
+            except Exception:
+                snapshot_raw_df = None
     except Exception as exc:
         # 시크릿 부재 등으로 실패해도 업로드 경로를 노출해야 하므로 경고만 표시
         st.warning("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다. 아래에서 엑셀 업로드를 이용하세요.")
@@ -88,7 +94,7 @@ def main() -> None:
         up = st.file_uploader("엑셀 업로드 (.xlsx)", type=["xlsx"], key="v6_excel")
         if up is not None:
             try:
-                df_move_x, df_ref_x, _df_incoming_x, _ = load_excel(up)
+                df_move_x, df_ref_x, _df_incoming_x, snapshot_raw_x = load_excel(up)
                 # 정규화 (이미 정규화된 경우는 생략)
                 df_move_x = normalize_moves(df_move_x)
                 required_snap = {"date", "center", "resource_code", "stock_qty"}
@@ -103,6 +109,7 @@ def main() -> None:
                     pass
                 df_move = df_move_x.copy()
                 snapshot_df = df_ref_x.copy()
+                snapshot_raw_df = snapshot_raw_x if snapshot_raw_x is not None else snapshot_raw_df
                 if "date" in snapshot_df.columns:
                     snapshot_df["date"] = pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
                 elif "snapshot_date" in snapshot_df.columns:
@@ -174,7 +181,11 @@ def main() -> None:
 
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
-    snapshot_raw_df = load_snapshot_raw()
+    if snapshot_raw_df is None:
+        try:
+            snapshot_raw_df = load_snapshot_raw()
+        except Exception:
+            snapshot_raw_df = None
     # v5 차트가 내부에서 moves_df 가공 시 event_date를 기대하는 부분을 회피하기 위해
     # 스텝 차트에서 얻은 피벗 기반 tidy(실측/예측)를 전달한다.
     # 또한 아마존 차트에는 아마존 센터만 표시되도록 필터링한다.
@@ -246,6 +257,7 @@ def main() -> None:
         latest_snapshot=pd.to_datetime(latest_dt).normalize() if pd.notna(latest_dt) else today,
         resource_name_map=name_map,
         load_snapshot_raw_fn=load_snapshot_raw,
+        snapshot_raw=snapshot_raw_df,
     )
 
 
