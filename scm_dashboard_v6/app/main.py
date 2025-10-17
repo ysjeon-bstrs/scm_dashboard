@@ -23,6 +23,7 @@ from scm_dashboard_v6.features.timeline import render_timeline_section
 from scm_dashboard_v6.features.amazon import render_amazon_panel
 from scm_dashboard_v6.features.inventory_view import render_inventory_pivot
 from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
+from scm_dashboard_v4.processing import load_wip_from_incoming, merge_wip_as_moves
 
 
 def main() -> None:
@@ -35,6 +36,13 @@ def main() -> None:
     try:
         with st.spinner("Google Sheets 데이터 불러오는 중..."):
             df_move, df_ref, df_incoming = load_gsheet()
+            # WIP를 moves로 병합 (v5 동작 유지)
+            try:
+                wip_df = load_wip_from_incoming(df_incoming)
+                if wip_df is not None and not wip_df.empty:
+                    df_move = merge_wip_as_moves(df_move, wip_df)
+            except Exception:
+                pass
     except Exception as exc:
         st.error(f"데이터 로딩 실패: {exc}")
         return
@@ -55,6 +63,13 @@ def main() -> None:
         if up is not None:
             try:
                 df_move_x, df_ref_x, _df_incoming_x, _ = load_excel(up)
+                # 업로드에서도 WIP 병합
+                try:
+                    wip_x = load_wip_from_incoming(_df_incoming_x)
+                    if wip_x is not None and not wip_x.empty:
+                        df_move_x = merge_wip_as_moves(df_move_x, wip_x)
+                except Exception:
+                    pass
                 df_move = df_move_x.copy()
                 snapshot_df = df_ref_x.copy()
                 if "date" in snapshot_df.columns:
