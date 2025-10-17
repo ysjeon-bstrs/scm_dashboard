@@ -70,6 +70,7 @@ def _ensure_move_columns(moves: pd.DataFrame) -> pd.DataFrame:
         "carrier_mode",
         "to_center",
         "resource_code",
+        "qty_ea",
         "inbound_date",
         "arrival_date",
         "onboard_date",
@@ -82,7 +83,7 @@ def _ensure_move_columns(moves: pd.DataFrame) -> pd.DataFrame:
             if "date" in col:
                 mv[col] = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
             else:
-                mv[col] = ""
+                mv[col] = 0 if col == "qty_ea" else ""
     return mv
 
 
@@ -185,6 +186,10 @@ def render_wip_progress(
     arr_wip["display_date"] = arr_wip["event_date"]
 
     st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+    # v5 동작: 선택 센터에 태광KR 포함 시에만 의미 있는 WIP 표시
+    if "태광KR" not in [str(c) for c in centers]:
+        st.caption("선택 센터에 태광KR이 포함되어야 생산중(WIP) 표가 표시됩니다.")
+        return
     if arr_wip.empty:
         st.caption("생산중(WIP) 데이터가 없습니다.")
         return
