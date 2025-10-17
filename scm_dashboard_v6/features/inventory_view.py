@@ -12,6 +12,7 @@ from typing import Iterable, Optional, Callable
 import pandas as pd
 import streamlit as st
 from scm_dashboard_v4.config import CENTER_COL
+from scm_dashboard_v5.analytics.inventory import pivot_inventory_cost_from_raw
 
 
 def render_inventory_pivot(
@@ -78,15 +79,50 @@ def render_inventory_pivot(
         sort_candidates = ["총합"] + selected_centers
         sort_by = st.selectbox("정렬 기준", sort_candidates, index=0)
 
+    # 표시 옵션: 총합 0 숨기기 / 재고자산(제조원가)
+    opt_col1, opt_col2 = st.columns([1, 1])
+    with opt_col1:
+        hide_zero = st.checkbox("총합 0 숨기기", value=False, key="v6_hide_zero_total")
+    with opt_col2:
+        show_cost = st.checkbox("재고자산(제조원가) 표시", value=False, key="v6_show_cost")
+
     view = pivot.copy()
     if sku_query.strip():
         view = view[view.index.astype(str).str.contains(sku_query.strip(), case=False, regex=False)]
     if sort_by in view.columns:
         view = view.sort_values(by=sort_by, ascending=False)
+    if hide_zero and "총합" in view.columns:
+        view = view[view["총합"] != 0]
 
     display_df = view.reset_index().rename(columns={"resource_code": "SKU"})
     if resource_name_map:
         display_df.insert(1, "품명", display_df["SKU"].map(resource_name_map).fillna(""))
+
+    # 재고자산(제조원가) 계산/표시 (snapshot_raw 필요)
+    if show_cost:
+        raw_df = snapshot_raw if snapshot_raw is not None else (load_snapshot_raw_fn() if load_snapshot_raw_fn else None)
+        if raw_df is None or raw_df.empty:
+            st.caption("재고자산 계산을 위한 snapshot_raw 데이터가 없습니다.")
+        else:
+            # 센터별 최신 스냅샷 날짜 맵을 전달해 v5/v4 헬퍼로 비용 피벗 계산
+            cost_pivot = pivot_inventory_cost_from_raw(
+                raw_df,
+                latest_snapshot,
+                selected_centers,
+                center_latest_dates=center_latest_dates,
+            )
+            if not cost_pivot.empty:
+                cost_cols = [c for c in cost_pivot.columns if c.endswith("_재고자산")]
+                cost_pivot["resource_code"] = cost_pivot["resource_code"].astype(str)
+                merged = display_df.merge(
+                    cost_pivot.rename(columns={"resource_code": "SKU"}),
+                    on="SKU",
+                    how="left",
+                )
+                if cost_cols:
+                    merged[cost_cols] = merged[cost_cols].fillna(0).round().astype(int)
+                    merged["총합_재고자산"] = merged[cost_cols].sum(axis=1)
+                display_df = merged
 
     st.dataframe(display_df, use_container_width=True, height=380)
 
