@@ -107,14 +107,24 @@ def main() -> None:
     snapshot_raw_df = load_snapshot_raw()
     # v5 차트가 내부에서 moves_df 가공 시 event_date를 기대하는 부분을 회피하기 위해
     # 스텝 차트에서 얻은 피벗 기반 tidy(실측/예측)를 전달한다.
-    inv_actual_tidy = timeline[(timeline["date"] <= today)] if isinstance(timeline, pd.DataFrame) else None
-    inv_forecast_tidy = timeline[(timeline["date"] > today)] if isinstance(timeline, pd.DataFrame) else None
+    # 또한 아마존 차트에는 아마존 센터만 표시되도록 필터링한다.
+    amazon_centers = [c for c in ui.centers if c.upper().startswith("AMZ") or "AMAZON" in c.upper()]
+    inv_actual_tidy = (
+        timeline[(timeline["date"] <= today) & (timeline["center"].isin(amazon_centers))]
+        if isinstance(timeline, pd.DataFrame)
+        else None
+    )
+    inv_forecast_tidy = (
+        timeline[(timeline["date"] > today) & (timeline["center"].isin(amazon_centers))]
+        if isinstance(timeline, pd.DataFrame)
+        else None
+    )
 
     render_amazon_panel(
         snapshot_long=snapshot_df,
         moves=df_move,
         snapshot_raw=snapshot_raw_df,
-        centers=[c for c in ui.centers if c.upper().startswith("AMZ") or "AMAZON" in c.upper()],
+        centers=amazon_centers,
         skus=ui.skus,
         start=ui.start,
         end=ui.end,
