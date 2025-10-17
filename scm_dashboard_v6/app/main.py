@@ -215,6 +215,16 @@ def main() -> None:
         if isinstance(timeline, pd.DataFrame)
         else None
     )
+    # v6 전용 가드: v5 렌더러의 '첫 품절일 이후 전체 0' 클램프를 회피하기 위해
+    # 미래 재고가 0으로 떨어지는 날에도 극소 양수로 유지하여(시각적으로는 0)
+    # 입고 이후 판매가 재개될 수 있도록 한다.
+    try:
+        if inv_forecast_tidy is not None and not inv_forecast_tidy.empty:
+            inv_forecast_tidy = inv_forecast_tidy.copy()
+            inv_forecast_tidy["stock_qty"] = pd.to_numeric(inv_forecast_tidy["stock_qty"], errors="coerce").fillna(0.0)
+            inv_forecast_tidy.loc[:, "stock_qty"] = inv_forecast_tidy["stock_qty"].clip(lower=1e-6)
+    except Exception:
+        pass
 
     # 안전장치: 타임라인에 입고 반영이 누락된 경우, moves 기반 입고량을 미래 재고에 가산
     try:
