@@ -62,10 +62,18 @@ def render_amazon_panel(
         except Exception:
             pass
 
-    # v5 차트 내부에서 moves_df의 event_date 가공을 기대하는 경로가 있어
-    # 클라우드 환경 스키마 차이로 오류가 발생하는 경우를 회피: moves 사용 비활성화
+    # v5 컨텍스트가 입고예정(inbound)을 반영해 판매 예측을 클램프하도록 실제 moves를 전달
     try:
-        setattr(ctx, "moves", pd.DataFrame())
+        mv = moves.copy() if moves is not None else pd.DataFrame()
+        if not mv.empty:
+            if "event_date" in mv.columns:
+                mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
+            for col in ("to_center", "resource_code"):
+                if col in mv.columns:
+                    mv[col] = mv[col].astype(str)
+            if "qty_ea" in mv.columns:
+                mv["qty_ea"] = pd.to_numeric(mv["qty_ea"], errors="coerce").fillna(0)
+        setattr(ctx, "moves", mv)
     except Exception:
         pass
 
