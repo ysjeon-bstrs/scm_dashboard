@@ -261,8 +261,48 @@ def main() -> None:
     inv_actual_param = inv_actual_tidy
     inv_forecast_param = inv_forecast_tidy
 
+    # v6: snapshot_long에 일별 판매(sales_qty)를 주입하여 추세 계산이 실데이터 기반으로 작동하도록 보강
+    snapshot_for_amazon = snapshot_df.copy()
+    try:
+        if snapshot_raw_df is not None and not snapshot_raw_df.empty:
+            raw = snapshot_raw_df.copy()
+            cols = {str(c).strip().lower(): c for c in raw.columns}
+            col_date = cols.get("snapshot_date") or cols.get("date")
+            col_sku = cols.get("resource_code") or cols.get("sku") or cols.get("상품코드")
+            # fba_output_stock (아마존 출고)를 판매로 사용
+            col_out = None
+            for name in raw.columns:
+                lname = str(name).strip().lower()
+                if "fba_output_stock" in lname or lname in {"fba출고","출고","출고수량","출고 ea","fba_output"}:
+                    col_out = name
+                    break
+            if col_date and col_sku and col_out:
+                sales = raw[[col_date, col_sku, col_out]].copy()
+                sales[col_date] = pd.to_datetime(sales[col_date], errors="coerce").dt.normalize()
+                sales[col_sku] = sales[col_sku].astype(str)
+                sales[col_out] = pd.to_numeric(sales[col_out], errors="coerce").fillna(0.0).clip(lower=0.0)
+                # 최신 스냅샷 구간만 집계 (불필요한 과거는 제외)
+                if pd.notna(latest_dt):
+                    sales = sales[sales[col_date] <= pd.to_datetime(latest_dt).normalize()]
+                sales_tidy = (
+                    sales.groupby([col_date, col_sku], as_index=False)[col_out].sum()
+                    .rename(columns={col_date: "date", col_sku: "resource_code", col_out: "sales_qty"})
+                )
+                # 타겟 아마존 센터에 주입 (센터 별도로 구분이 없다면 첫 AMZ 센터에 귀속)
+                target_center = (amazon_centers[0] if amazon_centers else "AMZUS")
+                sales_tidy["center"] = target_center
+                base = snapshot_for_amazon.copy()
+                base["date"] = pd.to_datetime(base.get("date"), errors="coerce").dt.normalize()
+                base["center"] = base.get("center", "").astype(str)
+                base["resource_code"] = base.get("resource_code", "").astype(str)
+                snapshot_for_amazon = base.merge(
+                    sales_tidy, on=["date","center","resource_code"], how="left"
+                )
+    except Exception:
+        pass
+
     render_amazon_panel(
-        snapshot_long=snapshot_df,
+        snapshot_long=snapshot_for_amazon,
         moves=df_move,
         snapshot_raw=snapshot_raw_df,
         centers=amazon_centers,
