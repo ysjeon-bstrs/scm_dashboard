@@ -84,6 +84,9 @@ def _ensure_move_columns(moves: pd.DataFrame) -> pd.DataFrame:
                 mv[col] = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
             else:
                 mv[col] = 0 if col == "qty_ea" else ""
+        # 날짜형 컬럼은 문자열이어도 비교 가능하도록 datetime으로 강제 변환
+        if "date" in col and col in mv.columns:
+            mv[col] = pd.to_datetime(mv[col], errors="coerce")
     return mv
 
 
