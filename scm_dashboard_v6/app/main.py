@@ -77,8 +77,9 @@ def main() -> None:
 
     today = pd.Timestamp.today().normalize()
     latest_dt = snapshot_df["date"].dropna().max() if not snapshot_df.empty else pd.NaT
-    bound_min = max(today - pd.Timedelta(days=42), snapshot_df["date"].min()) if not snapshot_df.empty else today
-    bound_max = min(today + pd.Timedelta(days=42), snapshot_df["date"].max()) if not snapshot_df.empty else today
+    # v5와 동일하게 슬라이더 범위는 오늘 기준 ±42일로 설정 (데이터 범위와 무관)
+    bound_min = today - pd.Timedelta(days=42)
+    bound_max = today + pd.Timedelta(days=42)
 
     ui = collect_sidebar_controls(
         centers=centers,
