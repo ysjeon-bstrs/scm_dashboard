@@ -216,9 +216,9 @@ def main() -> None:
         else None
     )
 
-    # 프로모션 활성화 시에는 내부 소비예측+uplift를 사용하도록 인벤토리 기반 입력은 생략
-    inv_actual_param = None if promo_enabled else inv_actual_tidy
-    inv_forecast_param = None if promo_enabled else inv_forecast_tidy
+    # 프로모션 여부와 무관하게 인벤토리 추세는 스텝 타임라인 값을 사용해 일관성 유지
+    inv_actual_param = inv_actual_tidy
+    inv_forecast_param = inv_forecast_tidy
 
     render_amazon_panel(
         snapshot_long=snapshot_df,

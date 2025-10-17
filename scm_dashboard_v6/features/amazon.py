@@ -69,7 +69,9 @@ def render_amazon_panel(
     except Exception:
         pass
 
-    extra: dict = {"use_inventory_for_sales": bool(use_inventory_for_sales)}
+    # 프로모션이 있어도 인벤토리 기반 재고 추세는 유지하되,
+    # 판매 예측은 v5 컨텍스트의 uplift 적용 소비예측이 우선하도록 한다.
+    extra: dict = {"use_inventory_for_sales": False}
     if inv_actual is not None:
         extra["inv_actual"] = inv_actual
     if inv_forecast is not None:
