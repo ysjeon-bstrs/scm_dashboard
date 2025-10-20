@@ -232,22 +232,42 @@ def main() -> None:
     try:
         if inv_forecast_tidy is not None and not inv_forecast_tidy.empty and not df_move.empty:
             mv = df_move.copy()
-            if "event_date" in mv.columns:
-                mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
             mv["to_center"] = mv.get("to_center", "").astype(str)
             mv["resource_code"] = mv.get("resource_code", "").astype(str)
             mv["qty_ea"] = pd.to_numeric(mv.get("qty_ea"), errors="coerce").fillna(0)
+            # 입고일 coalesce: event_date → pred_inbound_date → inbound_date → arrival_date(+lag if past)
+            cols = {str(c).strip().lower(): c for c in mv.columns}
+            col_event = cols.get("event_date")
+            col_pred = cols.get("pred_inbound_date")
+            col_inb = cols.get("inbound_date")
+            col_arr = cols.get("arrival_date")
+            eta = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+            if col_event and col_event in mv.columns:
+                eta = eta.fillna(pd.to_datetime(mv[col_event], errors="coerce"))
+            if col_pred and col_pred in mv.columns:
+                eta = eta.fillna(pd.to_datetime(mv[col_pred], errors="coerce"))
+            if col_inb and col_inb in mv.columns:
+                eta = eta.fillna(pd.to_datetime(mv[col_inb], errors="coerce"))
+            if col_arr and col_arr in mv.columns:
+                arr = pd.to_datetime(mv[col_arr], errors="coerce")
+                lag = int(getattr(ui, "inbound_lead_days", 7) or 7)
+                past_mask = arr.notna() & (arr <= today)
+                fut_mask = arr.notna() & (arr > today)
+                eta = eta.where(eta.notna(), arr)
+                if past_mask.any():
+                    eta.loc[past_mask] = (arr.loc[past_mask] + pd.Timedelta(days=lag)).dt.normalize()
+                if fut_mask.any():
+                    eta.loc[fut_mask] = arr.loc[fut_mask].dt.normalize()
+            mv["_eta"] = pd.to_datetime(eta, errors="coerce").dt.normalize()
+
             inbound = mv[
                 (mv["to_center"].isin(amazon_centers))
-                & (mv["event_date"].notna())
-                & (mv["event_date"] > today)
+                & (mv["_eta"].notna())
+                & (mv["_eta"] > today)
                 & (mv["resource_code"].isin(ui.skus))
-            ][["event_date", "resource_code", "qty_ea"]]
+            ][["_eta", "resource_code", "qty_ea"]].rename(columns={"_eta": "date"})
             if not inbound.empty:
-                inbound = (
-                    inbound.groupby(["event_date", "resource_code"], as_index=False)["qty_ea"].sum()
-                    .rename(columns={"event_date": "date"})
-                )
+                inbound = inbound.groupby(["date", "resource_code"], as_index=False)["qty_ea"].sum()
                 base = inv_forecast_tidy.copy()
                 base["date"] = pd.to_datetime(base["date"], errors="coerce").dt.normalize()
                 base["resource_code"] = base.get("resource_code", "").astype(str)
@@ -387,7 +407,6 @@ def main() -> None:
         today=today,
         lookback_days=ui.lookback_days,
         promotion_events=promo_events,
-        lag_days=int(getattr(ui, "inbound_lead_days", 7) or 7),
         # 판매 예측은 v5 소비예측(추세+프로모션)을 사용
         use_consumption_forecast=True,
         inv_actual=inv_actual_param,
