@@ -11,3 +11,4 @@ def test_render_amazon_panel_smoke():
     assert not snapshot.empty or not moves.empty
 
 
+

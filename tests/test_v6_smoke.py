@@ -55,3 +55,5 @@ def test_v6_amazon_smoke():
         promotion_events=None,
         use_consumption_forecast=False,
     )
+
+

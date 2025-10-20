@@ -32,3 +32,5 @@ def test_depletion_clipping_stops_sales_after_zero():
     assert not sales.empty
     after_zero = sales[sales["date"] > pd.Timestamp("2025-01-03")]
     assert (after_zero["sales_ea"] == 0).all()
+
+

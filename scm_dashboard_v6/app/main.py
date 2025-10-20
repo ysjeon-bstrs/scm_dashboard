@@ -27,6 +27,7 @@ from scm_dashboard_v6.features.inventory_view import (
     render_wip_progress,
 )
 from scm_dashboard_v6.data.loaders import load_gsheet, load_snapshot_raw, load_excel
+from scm_dashboard_v5.forecast.consumption import forecast_sales_and_inventory
 from scm_dashboard_v5.ui import render_sku_summary_cards
 from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
@@ -40,6 +41,7 @@ def main() -> None:
     st.set_page_config(page_title="SCM Dashboard v6", layout="wide")
     st.title("SCM Dashboard v6")
     st.caption("v6 구조 도입 — v5 동작을 유지하면서 경계/모듈 분리")
+    st.caption("디버깅 배너 2 - main top")
 
     st.markdown("### 데이터 소스")
     st.caption("초기 단계에서는 v5 로더 위임 — 후속 단계에서 v6 data로 전환")
@@ -195,7 +197,7 @@ def main() -> None:
     )
 
     st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고")
+    st.subheader("Amazon US 일별 판매 vs. 재고 [DBG1]")
     if snapshot_raw_df is None:
         try:
             snapshot_raw_df = load_snapshot_raw()
@@ -261,15 +263,79 @@ def main() -> None:
     inv_actual_param = inv_actual_tidy
     inv_forecast_param = inv_forecast_tidy
 
-    # v6: snapshot_long에 일별 판매(sales_qty)를 주입하여 추세 계산이 실데이터 기반으로 작동하도록 보강
+    # v6: 판매 이력 우선순위 — snap_정제.sales_qty 우선, 없을 때만 snapshot_raw의 FBA 출고로 보강
     snapshot_for_amazon = snapshot_df.copy()
     try:
-        if snapshot_raw_df is not None and not snapshot_raw_df.empty:
+        # 1) snap_정제에 sales_qty가 있으면 그 값을 우선 사용 (형변환만 보정)
+        if "sales_qty" in snapshot_for_amazon.columns:
+            snapshot_for_amazon["sales_qty"] = (
+                pd.to_numeric(snapshot_for_amazon["sales_qty"], errors="coerce").fillna(0.0).clip(lower=0.0)
+            )
+            snapshot_for_amazon["date"] = pd.to_datetime(snapshot_for_amazon.get("date"), errors="coerce").dt.normalize()
+            snapshot_for_amazon["center"] = snapshot_for_amazon.get("center", "").astype(str)
+            snapshot_for_amazon["resource_code"] = snapshot_for_amazon.get("resource_code", "").astype(str)
+        else:
+            # 2) 없으면 snapshot_raw의 fba_output_stock를 일자×SKU로 집계하여 주입
+            if snapshot_raw_df is not None and not snapshot_raw_df.empty:
+                raw = snapshot_raw_df.copy()
+                cols = {str(c).strip().lower(): c for c in raw.columns}
+                col_date = cols.get("snapshot_date") or cols.get("date")
+                col_sku = cols.get("resource_code") or cols.get("sku") or cols.get("상품코드")
+                # fba_output_stock (아마존 출고)를 판매로 사용
+                col_out = None
+                for name in raw.columns:
+                    lname = str(name).strip().lower()
+                    if "fba_output_stock" in lname or lname in {"fba출고","출고","출고수량","출고 ea","fba_output"}:
+                        col_out = name
+                        break
+                if col_date and col_sku and col_out:
+                    sales = raw[[col_date, col_sku, col_out]].copy()
+                    sales[col_date] = pd.to_datetime(sales[col_date], errors="coerce").dt.normalize()
+                    sales[col_sku] = sales[col_sku].astype(str)
+                    sales[col_out] = pd.to_numeric(sales[col_out], errors="coerce").fillna(0.0).clip(lower=0.0)
+                    # 최신 스냅샷 구간만 집계 (불필요한 과거는 제외)
+                    if pd.notna(latest_dt):
+                        sales = sales[sales[col_date] <= pd.to_datetime(latest_dt).normalize()]
+                    sales_tidy = (
+                        sales.groupby([col_date, col_sku], as_index=False)[col_out].sum()
+                        .rename(columns={col_date: "date", col_sku: "resource_code", col_out: "sales_qty"})
+                    )
+                    # 타겟 아마존 센터에 주입 (센터 별도로 구분이 없다면 첫 AMZ 센터에 귀속)
+                    target_center = (amazon_centers[0] if amazon_centers else "AMZUS")
+                    sales_tidy["center"] = target_center
+                    base = snapshot_for_amazon.copy()
+                    base["date"] = pd.to_datetime(base.get("date"), errors="coerce").dt.normalize()
+                    base["center"] = base.get("center", "").astype(str)
+                    base["resource_code"] = base.get("resource_code", "").astype(str)
+                    snapshot_for_amazon = base.merge(
+                        sales_tidy, on=["date","center","resource_code"], how="left"
+                    )
+    except Exception:
+        pass
+
+    # v5 소비예측 함수로 판매 예측 생성: lookback_days와 프로모션 반영 → 차트에 강제 주입
+    sales_from_inv: pd.DataFrame | None = None
+    try:
+        # 아마존 센터만 모은 타임라인 (과거+미래)
+        timeline_amz = (
+            timeline[timeline["center"].isin(amazon_centers)]
+            if isinstance(timeline, pd.DataFrame) and not timeline.empty
+            else pd.DataFrame(columns=["date","center","resource_code","stock_qty"])
+        )
+        # 일별 판매 이력: snap_정제.sales_qty 우선 → snapshot_raw FBA 출고 대체
+        daily_sales = pd.DataFrame(columns=["date","center","resource_code","sales_ea"])
+        if not snapshot_df.empty and "sales_qty" in snapshot_df.columns:
+            ds = snapshot_df[["date","center","resource_code","sales_qty"]].copy()
+            ds["date"] = pd.to_datetime(ds["date"], errors="coerce").dt.normalize()
+            ds["center"] = ds.get("center", "").astype(str)
+            ds["resource_code"] = ds.get("resource_code", "").astype(str)
+            ds["sales_ea"] = pd.to_numeric(ds.get("sales_qty"), errors="coerce").fillna(0.0)
+            daily_sales = ds[["date","center","resource_code","sales_ea"]]
+        elif snapshot_raw_df is not None and not snapshot_raw_df.empty:
             raw = snapshot_raw_df.copy()
             cols = {str(c).strip().lower(): c for c in raw.columns}
             col_date = cols.get("snapshot_date") or cols.get("date")
             col_sku = cols.get("resource_code") or cols.get("sku") or cols.get("상품코드")
-            # fba_output_stock (아마존 출고)를 판매로 사용
             col_out = None
             for name in raw.columns:
                 lname = str(name).strip().lower()
@@ -281,41 +347,31 @@ def main() -> None:
                 sales[col_date] = pd.to_datetime(sales[col_date], errors="coerce").dt.normalize()
                 sales[col_sku] = sales[col_sku].astype(str)
                 sales[col_out] = pd.to_numeric(sales[col_out], errors="coerce").fillna(0.0).clip(lower=0.0)
-                # 최신 스냅샷 구간만 집계 (불필요한 과거는 제외)
                 if pd.notna(latest_dt):
                     sales = sales[sales[col_date] <= pd.to_datetime(latest_dt).normalize()]
-                sales_tidy = (
+                grouped = (
                     sales.groupby([col_date, col_sku], as_index=False)[col_out].sum()
-                    .rename(columns={col_date: "date", col_sku: "resource_code", col_out: "sales_qty"})
+                    .rename(columns={col_date: "date", col_sku: "resource_code", col_out: "sales_ea"})
                 )
-                # 타겟 아마존 센터에 주입 (센터 별도로 구분이 없다면 첫 AMZ 센터에 귀속)
                 target_center = (amazon_centers[0] if amazon_centers else "AMZUS")
-                sales_tidy["center"] = target_center
-                base = snapshot_for_amazon.copy()
-                base["date"] = pd.to_datetime(base.get("date"), errors="coerce").dt.normalize()
-                base["center"] = base.get("center", "").astype(str)
-                base["resource_code"] = base.get("resource_code", "").astype(str)
-                snapshot_for_amazon = base.merge(
-                    sales_tidy, on=["date","center","resource_code"], how="left"
-                )
-    except Exception:
-        pass
+                grouped["center"] = target_center
+                grouped["date"] = pd.to_datetime(grouped["date"], errors="coerce").dt.normalize()
+                daily_sales = grouped[["date","center","resource_code","sales_ea"]]
 
-    # 오늘 이후 예측 판매 = 예측 재고 감소량으로 강제 동기화할 선택적 프레임 생성
-    sales_from_inv: pd.DataFrame | None = None
-    try:
-        if inv_forecast_tidy is not None and not inv_forecast_tidy.empty:
-            pivot_inv = (
-                inv_forecast_tidy.groupby(["date", "resource_code"]) ["stock_qty"].sum().unstack("resource_code")
+        if not timeline_amz.empty:
+            sales_fc, _inv_proj = forecast_sales_and_inventory(
+                daily_sales=daily_sales,
+                timeline_center=timeline_amz,
+                start=ui.start,
+                end=ui.end,
+                lookback_days=int(ui.lookback_days or 28),
+                uplift_events=(promo_events or []),
             )
-            pivot_inv = pivot_inv.sort_index().asfreq("D").ffill().fillna(0.0)
-            diff = pivot_inv.diff()
-            sales = (-diff).clip(lower=0.0)
-            future = sales.loc[sales.index > today]
-            if not future.empty:
-                sales_from_inv = (
-                    future.stack().reset_index().rename(columns={"level_0": "date", "level_1": "resource_code", 0: "sales_qty"})
-                )
+            if sales_fc is not None and not sales_fc.empty:
+                forced = sales_fc.rename(columns={"sales_ea":"sales_qty"})
+                forced = forced[(forced["date"] > today) & (forced["center"].isin(amazon_centers))]
+                # v5 차트 필터를 통과하려면 center 컬럼이 필요
+                sales_from_inv = forced[["date","center","resource_code","sales_qty"]].copy()
                 sales_from_inv["date"] = pd.to_datetime(sales_from_inv["date"], errors="coerce").dt.normalize()
     except Exception:
         pass
@@ -331,6 +387,7 @@ def main() -> None:
         today=today,
         lookback_days=ui.lookback_days,
         promotion_events=promo_events,
+        lag_days=int(getattr(ui, "inbound_lead_days", 7) or 7),
         # 판매 예측은 v5 소비예측(추세+프로모션)을 사용
         use_consumption_forecast=True,
         inv_actual=inv_actual_param,
@@ -339,6 +396,9 @@ def main() -> None:
         use_inventory_for_sales=False,
         sales_forecast_from_inventory=sales_from_inv,
     )
+
+    # 디버그 마커 (함수 바깥)
+    st.caption("디버깅 중 2")
 
     # --- 아래부터 표/테이블 섹션 ---
     # 간단 품명 매핑 (있으면)

@@ -23,3 +23,5 @@ def set(key: str, value: Any) -> None:
 
 def clear() -> None:
     _STORE.clear()
+
+

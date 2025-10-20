@@ -1494,11 +1494,11 @@ def render_amazon_sales_vs_inventory(
     if not inv_forecast_df.empty:
         for sku, group in inv_forecast_df.groupby("resource_code"):
             color = colors.get(sku, "#6BA3FF")
-            fig.add_trace(
-                go.Scatter(
-                    x=group["date"],
+        fig.add_trace(
+            go.Scatter(
+                x=group["date"],
                     y=group["stock_qty"],
-                    mode="lines",
+                mode="lines",
                     name=f"{sku} 재고(예측)",
                     line=dict(color=color, width=2, dash="dot"),
                     line_shape="hv",
@@ -1551,9 +1551,9 @@ def render_amazon_sales_vs_inventory(
             title="재고 (EA)",
             overlaying="y",
             side="right",
-            showgrid=False,
-            zeroline=False,
-            showline=False,
+        showgrid=False,
+        zeroline=False,
+        showline=False,
             tickfont=dict(color="#666"),
             tickformat=",.0f",
         ),

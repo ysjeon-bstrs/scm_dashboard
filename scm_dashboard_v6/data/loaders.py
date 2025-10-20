@@ -31,3 +31,5 @@ def load_snapshot_raw() -> pd.DataFrame:
     """스냅샷 raw 테이블을 로드한다."""
 
     return v4_load_snapshot_raw()
+
+

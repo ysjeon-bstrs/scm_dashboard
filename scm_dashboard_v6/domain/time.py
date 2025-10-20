@@ -21,3 +21,5 @@ def clamp_range(start: pd.Timestamp, end: pd.Timestamp, *, bound_min: pd.Timesta
     if e < s:
         e = s
     return s, e
+
+

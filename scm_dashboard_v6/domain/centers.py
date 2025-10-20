@@ -16,3 +16,5 @@ def normalize_center_value(value: object) -> str | None:
     """
 
     return _normalize(value)
+
+

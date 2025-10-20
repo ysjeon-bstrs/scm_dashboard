@@ -20,3 +20,5 @@ COLUMNS = {
     "resource_code": ["resource_code", "sku", "상품코드"],
     "stock_qty": ["stock_qty", "qty", "quantity"],
 }
+
+

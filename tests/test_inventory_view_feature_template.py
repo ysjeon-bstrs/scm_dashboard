@@ -10,3 +10,5 @@ def test_inventory_view_smoke():
     assert "stock_qty" in snapshot.columns
 
 
+
+

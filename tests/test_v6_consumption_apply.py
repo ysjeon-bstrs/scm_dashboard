@@ -31,3 +31,5 @@ def test_consumption_applies_after_cons_start():
 
     s = out[out["resource_code"] == "S1"].sort_values("date")["stock_qty"].tolist()
     assert s[1] >= s[2] >= s[3]  # 1일차 이후 단조 감소
+
+

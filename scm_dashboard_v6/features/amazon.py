@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 import pandas as pd
+import streamlit as st
 
 from scm_dashboard_v5.forecast import build_amazon_forecast_context as v5_build_amz_ctx
 from scm_dashboard_v6.ui.charts.amazon import render_amazon_sales_vs_inventory
@@ -28,6 +29,7 @@ def render_amazon_panel(
     lookback_days: int,
     promotion_events: Optional[list[dict]] = None,
     use_consumption_forecast: bool = True,
+    lag_days: int | None = None,
     inv_actual: pd.DataFrame | None = None,
     inv_forecast: pd.DataFrame | None = None,
     use_inventory_for_sales: bool = True,
@@ -60,6 +62,13 @@ def render_amazon_panel(
             first = promotion_events[0]
             uplift = float(first.get("uplift", 0.0))
             setattr(ctx, "promotion_uplift_debug", uplift)
+            # v6 렌더러에서 일자별 가중치를 재현할 수 있도록 이벤트 자체도 보관
+            setattr(ctx, "promotion_events", promotion_events or [])
+        except Exception:
+            pass
+    else:
+        try:
+            setattr(ctx, "promotion_events", [])
         except Exception:
             pass
 
@@ -67,6 +76,44 @@ def render_amazon_panel(
     try:
         mv = moves.copy() if moves is not None else pd.DataFrame()
         if not mv.empty:
+            # event_date 미보유 시 pred_inbound_date / inbound_date / arrival_date 기반으로 보강
+            cols = {str(c).strip().lower(): c for c in mv.columns}
+            col_event = cols.get("event_date")
+            col_pred = cols.get("pred_inbound_date")
+            col_inb = cols.get("inbound_date")
+            col_arr = cols.get("arrival_date")
+
+            if col_event is None:
+                # 새 event_date 컬럼 생성
+                mv["event_date"] = pd.NaT
+                col_event = "event_date"
+
+            # 우선 pred_inbound_date 사용
+            if col_pred and col_pred in mv.columns:
+                mv[col_event] = mv[col_event].where(mv[col_event].notna(), mv[col_pred])
+            # 없으면 inbound_date 사용
+            if col_inb and col_inb in mv.columns:
+                mv[col_event] = mv[col_event].where(mv[col_event].notna(), mv[col_inb])
+            # 없으면 arrival_date 사용 (과거 도착이면 lag_days 보정, 미래는 그대로)
+            if col_arr and col_arr in mv.columns:
+                arr = pd.to_datetime(mv[col_arr], errors="coerce")
+                if lag_days is None:
+                    lag = 0
+                else:
+                    try:
+                        lag = int(lag_days)
+                    except Exception:
+                        lag = 0
+                today_norm = pd.Timestamp.today().normalize()
+                past_mask = arr.notna() & (arr <= today_norm)
+                fut_mask = arr.notna() & (arr > today_norm)
+                est_from_arr = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+                if past_mask.any():
+                    est_from_arr.loc[past_mask] = (arr.loc[past_mask] + pd.Timedelta(days=lag)).dt.normalize()
+                if fut_mask.any():
+                    est_from_arr.loc[fut_mask] = arr.loc[fut_mask].dt.normalize()
+                mv[col_event] = mv[col_event].where(mv[col_event].notna(), est_from_arr)
+
             if "event_date" in mv.columns:
                 mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
             for col in ("to_center", "resource_code"):
@@ -98,6 +145,9 @@ def render_amazon_panel(
             pass
 
     render_amazon_sales_vs_inventory(ctx, **extra)
+
+    # 디버그 마커 (렌더 순서/경로 확인용)
+    st.caption("디버깅 중 2")
 
 
 
