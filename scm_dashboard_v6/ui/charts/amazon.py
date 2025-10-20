@@ -57,16 +57,16 @@ def _build_amazon_sales_vs_inventory_fig(ctx: Any) -> go.Figure:
     inv_forecast = inv_forecast[(inv_forecast["date"] > today) & (inv_forecast["resource_code"].isin(skus))]
     inv_forecast = inv_forecast[(inv_forecast["date"] >= display_start) & (inv_forecast["date"] <= display_end)]
 
-    # 오늘(최신 실측)과 내일(예측 시작) 사이의 시각적 단절을 없애기 위해
-    # 예측 시계열에 '오늘' 값을 브릿지 포인트로 추가한다.
+    # 실측 마지막 날짜와 예측 첫 날짜가 맞닿도록 브릿지 포인트를 추가한다.
     if not inv_forecast.empty and not inv_actual.empty:
         bridge_rows = []
-        today_norm = today.normalize()
         for sku in inv_forecast["resource_code"].dropna().astype(str).unique().tolist():
-            last_actual = inv_actual[(inv_actual["resource_code"] == sku) & (inv_actual["date"] <= today_norm)]
+            last_actual = inv_actual[(inv_actual["resource_code"] == sku)]
             if not last_actual.empty:
-                last_val = float(last_actual.sort_values("date")["stock_qty"].iloc[-1])
-                bridge_rows.append({"date": today_norm, "resource_code": sku, "stock_qty": last_val})
+                last_sorted = last_actual.sort_values("date")
+                last_val = float(last_sorted["stock_qty"].iloc[-1])
+                last_dt = pd.to_datetime(last_sorted["date"].iloc[-1]).normalize()
+                bridge_rows.append({"date": last_dt, "resource_code": sku, "stock_qty": last_val})
         if bridge_rows:
             inv_forecast = pd.concat([pd.DataFrame(bridge_rows), inv_forecast], ignore_index=True)
             inv_forecast["date"] = pd.to_datetime(inv_forecast["date"], errors="coerce").dt.normalize()
