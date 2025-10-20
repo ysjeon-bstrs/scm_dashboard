@@ -60,6 +60,88 @@ def build_center_series(
     mv = moves.copy()
     ship_start_col = _resolve_onboard_column(mv)
 
+    # Pre-normalise and pre-aggregate move deltas once to avoid filtering
+    # the full frame repeatedly inside the SKU loop.
+    if not mv.empty:
+        mv["resource_code"] = mv.get("resource_code", "").astype(str)
+        for c in ("from_center", "to_center"):
+            if c in mv.columns:
+                mv[c] = mv[c].astype(str)
+        # date-like columns
+        if ship_start_col in mv.columns:
+            mv[ship_start_col] = pd.to_datetime(mv[ship_start_col], errors="coerce").dt.normalize()
+        if "pred_inbound_date" in mv.columns:
+            mv["pred_inbound_date"] = pd.to_datetime(mv["pred_inbound_date"], errors="coerce").dt.normalize()
+        if "event_date" in mv.columns:
+            mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
+        mv["qty_ea"] = pd.to_numeric(mv.get("qty_ea"), errors="coerce").fillna(0.0)
+
+        # Outbound deltas by (from_center, sku)
+        outbound_map: dict[tuple[str, str], pd.Series] = {}
+        outbound_df = mv[(mv[ship_start_col].notna()) & mv["resource_code"].isin(skus_set)]
+        if "from_center" in mv.columns and not outbound_df.empty:
+            g = (
+                outbound_df.groupby(["from_center", "resource_code", ship_start_col], as_index=False)[
+                    "qty_ea"
+                ]
+                .sum()
+                .rename(columns={ship_start_col: "date"})
+            )
+            g["delta"] = -g["qty_ea"].astype(float)
+            for (fc, sku), chunk in g.groupby(["from_center", "resource_code"], dropna=True):
+                outbound_map[(str(fc), str(sku))] = (
+                    chunk.set_index("date")["delta"].sort_index()
+                )
+        else:
+            outbound_map = {}
+
+        # Inbound (non-WIP) deltas by (to_center, sku)
+        inbound_map: dict[tuple[str, str], pd.Series] = {}
+        inbound_filter = (
+            (mv.get("carrier_mode") != "WIP")
+            & mv["resource_code"].isin(skus_set)
+            & ("to_center" in mv.columns)
+            & mv.get("pred_inbound_date").notna()
+        )
+        inbound_df = mv[inbound_filter] if inbound_filter is not None else pd.DataFrame(columns=mv.columns)
+        if not inbound_df.empty:
+            g = (
+                inbound_df.groupby(["to_center", "resource_code", "pred_inbound_date"], as_index=False)[
+                    "qty_ea"
+                ]
+                .sum()
+                .rename(columns={"pred_inbound_date": "date"})
+            )
+            g["delta"] = g["qty_ea"].astype(float)
+            for (tc, sku), chunk in g.groupby(["to_center", "resource_code"], dropna=True):
+                inbound_map[(str(tc), str(sku))] = (
+                    chunk.set_index("date")["delta"].sort_index()
+                )
+
+        # WIP completion deltas by (to_center, sku)
+        wip_map: dict[tuple[str, str], pd.Series] = {}
+        if "event_date" in mv.columns:
+            wip_df = mv[(mv.get("carrier_mode") == "WIP") & mv["event_date"].notna()]
+            if not wip_df.empty and "to_center" in wip_df.columns:
+                g = (
+                    wip_df.groupby(["to_center", "resource_code", "event_date"], as_index=False)[
+                        "qty_ea"
+                    ]
+                    .sum()
+                    .rename(columns={"event_date": "date"})
+                )
+                g["delta"] = g["qty_ea"].astype(float)
+                for (tc, sku), chunk in g.groupby(["to_center", "resource_code"], dropna=True):
+                    wip_map[(str(tc), str(sku))] = (
+                        chunk.set_index("date")["delta"].sort_index()
+                    )
+        else:
+            wip_map = {}
+    else:
+        outbound_map = {}
+        inbound_map = {}
+        wip_map = {}
+
     lines = []
     for (ct, sku), grp in snapshot.groupby(["center", "resource_code"]):
         if ct not in centers_set or sku not in skus_set:
@@ -82,57 +164,28 @@ def build_center_series(
         stock_series = stock_series.ffill().fillna(0.0)
         ts["stock_qty"] = stock_series
 
-        mv_sku = mv[mv["resource_code"] == sku]
-        if not mv_sku.empty:
-            eff_minus = (
-                mv_sku[
-                    (mv_sku["from_center"] == ct)
-                    & mv_sku[ship_start_col].notna()
-                    & (mv_sku[ship_start_col] > last_dt)
-                ]
-                .groupby(ship_start_col, as_index=False)["qty_ea"].sum()
-                .rename(columns={ship_start_col: "date", "qty_ea": "delta"})
-            )
-            eff_minus["delta"] *= -1
+        # Apply pre-aggregated move deltas for the (center, sku)
+        # Outbound from this center
+        eff_minus_series = outbound_map.get((str(ct), str(sku)))
+        # Inbound to this center (excluding WIP)
+        eff_plus_series = inbound_map.get((str(ct), str(sku)))
 
-            mv_center = mv_sku[(mv_sku["to_center"] == ct) & (mv_sku["carrier_mode"] != "WIP")]
-            if not mv_center.empty:
-                eff_plus = (
-                    mv_center[
-                        mv_center["pred_inbound_date"].notna()
-                        & (mv_center["pred_inbound_date"] > last_dt)
-                    ]
-                    .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
-                    .rename(columns={"pred_inbound_date": "date", "qty_ea": "delta"})
-                )
-            else:
-                eff_plus = pd.DataFrame(columns=["date", "delta"])
+        deltas_parts: list[pd.Series] = []
+        if eff_minus_series is not None and not eff_minus_series.empty:
+            deltas_parts.append(eff_minus_series[eff_minus_series.index > last_dt])
+        if eff_plus_series is not None and not eff_plus_series.empty:
+            deltas_parts.append(eff_plus_series[eff_plus_series.index > last_dt])
+        if deltas_parts:
+            eff_all_series = (
+                pd.concat(deltas_parts).groupby(level=0).sum().reindex(idx, fill_value=0.0)
+            )
+            ts["stock_qty"] = ts["stock_qty"].add(eff_all_series.cumsum(), fill_value=0.0)
 
-            eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
-            if not eff_all.empty:
-                delta_series = (
-                    eff_all.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
-                )
-                ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
-
-        if "event_date" in mv_sku.columns:
-            wip_mask = (
-                (mv_sku["carrier_mode"] == "WIP")
-                & (mv_sku["to_center"] == ct)
-                & mv_sku["event_date"].notna()
-            )
-            wip_complete = mv_sku[wip_mask]
-        else:
-            wip_complete = pd.DataFrame(columns=mv_sku.columns)
-        if not wip_complete.empty:
-            wip_add = (
-                wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum()
-                .rename(columns={"event_date": "date", "qty_ea": "delta"})
-            )
-            delta_series = (
-                wip_add.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
-            )
-            ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
+        # WIP completion adds to stock for this center
+        wip_series = wip_map.get((str(ct), str(sku)))
+        if wip_series is not None and not wip_series.empty:
+            wip_delta = wip_series.reindex(idx, fill_value=0.0)
+            ts["stock_qty"] = ts["stock_qty"].add(wip_delta.cumsum(), fill_value=0.0)
 
         ts["stock_qty"] = ts["stock_qty"].fillna(0)
         ts["stock_qty"] = ts["stock_qty"].replace([np.inf, -np.inf], 0)

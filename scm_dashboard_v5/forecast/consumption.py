@@ -805,6 +805,8 @@ def apply_consumption_with_events(
         cons_start_norm = max(cons_start_norm, start_norm)
         if not pd.isna(latest_snap):
             cons_start_norm = max(cons_start_norm, latest_snap + pd.Timedelta(days=1))
+        # Short-circuit when explicit cons_start lies beyond end to avoid unnecessary ranges
+        cons_start_norm = min(cons_start_norm, end_norm)
     elif pd.isna(latest_snap):
         cons_start_norm = start_norm
     else:
