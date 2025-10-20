@@ -41,7 +41,7 @@ def main() -> None:
     st.set_page_config(page_title="SCM Dashboard v6", layout="wide")
     st.title("SCM Dashboard v6")
     st.caption("v6 구조 도입 — v5 동작을 유지하면서 경계/모듈 분리")
-    st.caption("디버깅 배너 2 - main top")
+    # 디버깅 배너 제거
 
     st.markdown("### 데이터 소스")
     st.caption("초기 단계에서는 v5 로더 위임 — 후속 단계에서 v6 data로 전환")
