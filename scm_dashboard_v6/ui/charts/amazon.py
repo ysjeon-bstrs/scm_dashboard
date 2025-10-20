@@ -57,20 +57,46 @@ def _build_amazon_sales_vs_inventory_fig(ctx: Any) -> go.Figure:
     inv_forecast = inv_forecast[(inv_forecast["date"] > today) & (inv_forecast["resource_code"].isin(skus))]
     inv_forecast = inv_forecast[(inv_forecast["date"] >= display_start) & (inv_forecast["date"] <= display_end)]
 
-    # 실측 마지막 날짜와 예측 첫 날짜가 맞닿도록 브릿지 포인트를 추가한다.
-    if not inv_forecast.empty and not inv_actual.empty:
-        bridge_rows = []
-        for sku in inv_forecast["resource_code"].dropna().astype(str).unique().tolist():
-            last_actual = inv_actual[(inv_actual["resource_code"] == sku)]
-            if not last_actual.empty:
-                last_sorted = last_actual.sort_values("date")
-                last_val = float(last_sorted["stock_qty"].iloc[-1])
-                last_dt = pd.to_datetime(last_sorted["date"].iloc[-1]).normalize()
-                bridge_rows.append({"date": last_dt, "resource_code": sku, "stock_qty": last_val})
-        if bridge_rows:
-            inv_forecast = pd.concat([pd.DataFrame(bridge_rows), inv_forecast], ignore_index=True)
-            inv_forecast["date"] = pd.to_datetime(inv_forecast["date"], errors="coerce").dt.normalize()
-            inv_forecast = inv_forecast.sort_values(["resource_code", "date"]).reset_index(drop=True)
+    # 실측 마지막 값의 재고 수치를 예측의 첫 날짜에 복제하여 연결 앵커를 추가한다.
+    if (
+        display_start <= today <= display_end
+        and not inv_actual.empty
+        and not inv_forecast.empty
+    ):
+        last_candidates = inv_actual[inv_actual["date"] <= today]
+        if not last_candidates.empty:
+            last_actual = (
+                last_candidates.sort_values(["resource_code", "date"])
+                .groupby("resource_code")
+                .tail(1)
+                .loc[:, ["resource_code", "date", "stock_qty"]]
+                .rename(columns={"date": "actual_date"})
+            )
+        else:
+            last_actual = pd.DataFrame(columns=["resource_code", "actual_date", "stock_qty"])
+
+        if not last_actual.empty:
+            fc_start = (
+                inv_forecast.sort_values(["resource_code", "date"]).groupby("resource_code", as_index=False).first()[
+                    ["resource_code", "date"]
+                ]
+                .rename(columns={"date": "forecast_start"})
+            )
+            anchor = (
+                last_actual.merge(fc_start, on="resource_code", how="inner")
+                .assign(date=lambda df: pd.to_datetime(df["forecast_start"]).dt.normalize())
+                .loc[:, ["date", "resource_code", "stock_qty"]]
+            )
+        else:
+            anchor = pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+
+        if not anchor.empty:
+            inv_forecast = pd.concat([anchor, inv_forecast], ignore_index=True)
+            inv_forecast = (
+                inv_forecast.sort_values(["resource_code", "date"]).drop_duplicates(
+                    subset=["resource_code", "date"], keep="last"
+                )
+            )
 
     # lookback 기반 평균 + 프로모션 곱
     mean_by_sku: dict[str, float] = {}
