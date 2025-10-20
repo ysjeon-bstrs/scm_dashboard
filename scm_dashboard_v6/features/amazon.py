@@ -146,8 +146,7 @@ def render_amazon_panel(
 
     render_amazon_sales_vs_inventory(ctx, **extra)
 
-    # 디버그 마커 (렌더 순서/경로 확인용)
-    st.caption("디버깅 중 2")
+    # 디버그 마커 제거됨
 
 
 

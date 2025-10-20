@@ -197,7 +197,7 @@ def main() -> None:
     )
 
     st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고 [DBG1]")
+    st.subheader("Amazon US 일별 판매 vs. 재고")
     if snapshot_raw_df is None:
         try:
             snapshot_raw_df = load_snapshot_raw()
@@ -397,8 +397,7 @@ def main() -> None:
         sales_forecast_from_inventory=sales_from_inv,
     )
 
-    # 디버그 마커 (함수 바깥)
-    st.caption("디버깅 중 2")
+    # 디버그 마커 제거됨
 
     # --- 아래부터 표/테이블 섹션 ---
     # 간단 품명 매핑 (있으면)
