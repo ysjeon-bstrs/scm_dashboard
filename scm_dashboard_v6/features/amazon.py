@@ -14,6 +14,9 @@ import streamlit as st
 
 from scm_dashboard_v5.forecast import build_amazon_forecast_context as v5_build_amz_ctx
 from scm_dashboard_v6.ui.charts.amazon import render_amazon_sales_vs_inventory
+from scm_dashboard_v5.ui.charts import (
+    render_amazon_sales_vs_inventory as v5_render_amazon_sales_vs_inventory,
+)
 
 
 def render_amazon_panel(
@@ -144,7 +147,13 @@ def render_amazon_panel(
         except Exception:
             pass
 
-    render_amazon_sales_vs_inventory(ctx, **extra)
+    # v5 렌더러를 직접 호출하여 v5와 동일 동작 확보
+    v5_render_amazon_sales_vs_inventory(
+        ctx,
+        inv_actual=extra.get("inv_actual"),
+        inv_forecast=extra.get("inv_forecast"),
+        use_inventory_for_sales=bool(extra.get("use_inventory_for_sales", True)),
+    )
 
     # 디버그 마커 제거됨
 
