@@ -430,6 +430,9 @@ def main() -> None:
         sales_forecast_from_inventory=sales_from_inv,
     )
 
+    # 디버깅 마커
+    st.caption("디버깅 체크 5")
+
     # 디버그 마커 제거됨
 
     # --- 아래부터 표/테이블 섹션 ---
