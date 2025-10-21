@@ -41,6 +41,12 @@ from scm_dashboard_v9.ui import (
 )
 from scm_dashboard_v9.ui.adapters import handle_domain_errors
 from scm_dashboard_v9.ui.charts import _sku_color_map, _timeline_inventory_matrix
+from scm_dashboard_v9.ui.tables import (
+    build_resource_name_map,
+    render_inbound_and_wip_tables,
+    render_inventory_table,
+    render_lot_details,
+)
 
 
 def get_consumption_params_from_ui() -> dict[str, object]:
@@ -421,14 +427,54 @@ def main() -> None:
         )
 
     # ========================================
-    # 14단계: 입고 예정 및 재고 테이블
+    # 14단계: 입고 예정 및 WIP 테이블
     # ========================================
-    # (나머지 테이블 렌더링 로직은 v5_main.py와 동일하게 유지)
-    # 향후 ui.tables 모듈로 분리 예정
+    render_inbound_and_wip_tables(
+        moves=data.moves,
+        snapshot=snapshot_df,
+        selected_centers=selected_centers,
+        selected_skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+        lag_days=lag_days,
+        today=today_norm,
+    )
 
-    st.markdown("### 📊 추가 정보")
-    st.caption("입고 예정, WIP, 재고 현황 등의 상세 정보는 v5_main.py와 동일합니다.")
-    st.info("테이블 렌더링 로직은 Commit 2에서 ui.tables 모듈로 분리할 예정입니다.")
+    # ========================================
+    # 15단계: 재고 현황 테이블
+    # ========================================
+    resource_name_map = build_resource_name_map(snapshot_df)
+
+    display_df = render_inventory_table(
+        snapshot=snapshot_df,
+        selected_centers=selected_centers,
+        latest_dt=latest_dt,
+        resource_name_map=resource_name_map,
+    )
+
+    # ========================================
+    # 16단계: 로트 상세 (단일 SKU 선택 시)
+    # ========================================
+    # center_latest_dates 계산 (재고 테이블 함수 내부에서 이미 계산됨)
+    center_latest_series = (
+        snapshot_df[snapshot_df["center"].isin(selected_centers)]
+        .groupby("center")["date"]
+        .max()
+    )
+    center_latest_dates = {
+        center: ts.normalize()
+        for center, ts in center_latest_series.items()
+        if pd.notna(ts)
+    }
+
+    visible_skus = display_df.get("SKU", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+
+    render_lot_details(
+        visible_skus=visible_skus,
+        selected_centers=selected_centers,
+        center_latest_dates=center_latest_dates,
+        latest_dt=latest_dt,
+    )
 
 
 if __name__ == "__main__":
