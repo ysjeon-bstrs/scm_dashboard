@@ -5,8 +5,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from scm_dashboard_v8.application.pipeline import BuildInputs as V8BuildInputs
-from scm_dashboard_v8.application.pipeline import build_timeline_bundle as v8_build_timeline_bundle
+from scm_dashboard_v5.planning.timeline import TimelineBuilder, TimelineContext, prepare_moves, prepare_snapshot
 
 
 @dataclass(frozen=True)
@@ -27,15 +26,21 @@ def build_timeline_bundle(
     horizon_days: int = 0,
     move_fallback_days: int = 1,
 ):
-    v8_inputs = V8BuildInputs(snapshot=inputs.snapshot, moves=inputs.moves)
-    return v8_build_timeline_bundle(
-        v8_inputs,
-        centers=centers,
-        skus=skus,
+    context = TimelineContext(
+        centers=list(centers),
+        skus=list(skus),
         start=start,
         end=end,
         today=today,
         lag_days=lag_days,
-        horizon_days=horizon_days,
-        move_fallback_days=move_fallback_days,
+        horizon_days=int(max(0, horizon_days)),
     )
+    builder = TimelineBuilder(context)
+    snapshot_table = prepare_snapshot(inputs.snapshot)
+    fallback_days = int(max(0, move_fallback_days))
+    move_table = prepare_moves(
+        inputs.moves,
+        context=context,
+        fallback_days=fallback_days,
+    )
+    return builder.build(snapshot_table, move_table)
