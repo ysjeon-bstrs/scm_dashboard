@@ -100,47 +100,57 @@ def regenerate() -> None:
 
     out_dir = ensure_golden_dir()
     frames = {
-        "timeline_actual.csv": (timeline_actual, ["center", "resource_code", "date"], None),
-        "timeline_with_consumption.csv": (
-            timeline_with_consumption,
-            ["center", "resource_code", "date"],
-            None,
-        ),
-        "kpi_breakdown.csv": (kpi, ["resource_code", "metric"], ("value",)),
-        "amazon_inventory_actual.csv": (
-            amazon_ctx.inv_actual,
-            ["center", "resource_code", "date"],
-            None,
-        ),
-        "amazon_inventory_forecast.csv": (
-            amazon_ctx.inv_forecast,
-            ["center", "resource_code", "date"],
-            None,
-        ),
-        "amazon_sales_history.csv": (
-            amazon_ctx.sales_hist,
-            ["center", "resource_code", "date"],
-            ("sales_ea",),
-        ),
-        "amazon_sales_ma7.csv": (
-            amazon_ctx.sales_ma7,
-            ["center", "resource_code", "date"],
-            ("sales_ea",),
-        ),
-        "amazon_sales_forecast.csv": (
-            amazon_ctx.sales_forecast,
-            ["center", "resource_code", "date"],
-            ("sales_ea",),
-        ),
-        "amazon_inbound.csv": (
-            inbound,
-            ["resource_code", "date", "to_center"],
-            ("qty_ea",),
-        ),
+        "timeline_actual.csv": {
+            "frame": timeline_actual,
+            "sort_cols": ["center", "resource_code", "date"],
+        },
+        "timeline_with_consumption.csv": {
+            "frame": timeline_with_consumption,
+            "sort_cols": ["center", "resource_code", "date"],
+        },
+        "kpi_breakdown.csv": {
+            "frame": kpi,
+            "sort_cols": ["resource_code", "metric"],
+            "round_cols": ("value",),
+        },
+        "amazon_inventory_actual.csv": {
+            "frame": amazon_ctx.inv_actual,
+            "sort_cols": ["center", "resource_code", "date"],
+        },
+        "amazon_inventory_forecast.csv": {
+            "frame": amazon_ctx.inv_forecast,
+            "sort_cols": ["center", "resource_code", "date"],
+        },
+        "amazon_sales_history.csv": {
+            "frame": amazon_ctx.sales_hist,
+            "sort_cols": ["center", "resource_code", "date"],
+            "round_cols": ("sales_ea",),
+        },
+        "amazon_sales_ma7.csv": {
+            "frame": amazon_ctx.sales_ma7,
+            "sort_cols": ["center", "resource_code", "date"],
+            "round_cols": ("sales_ea",),
+        },
+        "amazon_sales_forecast.csv": {
+            "frame": amazon_ctx.sales_forecast,
+            "sort_cols": ["center", "resource_code", "date"],
+            "round_cols": ("sales_ea",),
+        },
+        "amazon_inbound.csv": {
+            "frame": inbound,
+            "sort_cols": ["resource_code", "date", "to_center"],
+            "round_cols": ("qty_ea",),
+            "int_cols": ("qty_ea",),
+        },
     }
 
-    for name, (frame, sort_cols, round_cols) in frames.items():
-        normalised = normalise_dataframe(frame, sort_by=sort_cols, round_columns=round_cols)
+    for name, config in frames.items():
+        normalised = normalise_dataframe(
+            config["frame"],
+            sort_by=config.get("sort_cols"),
+            round_columns=config.get("round_cols"),
+            int_columns=config.get("int_cols"),
+        )
         normalised.to_csv(out_dir / name, index=False)
 
 
