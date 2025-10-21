@@ -141,18 +141,28 @@ def render_amazon_panel(
     # 프로모션이 있어도 인벤토리 기반 재고 추세는 유지하되,
     # 판매 예측은 v5 컨텍스트의 uplift 적용 소비예측이 우선하도록 한다.
     extra: dict = {"use_inventory_for_sales": False}
-    if inv_actual is not None:
-        extra["inv_actual"] = inv_actual
-    # 예측 재고 프레임이 선택한 모든 SKU를 포함하지 않으면 v5 내부 추정에 맡긴다
+    # inv_forecast 주입 여부를 SKU 포함 + 미래 구간 커버리지로 결정
+    should_inject_inv = False
     if inv_forecast is not None and not inv_forecast.empty:
         try:
-            present = set(inv_forecast.get("resource_code", pd.Series([], dtype=str)).astype(str).unique())
-            expected = set(str(s) for s in skus)
-            if expected and expected.issubset(present):
-                extra["inv_forecast"] = inv_forecast
+            df_if = inv_forecast.copy()
+            df_if["resource_code"] = df_if.get("resource_code", "").astype(str)
+            df_if["date"] = pd.to_datetime(df_if.get("date"), errors="coerce").dt.normalize()
+            df_if = df_if.dropna(subset=["date"]) 
+            # 오늘 이후, 표시 구간 내 커버리지 확인
+            df_if = df_if[(df_if["date"] > pd.to_datetime(today).normalize()) & (df_if["date"] >= pd.to_datetime(start).normalize()) & (df_if["date"] <= pd.to_datetime(end).normalize())]
+            expected = {str(s) for s in skus}
+            if expected:
+                coverage = {sku for sku, g in df_if.groupby("resource_code") if not g.empty}
+                if expected.issubset(coverage):
+                    should_inject_inv = True
         except Exception:
-            # 안전하게 내부 추정 사용
-            pass
+            should_inject_inv = False
+
+    if should_inject_inv:
+        if inv_actual is not None:
+            extra["inv_actual"] = inv_actual
+        extra["inv_forecast"] = inv_forecast
 
     # v6: 오늘 이후 판매 예측을 inv_forecast 감소량으로 강제 동기화하고 싶을 때 사용
     if sales_forecast_from_inventory is not None and not sales_forecast_from_inventory.empty:
