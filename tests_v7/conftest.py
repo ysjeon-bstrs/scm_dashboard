@@ -8,6 +8,7 @@ tests_v7 공통 픽스처
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Callable
 
 import os
@@ -17,6 +18,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_DIR = ROOT / "tests_v7" / "golden"
+
+# CI 환경에서 패키지 임포트를 보장하기 위해 프로젝트 루트를 sys.path에 추가
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 @pytest.fixture(scope="session")

@@ -24,13 +24,16 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      - name: Set PYTHONPATH
+        run: echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+
       - name: Generate golden (if absent)
         run: |
           if [ ! -f tests_v7/golden/v5/timeline_with_consumption.csv ]; then 
             UPDATE_GOLDEN=1 pytest -q tests_v7/test_v7_golden_equivalence.py || true
           fi
 
-      - name: Run tests
+      - name: Run tests (v7)
         run: |
           pytest -q tests_v7/test_v7_golden_equivalence.py
 
