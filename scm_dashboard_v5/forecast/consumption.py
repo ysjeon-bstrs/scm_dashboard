@@ -551,23 +551,37 @@ def build_amazon_forecast_context(
     if not future_index.empty and not moves_df.empty:
         move_cols = {str(c).strip().lower(): c for c in moves_df.columns}
         event_col = move_cols.get("event_date")
+        pred_col = move_cols.get("pred_inbound_date")
+        inb_col = move_cols.get("inbound_date")
+        arr_col = move_cols.get("arrival_date")
         to_center_col = move_cols.get("to_center")
         sku_col = move_cols.get("resource_code") or move_cols.get("sku")
         qty_col = move_cols.get("qty_ea") or move_cols.get("qty")
 
-        if event_col and to_center_col and sku_col and qty_col:
+        if to_center_col and sku_col and qty_col:
             inbound_norm = moves_df.rename(
                 columns={
-                    event_col: "event_date",
+                    (event_col or "event_date"): "event_date",
                     to_center_col: "to_center",
                     sku_col: "resource_code",
                     qty_col: "qty_ea",
                 }
             ).copy()
-            inbound_norm["event_date"] = pd.to_datetime(
-                inbound_norm.get("event_date"), errors="coerce"
-            ).dt.normalize()
+
+            # Coalesce event_date with pred_inbound_date/inbound_date/arrival_date
+            evt = pd.to_datetime(inbound_norm.get("event_date"), errors="coerce")
+            if pred_col:
+                pred = pd.to_datetime(moves_df[pred_col], errors="coerce")
+                evt = evt.fillna(pred)
+            if inb_col:
+                inb = pd.to_datetime(moves_df[inb_col], errors="coerce")
+                evt = evt.fillna(inb)
+            if arr_col:
+                arr = pd.to_datetime(moves_df[arr_col], errors="coerce")
+                evt = evt.fillna(arr)
+            inbound_norm["event_date"] = evt.dt.normalize()
             inbound_norm = inbound_norm.dropna(subset=["event_date"])
+
             inbound_norm["to_center"] = inbound_norm.get("to_center", "").apply(
                 normalize_center_value
             )

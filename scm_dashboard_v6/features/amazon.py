@@ -17,6 +17,7 @@ from scm_dashboard_v6.ui.charts.amazon import render_amazon_sales_vs_inventory
 from scm_dashboard_v5.ui.charts import (
     render_amazon_sales_vs_inventory as v5_render_amazon_sales_vs_inventory,
 )
+from center_alias import normalize_center_value
 
 
 def render_amazon_panel(
@@ -44,9 +45,65 @@ def render_amazon_panel(
       v6 차트 래퍼로 렌더링한다.
     """
 
+    # v6 안전장치: 센터 별칭 정규화 (스냅샷/이동 모두)
+    processed_snapshot = snapshot_long.copy() if snapshot_long is not None else pd.DataFrame()
+    if not processed_snapshot.empty and "center" in processed_snapshot.columns:
+        try:
+            processed_snapshot["center"] = processed_snapshot["center"].apply(normalize_center_value)
+        except Exception:
+            pass
+
+    # Backfill missing event_date for moves using pred_inbound_date / inbound_date / arrival_date
+    processed_moves = moves.copy() if moves is not None else pd.DataFrame()
+    if not processed_moves.empty:
+        # ... (coalescing logic for event_date, pred_inbound_date, inbound_date, arrival_date)
+        cols = {str(c).strip().lower(): c for c in processed_moves.columns}
+        col_event = cols.get("event_date")
+        col_pred = cols.get("pred_inbound_date")
+        col_inb = cols.get("inbound_date")
+        col_arr = cols.get("arrival_date")
+
+        if col_event is None:
+            processed_moves["event_date"] = pd.NaT
+            col_event = "event_date"
+
+        if col_pred and col_pred in processed_moves.columns:
+            processed_moves[col_event] = processed_moves[col_event].where(processed_moves[col_event].notna(), processed_moves[col_pred])
+        if col_inb and col_inb in processed_moves.columns:
+            processed_moves[col_event] = processed_moves[col_event].where(processed_moves[col_event].notna(), processed_moves[col_inb])
+        if col_arr and col_arr in processed_moves.columns:
+            arr = pd.to_datetime(processed_moves[col_arr], errors="coerce")
+            try:
+                lag = int(lag_days) if lag_days is not None else 0
+            except Exception:
+                lag = 0
+            today_norm = pd.Timestamp.today().normalize()
+            past_mask = arr.notna() & (arr <= today_norm)
+            fut_mask = arr.notna() & (arr > today_norm)
+            est_from_arr = pd.Series(pd.NaT, index=processed_moves.index, dtype="datetime64[ns]")
+            if past_mask.any():
+                est_from_arr.loc[past_mask] = (arr.loc[past_mask] + pd.Timedelta(days=lag)).dt.normalize()
+            if fut_mask.any():
+                est_from_arr.loc[fut_mask] = arr.loc[fut_mask].dt.normalize()
+            processed_moves[col_event] = processed_moves[col_event].where(processed_moves[col_event].notna(), est_from_arr)
+
+        if "event_date" in processed_moves.columns:
+            processed_moves["event_date"] = pd.to_datetime(processed_moves["event_date"], errors="coerce").dt.normalize()
+        for col in ("to_center", "resource_code"):
+            if col in processed_moves.columns:
+                processed_moves[col] = processed_moves[col].astype(str)
+        # 센터 별칭 정규화 (inbound 필터 호환)
+        if "to_center" in processed_moves.columns:
+            try:
+                processed_moves["to_center"] = processed_moves["to_center"].apply(normalize_center_value)
+            except Exception:
+                pass
+        if "qty_ea" in processed_moves.columns:
+            processed_moves["qty_ea"] = pd.to_numeric(processed_moves["qty_ea"], errors="coerce").fillna(0)
+
     ctx = v5_build_amz_ctx(
-        snap_long=snapshot_long,
-        moves=moves,
+        snap_long=processed_snapshot,
+        moves=processed_moves,
         snapshot_raw=snapshot_raw,
         centers=list(centers),
         skus=list(skus),
@@ -75,56 +132,9 @@ def render_amazon_panel(
         except Exception:
             pass
 
-    # v5 컨텍스트가 입고예정(inbound)을 반영해 판매 예측을 클램프하도록 실제 moves를 전달
+    # v5 컨텍스트에도 가공된 moves를 반영 (방어적 재할당)
     try:
-        mv = moves.copy() if moves is not None else pd.DataFrame()
-        if not mv.empty:
-            # event_date 미보유 시 pred_inbound_date / inbound_date / arrival_date 기반으로 보강
-            cols = {str(c).strip().lower(): c for c in mv.columns}
-            col_event = cols.get("event_date")
-            col_pred = cols.get("pred_inbound_date")
-            col_inb = cols.get("inbound_date")
-            col_arr = cols.get("arrival_date")
-
-            if col_event is None:
-                # 새 event_date 컬럼 생성
-                mv["event_date"] = pd.NaT
-                col_event = "event_date"
-
-            # 우선 pred_inbound_date 사용
-            if col_pred and col_pred in mv.columns:
-                mv[col_event] = mv[col_event].where(mv[col_event].notna(), mv[col_pred])
-            # 없으면 inbound_date 사용
-            if col_inb and col_inb in mv.columns:
-                mv[col_event] = mv[col_event].where(mv[col_event].notna(), mv[col_inb])
-            # 없으면 arrival_date 사용 (과거 도착이면 lag_days 보정, 미래는 그대로)
-            if col_arr and col_arr in mv.columns:
-                arr = pd.to_datetime(mv[col_arr], errors="coerce")
-                if lag_days is None:
-                    lag = 0
-                else:
-                    try:
-                        lag = int(lag_days)
-                    except Exception:
-                        lag = 0
-                today_norm = pd.Timestamp.today().normalize()
-                past_mask = arr.notna() & (arr <= today_norm)
-                fut_mask = arr.notna() & (arr > today_norm)
-                est_from_arr = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
-                if past_mask.any():
-                    est_from_arr.loc[past_mask] = (arr.loc[past_mask] + pd.Timedelta(days=lag)).dt.normalize()
-                if fut_mask.any():
-                    est_from_arr.loc[fut_mask] = arr.loc[fut_mask].dt.normalize()
-                mv[col_event] = mv[col_event].where(mv[col_event].notna(), est_from_arr)
-
-            if "event_date" in mv.columns:
-                mv["event_date"] = pd.to_datetime(mv["event_date"], errors="coerce").dt.normalize()
-            for col in ("to_center", "resource_code"):
-                if col in mv.columns:
-                    mv[col] = mv[col].astype(str)
-            if "qty_ea" in mv.columns:
-                mv["qty_ea"] = pd.to_numeric(mv["qty_ea"], errors="coerce").fillna(0)
-        setattr(ctx, "moves", mv)
+        setattr(ctx, "moves", processed_moves)
     except Exception:
         pass
 
