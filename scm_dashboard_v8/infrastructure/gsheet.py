@@ -1,28 +1,16 @@
+"""Google Sheets 연동 어댑터."""
+
 from __future__ import annotations
 
-from scm_dashboard_v4.loaders import load_from_gsheet_api, load_snapshot_raw
-from scm_dashboard_v4.processing import (
-    load_wip_from_incoming,
-    normalize_moves,
-    normalize_refined_snapshot,
-)
+from typing import Tuple
 
-from .models import DashboardSourceData
+import pandas as pd
+
+from scm_dashboard_v4.loaders import load_from_gsheet_api
 
 
-def load_dashboard_data() -> DashboardSourceData:
-    """Load dashboard data from Google Sheets and return normalized DataFrames."""
+def load_moves_snapshot_from_gsheet() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Google Sheets API를 호출해 move·정제 스냅샷·입고예정 데이터를 읽어온다."""
 
-    df_move, df_ref, df_incoming = load_from_gsheet_api()
-
-    moves = normalize_moves(df_move)
-    snapshot = normalize_refined_snapshot(df_ref)
-    wip = load_wip_from_incoming(df_incoming)
-    snapshot_raw = load_snapshot_raw()
-
-    return DashboardSourceData(
-        moves=moves,
-        snapshot=snapshot,
-        wip=wip,
-        snapshot_raw=snapshot_raw,
-    )
+    # ✅ v4 모듈의 검증된 로직을 그대로 호출한다.
+    return load_from_gsheet_api()

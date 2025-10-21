@@ -1,4 +1,4 @@
-"""Data normalization helpers for the SCM dashboard domain objects."""
+"""도메인 데이터 정규화 유틸리티."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
 
 
 def normalize_dates(frame: pd.DataFrame, *, columns: Iterable[str] = DATE_COLUMNS) -> pd.DataFrame:
-    """Return a copy of *frame* with the specified date columns normalised to midnight."""
+    """지정된 날짜 컬럼을 자정 기준으로 정규화한 DataFrame을 반환한다."""
 
     out = frame.copy()
     for col in columns:
@@ -20,10 +20,11 @@ def normalize_dates(frame: pd.DataFrame, *, columns: Iterable[str] = DATE_COLUMN
 
 
 def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
-    """Coerce core move columns to predictable dtypes."""
+    """move 데이터의 핵심 컬럼 타입을 안정적으로 보정한다."""
 
     out = normalize_dates(frame)
 
+    # ✅ 문자열 컬럼은 공백 대비를 위해 문자열형으로 통일한다.
     carrier_src = out["carrier_mode"] if "carrier_mode" in out.columns else pd.Series("", index=out.index)
     out["carrier_mode"] = carrier_src.astype(str).str.upper()
 
@@ -43,7 +44,7 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
-    """Standardise snapshot schema for downstream consumers."""
+    """스냅샷 데이터를 date/center/resource_code/stock_qty 컬럼으로 정규화한다."""
 
     out = frame.copy()
     date_col = None
@@ -52,7 +53,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             date_col = candidate
             break
     if not date_col:
-        raise KeyError("snapshot frame must include a 'date' or 'snapshot_date' column")
+        raise KeyError("snapshot 데이터에는 'date' 또는 'snapshot_date' 컬럼이 필요합니다.")
 
     out["date"] = pd.to_datetime(out[date_col], errors="coerce").dt.normalize()
 
