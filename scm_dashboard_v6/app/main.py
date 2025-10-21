@@ -35,6 +35,7 @@ from scm_dashboard_v4.processing import (
     normalize_moves,
     normalize_refined_snapshot,
 )
+from center_alias import normalize_center_value
 
 
 def main() -> None:
@@ -207,6 +208,8 @@ def main() -> None:
     # 스텝 차트에서 얻은 피벗 기반 tidy(실측/예측)를 전달한다.
     # 또한 아마존 차트에는 아마존 센터만 표시되도록 필터링한다.
     amazon_centers = [c for c in ui.centers if c.upper().startswith("AMZ") or "AMAZON" in c.upper()]
+    # 안전: 센터 별칭 정규화
+    amazon_centers = [normalize_center_value(c) for c in amazon_centers]
     inv_actual_tidy = (
         timeline[(timeline["date"] <= today) & (timeline["center"].isin(amazon_centers))]
         if isinstance(timeline, pd.DataFrame)
@@ -217,6 +220,17 @@ def main() -> None:
         if isinstance(timeline, pd.DataFrame)
         else None
     )
+
+    # 안전: 타임라인에서 넘어온 center 별칭도 정규화 (업스트림 데이터가 섞여 들어오는 경우 대응)
+    try:
+        if inv_actual_tidy is not None and not inv_actual_tidy.empty and "center" in inv_actual_tidy.columns:
+            inv_actual_tidy = inv_actual_tidy.copy()
+            inv_actual_tidy["center"] = inv_actual_tidy["center"].apply(normalize_center_value)
+        if inv_forecast_tidy is not None and not inv_forecast_tidy.empty and "center" in inv_forecast_tidy.columns:
+            inv_forecast_tidy = inv_forecast_tidy.copy()
+            inv_forecast_tidy["center"] = inv_forecast_tidy["center"].apply(normalize_center_value)
+    except Exception:
+        pass
     # v6 전용 가드: v5 렌더러의 '첫 품절일 이후 전체 0' 클램프를 회피하기 위해
     # 미래 재고가 0으로 떨어지는 날에도 극소 양수로 유지하여(시각적으로는 0)
     # 입고 이후 판매가 재개될 수 있도록 한다.

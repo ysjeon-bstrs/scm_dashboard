@@ -143,8 +143,16 @@ def render_amazon_panel(
     extra: dict = {"use_inventory_for_sales": False}
     if inv_actual is not None:
         extra["inv_actual"] = inv_actual
-    if inv_forecast is not None:
-        extra["inv_forecast"] = inv_forecast
+    # 예측 재고 프레임이 선택한 모든 SKU를 포함하지 않으면 v5 내부 추정에 맡긴다
+    if inv_forecast is not None and not inv_forecast.empty:
+        try:
+            present = set(inv_forecast.get("resource_code", pd.Series([], dtype=str)).astype(str).unique())
+            expected = set(str(s) for s in skus)
+            if expected and expected.issubset(present):
+                extra["inv_forecast"] = inv_forecast
+        except Exception:
+            # 안전하게 내부 추정 사용
+            pass
 
     # v6: 오늘 이후 판매 예측을 inv_forecast 감소량으로 강제 동기화하고 싶을 때 사용
     if sales_forecast_from_inventory is not None and not sales_forecast_from_inventory.empty:
