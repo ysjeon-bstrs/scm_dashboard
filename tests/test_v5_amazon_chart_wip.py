@@ -1,8 +1,20 @@
 import pandas as pd
 
-from scm_dashboard_v5.forecast import AmazonForecastContext
-from scm_dashboard_v5.forecast import consumption
+from scm_dashboard_v5.forecast import (
+    AmazonForecastContext as AmazonForecastContext_v5,
+)
+from scm_dashboard_v5.forecast import consumption as consumption_v5
 from scm_dashboard_v5.ui import charts
+from scm_dashboard_v8.forecast import AmazonForecastContext, consumption
+
+
+def test_v5_forecast_aliases_v8():
+    assert AmazonForecastContext is AmazonForecastContext_v5
+    assert consumption.build_timeline is consumption_v5.build_timeline
+    assert (
+        consumption.build_amazon_forecast_context
+        is consumption_v5.build_amazon_forecast_context
+    )
 
 
 def _capture_plot(monkeypatch):

@@ -1,6 +1,13 @@
 import pandas as pd
 
-from scm_dashboard_v5.analytics.sales import prepare_amazon_inventory_layers
+from scm_dashboard_v5.analytics.sales import (
+    prepare_amazon_inventory_layers as prepare_amazon_inventory_layers_v5,
+)
+from scm_dashboard_v8.analytics.sales import prepare_amazon_inventory_layers
+
+
+def test_v5_sales_module_aliases_v8():
+    assert prepare_amazon_inventory_layers is prepare_amazon_inventory_layers_v5
 
 
 def test_prepare_amazon_inventory_layers_returns_aligned_series():

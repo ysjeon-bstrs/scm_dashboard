@@ -1,0 +1,7 @@
+resource_code,metric,value
+SKU1,current,0
+SKU1,in_transit,15
+SKU1,wip,0
+SKU2,current,0
+SKU2,in_transit,0
+SKU2,wip,5
