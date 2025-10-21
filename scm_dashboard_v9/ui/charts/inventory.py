@@ -134,7 +134,7 @@ def inventory_matrix(
     end: pd.Timestamp,
 ) -> pd.DataFrame:
     """선택 센터×SKU의 재고(실측) 시계열 매트릭스. index=date, columns=sku"""
-    c = _coerce_cols(snap_long)
+    c = coerce_cols(snap_long)
     s = snap_long.rename(
         columns={c["date"]: "date", c["center"]: "center", c["sku"]: "resource_code", c["qty"]: "stock_qty"}
     )[["date", "center", "resource_code", "stock_qty"]].copy()

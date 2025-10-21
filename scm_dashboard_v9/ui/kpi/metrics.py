@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from scm_dashboard_v9.analytics import kpi_breakdown_per_sku

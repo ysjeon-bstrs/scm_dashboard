@@ -26,7 +26,7 @@ def sales_from_snapshot(
     - 감소분(-)만 판매로 본다
     반환: index=date, columns=sku, 값=EA/Day
     """
-    c = _coerce_cols(snap_long)
+    c = coerce_cols(snap_long)
     s = snap_long.rename(
         columns={c["date"]: "date", c["center"]: "center", c["sku"]: "resource_code", c["qty"]: "stock_qty"}
     )[["date", "center", "resource_code", "stock_qty"]].copy()
