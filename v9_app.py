@@ -39,6 +39,7 @@ from scm_dashboard_v9.ui import (
     render_sku_summary_cards,
     render_step_chart,
 )
+from scm_dashboard_v9.ui.adapters import handle_domain_errors
 from scm_dashboard_v9.ui.charts import _sku_color_map, _timeline_inventory_matrix
 
 
@@ -288,8 +289,9 @@ def main() -> None:
     # ========================================
     # 10단계: 타임라인 빌드 (입력 검증)
     # ========================================
-    if not validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts):
-        return
+    # 도메인 예외를 UI 에러 메시지로 변환
+    with handle_domain_errors():
+        validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts)
 
     timeline_actual = build_core_timeline(
         snapshot_df,
