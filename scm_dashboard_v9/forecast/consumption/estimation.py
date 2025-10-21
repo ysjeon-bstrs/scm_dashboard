@@ -1,0 +1,136 @@
+"""일평균 소비량 추정 및 이벤트 적용.
+
+과거 판매 데이터로부터 소비율을 추정하고, 프로모션 이벤트를 적용합니다.
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Sequence
+import numpy as np
+
+import pandas as pd
+
+from scm_dashboard_v4 import consumption as v4_consumption
+
+def estimate_daily_consumption(sales: pd.DataFrame, *, window: int = 28) -> pd.DataFrame:
+    """Delegate to the stable v4 estimator while keeping the new namespace."""
+
+    return v4_consumption.estimate_daily_consumption(sales, window=window)
+
+
+
+
+def apply_consumption_with_events(
+    timeline: pd.DataFrame,
+    snapshot: pd.DataFrame,
+    *,
+    centers: Sequence[str],
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    lookback_days: int = 28,
+    events: Optional[Iterable[dict]] = None,
+    cons_start: pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    centers_list = list(centers)
+    skus_list = list(skus)
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+    events_list = list(events) if events else None
+
+    out = timeline.copy()
+    if out.empty:
+        return out
+
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+
+    snap_cols = {c.lower(): c for c in snapshot.columns}
+    date_col = snap_cols.get("date") or snap_cols.get("snapshot_date")
+    if date_col is None:
+        raise KeyError("snapshot must include a 'date' or 'snapshot_date' column")
+
+    latest_vals = pd.to_datetime(snapshot[date_col], errors="coerce").dropna()
+    latest_snap = latest_vals.max().normalize() if not latest_vals.empty else pd.NaT
+
+    if cons_start is not None:
+        cons_start_norm = pd.to_datetime(cons_start).normalize()
+        cons_start_norm = max(cons_start_norm, start_norm)
+        if not pd.isna(latest_snap):
+            cons_start_norm = max(cons_start_norm, latest_snap + pd.Timedelta(days=1))
+    elif pd.isna(latest_snap):
+        cons_start_norm = start_norm
+    else:
+        cons_start_norm = max(latest_snap + pd.Timedelta(days=1), start_norm)
+
+    if cons_start_norm > end_norm:
+        return out
+
+    idx = pd.date_range(cons_start_norm, end_norm, freq="D")
+    uplift = pd.Series(1.0, index=idx)
+    if events_list:
+        for event in events_list:
+            s = pd.to_datetime(event.get("start"), errors="coerce")
+            t = pd.to_datetime(event.get("end"), errors="coerce")
+            u = min(3.0, max(-1.0, float(event.get("uplift", 0.0))))
+            if pd.notna(s) and pd.notna(t):
+                s = s.normalize()
+                t = t.normalize()
+                s = max(s, idx[0])
+                t = min(t, idx[-1])
+                if s <= t:
+                    uplift.loc[s:t] = uplift.loc[s:t] * (1.0 + u)
+
+    rates = {}
+    if not pd.isna(latest_snap):
+        rates = v4_consumption.estimate_daily_consumption(
+            snapshot,
+            centers_list,
+            skus_list,
+            latest_snap,
+            int(lookback_days),
+        )
+
+    chunks: list[pd.DataFrame] = []
+    for (ct, sku), grp in out.groupby(["center", "resource_code"]):
+        g = grp.sort_values("date").copy()
+        g["stock_qty"] = pd.to_numeric(g.get("stock_qty"), errors="coerce")
+
+        if ct in ("In-Transit", "WIP"):
+            chunks.append(g)
+            continue
+
+        g["stock_qty"] = g["stock_qty"].ffill()
+
+        rate = float(rates.get((ct, sku), 0.0)) if rates else 0.0
+        if rate > 0:
+            mask = g["date"] >= cons_start_norm
+            if mask.any():
+                daily = g.loc[mask, "date"].map(uplift).fillna(1.0).values * rate
+                stk = g.loc[mask, "stock_qty"].astype(float).values
+                for i in range(len(stk)):
+                    dec = daily[i]
+                    stk[i:] = np.maximum(0.0, stk[i:] - dec)
+                g.loc[mask, "stock_qty"] = stk
+
+        chunks.append(g)
+
+    if not chunks:
+        return out
+
+    combined = pd.concat(chunks, ignore_index=True)
+    combined = combined.sort_values(["center", "resource_code", "date"])
+    combined["stock_qty"] = pd.to_numeric(combined["stock_qty"], errors="coerce")
+    ffill_mask = ~combined["center"].isin(["In-Transit", "WIP"])
+    combined.loc[ffill_mask, "stock_qty"] = (
+        combined.loc[ffill_mask]
+        .groupby(["center", "resource_code"])["stock_qty"]
+        .ffill()
+    )
+    combined["stock_qty"] = combined["stock_qty"].fillna(0)
+    combined["stock_qty"] = combined["stock_qty"].replace([np.inf, -np.inf], 0)
+    combined["stock_qty"] = (
+        combined["stock_qty"].round().clip(lower=0).astype(int)
+    )
+
+    return combined
+
