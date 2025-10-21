@@ -1,8 +1,15 @@
 import pandas as pd
 
 from scm_dashboard_v4.timeline import build_timeline as build_timeline_v4
-from scm_dashboard_v5 import BuildInputs, build_timeline_bundle
+from scm_dashboard_v5 import BuildInputs as BuildInputs_v5
+from scm_dashboard_v5 import build_timeline_bundle as build_timeline_bundle_v5
 from scm_dashboard_v5.core.timeline import build_timeline as build_timeline_v5
+from scm_dashboard_v8 import BuildInputs, build_timeline_bundle
+
+
+def test_v5_exports_proxy_v8_namespace():
+    assert BuildInputs is BuildInputs_v5
+    assert build_timeline_bundle is build_timeline_bundle_v5
 
 
 def _make_sample_inputs():
