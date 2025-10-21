@@ -42,7 +42,12 @@ def _build_v8_timeline() -> pd.DataFrame:
 def test_timeline_matches_golden() -> None:
     actual = _build_v8_timeline()
     expected = load_golden_csv("timeline_actual.csv")
-    assert_frame_equivalent(actual, expected, sort_by=SORT_KEY)
+    assert_frame_equivalent(
+        actual,
+        expected,
+        sort_by=SORT_KEY,
+        label="timeline_actual.csv",
+    )
 
 
 def test_consumption_projection_matches_golden() -> None:
@@ -59,7 +64,12 @@ def test_consumption_projection_matches_golden() -> None:
     )
     actual = normalise_dataframe(projected, sort_by=SORT_KEY)
     expected = load_golden_csv("timeline_with_consumption.csv")
-    assert_frame_equivalent(actual, expected, sort_by=SORT_KEY)
+    assert_frame_equivalent(
+        actual,
+        expected,
+        sort_by=SORT_KEY,
+        label="timeline_with_consumption.csv",
+    )
 
 
 def test_kpi_breakdown_matches_golden() -> None:
@@ -88,6 +98,7 @@ def test_kpi_breakdown_matches_golden() -> None:
         ),
         expected,
         sort_by=["resource_code", "metric"],
+        label="kpi_breakdown.csv",
     )
 
 
@@ -116,7 +127,12 @@ def test_amazon_context_matches_golden() -> None:
     for filename, frame in comparisons.items():
         actual = normalise_dataframe(frame, sort_by=SORT_KEY)
         expected = load_golden_csv(filename)
-        assert_frame_equivalent(actual, expected, sort_by=SORT_KEY)
+        assert_frame_equivalent(
+            actual,
+            expected,
+            sort_by=SORT_KEY,
+            label=filename,
+        )
 
     timeline_context = TimelineContext(
         centers=fixtures.DEFAULT_CENTERS,
@@ -143,8 +159,10 @@ def test_amazon_context_matches_golden() -> None:
             inbound,
             sort_by=["resource_code", "date", "to_center"],
             round_columns=("qty_ea",),
+            int_columns=("qty_ea",),
         ),
         inbound_expected,
         sort_by=["resource_code", "date", "to_center"],
+        label="amazon_inbound.csv",
     )
 
