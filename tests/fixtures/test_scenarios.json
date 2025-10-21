@@ -1,0 +1,49 @@
+{
+  "scenarios": [
+    {
+      "id": "scenario_1_basic",
+      "description": "기본 시나리오: 2개 센터, 2개 SKU, 30일 기간",
+      "params": {
+        "centers": ["태광KR", "AMZUS"],
+        "skus": ["BA00021", "BA00022"],
+        "start": "2024-01-01",
+        "end": "2024-01-30",
+        "lag_days": 5,
+        "lookback_days": 28,
+        "events": []
+      }
+    },
+    {
+      "id": "scenario_2_with_promo",
+      "description": "프로모션 시나리오: 가중치 30% 적용",
+      "params": {
+        "centers": ["AMZUS"],
+        "skus": ["BA00021"],
+        "start": "2024-01-01",
+        "end": "2024-02-15",
+        "lag_days": 5,
+        "lookback_days": 28,
+        "events": [
+          {
+            "start": "2024-01-15",
+            "end": "2024-01-25",
+            "uplift": 0.3
+          }
+        ]
+      }
+    },
+    {
+      "id": "scenario_3_multi_sku",
+      "description": "다중 SKU 시나리오: 3개 SKU, 2개 센터",
+      "params": {
+        "centers": ["태광KR", "AMZUS"],
+        "skus": ["BA00021", "BA00022", "BA00023"],
+        "start": "2023-12-15",
+        "end": "2024-01-31",
+        "lag_days": 7,
+        "lookback_days": 14,
+        "events": []
+      }
+    }
+  ]
+}
