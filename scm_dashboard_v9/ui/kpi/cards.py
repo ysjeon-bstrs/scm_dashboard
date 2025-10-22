@@ -157,104 +157,33 @@ def render_sku_summary_cards(
         st.caption("스냅샷 데이터가 없어 KPI를 계산할 수 없습니다.")
         return pd.DataFrame()
 
-    snapshot_view = snapshot.copy()
-    if date_column not in snapshot_view.columns and "snapshot_date" in snapshot_view.columns:
-        date_column = "snapshot_date"
-    if date_column not in snapshot_view.columns:
-        st.caption("스냅샷에 날짜 정보가 없어 KPI를 계산할 수 없습니다.")
-        return pd.DataFrame()
+    (
+        snapshot_view,
+        filtered_snapshot,
+        centers_list,
+        sku_list,
+        centers_all,
+        latest_snapshot_dt,
+        global_latest_snapshot_dt,
+        name_map,
+    ) = validate_and_prepare_snapshot(snapshot, centers, skus, date_column, latest_snapshot)
 
-    snapshot_view["date"] = pd.to_datetime(snapshot_view[date_column], errors="coerce").dt.normalize()
-    snapshot_view = snapshot_view.dropna(subset=["date"])
     if snapshot_view.empty:
-        st.caption("스냅샷에 유효한 날짜가 없어 KPI를 계산할 수 없습니다.")
+        st.caption("스냅샷 데이터 검증 실패: 유효한 데이터가 없습니다.")
         return pd.DataFrame()
-
-    snapshot_view["center"] = snapshot_view["center"].astype(str)
-    snapshot_view["resource_code"] = snapshot_view["resource_code"].astype(str)
-
-    centers_list = [str(center).strip() for center in centers if str(center).strip()]
-    sku_list = [str(sku).strip() for sku in skus if str(sku).strip()]
-    centers_all = sorted(
-        {
-            str(center).strip()
-            for center in snapshot_view["center"].unique()
-            if str(center).strip()
-        }
-    )
-
-    if not centers_list or not sku_list:
-        st.caption("센터 또는 SKU 선택이 비어 있어 KPI를 계산할 수 없습니다.")
-        return pd.DataFrame()
-
-    filtered_snapshot = snapshot_view[
-        snapshot_view["center"].isin(centers_list)
-        & snapshot_view["resource_code"].isin(sku_list)
-    ].copy()
     if filtered_snapshot.empty:
         st.caption("선택한 센터/SKU 조합에 해당하는 KPI 데이터가 없습니다.")
         return pd.DataFrame()
-
-    global_latest_snapshot = snapshot_view["date"].max()
-    if pd.isna(global_latest_snapshot):
-        st.caption("최신 스냅샷 일자를 확인할 수 없어 KPI를 계산할 수 없습니다.")
+    if not centers_list or not sku_list:
+        st.caption("센터 또는 SKU 선택이 비어 있어 KPI를 계산할 수 없습니다.")
         return pd.DataFrame()
-    global_latest_snapshot_dt = pd.to_datetime(global_latest_snapshot).normalize()
-
-    selected_latest_snapshot = filtered_snapshot["date"].max()
-    if pd.isna(selected_latest_snapshot):
+    if pd.isna(latest_snapshot_dt) or pd.isna(global_latest_snapshot_dt):
         st.caption("최신 스냅샷 일자를 확인할 수 없어 KPI를 계산할 수 없습니다.")
         return pd.DataFrame()
 
-    if latest_snapshot is None or pd.isna(latest_snapshot):
-        latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
-    else:
-        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
-
     latest_snapshot = latest_snapshot_dt
 
-    if latest_snapshot is None or pd.isna(latest_snapshot):
-        latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
-    else:
-        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
-
-    latest_snapshot = latest_snapshot_dt
-
-    name_map: Mapping[str, str] = {}
-    if "resource_name" in filtered_snapshot.columns:
-        name_rows = filtered_snapshot.dropna(subset=["resource_code", "resource_name"]).copy()
-        if not name_rows.empty:
-            name_rows["resource_code"] = name_rows["resource_code"].astype(str)
-            name_rows["resource_name"] = name_rows["resource_name"].astype(str).str.strip()
-            name_rows = name_rows[name_rows["resource_name"] != ""]
-            if not name_rows.empty:
-                name_map = dict(
-                    name_rows.sort_values("date", ascending=False)[["resource_code", "resource_name"]]
-                    .drop_duplicates(subset=["resource_code"])
-                    .itertuples(index=False, name=None)
-                )
-
-    moves_view = moves.copy() if moves is not None else pd.DataFrame()
-    moves_global = pd.DataFrame()
-    if not moves_view.empty:
-        if "carrier_mode" in moves_view.columns:
-            moves_view["carrier_mode"] = moves_view["carrier_mode"].astype(str).str.upper()
-        for column in ["resource_code", "to_center"]:
-            if column in moves_view.columns:
-                moves_view[column] = moves_view[column].astype(str)
-        for column in ["inbound_date", "arrival_date", "onboard_date", "event_date"]:
-            if column in moves_view.columns:
-                moves_view[column] = pd.to_datetime(moves_view[column], errors="coerce")
-
-        if "resource_code" in moves_view.columns:
-            moves_view = moves_view[
-                moves_view["resource_code"].isin(sku_list) | (moves_view["resource_code"] == "")
-            ]
-        moves_global = moves_view.copy()
-        if "to_center" in moves_view.columns:
-            moves_view = moves_view[
-                moves_view["to_center"].isin(centers_list) | (moves_view["to_center"] == "")
-            ]
+    moves_view, moves_global = prepare_moves_data(moves, centers_list, sku_list)
 
     kpi_df = kpi_breakdown_per_sku(
         filtered_snapshot,
@@ -275,84 +204,10 @@ def render_sku_summary_cards(
 
     latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
     today_dt = pd.to_datetime(today).normalize()
-    window_end = today_dt + pd.Timedelta(days=30)
 
-    wip_pipeline_totals: Dict[str, int] = {}
-    wip_30d_by_center: Dict[tuple[str, str], int] = {}
-    if moves is not None and not moves.empty and sku_list:
-        wf = moves.copy()
-        for column in ["onboard_date", "event_date"]:
-            if column in wf.columns:
-                wf[column] = pd.to_datetime(wf[column], errors="coerce")
-            else:
-                wf[column] = pd.NaT
-        if "carrier_mode" in wf.columns:
-            wf["carrier_mode"] = wf["carrier_mode"].astype(str).str.upper()
-        else:
-            wf["carrier_mode"] = ""
-        if "to_center" in wf.columns:
-            wf["to_center"] = wf["to_center"].astype(str).str.strip()
-        else:
-            wf["to_center"] = ""
-        if "resource_code" in wf.columns:
-            wf["resource_code"] = wf["resource_code"].astype(str).str.strip()
-        else:
-            wf["resource_code"] = ""
-        if "qty_ea" in wf.columns:
-            wf["qty_ea"] = (
-                pd.to_numeric(wf["qty_ea"], errors="coerce").fillna(0).astype(int)
-            )
-        else:
-            wf["qty_ea"] = 0
-        if "status" in wf.columns:
-            wf = wf[wf["status"].astype(str).str.upper() != "CANCEL"]
-
-        wf = wf[wf["resource_code"].isin(sku_list)]
-
-        if not wf.empty:
-            pipeline_mask = (wf["carrier_mode"] == "WIP") & (wf["event_date"] > today_dt)
-            wip_pipeline_series = (
-                wf.loc[pipeline_mask].groupby("resource_code")["qty_ea"].sum()
-            )
-
-            center_mask = (
-                (wf["carrier_mode"] == "WIP")
-                & (wf["to_center"].isin(centers_list))
-                & (wf["event_date"] >= today_dt)
-                & (wf["event_date"] <= window_end)
-            )
-            wip_30d_series = (
-                wf.loc[center_mask]
-                .groupby(["resource_code", "to_center"], as_index=True)["qty_ea"]
-                .sum()
-            )
-            pipeline_dict = (
-                wip_pipeline_series.astype(int).to_dict()
-                if not wip_pipeline_series.empty
-                else {}
-            )
-            wip_30d_dict = (
-                wip_30d_series.astype(int).to_dict()
-                if not wip_30d_series.empty
-                else {}
-            )
-
-            if "__TOTAL__" in sku_list:
-                total_pipeline_sum = int(
-                    sum(value for key, value in pipeline_dict.items() if key != "__TOTAL__")
-                )
-                pipeline_dict["__TOTAL__"] = total_pipeline_sum
-                total_center_series = (
-                    wip_30d_series.groupby(level=1).sum()
-                    if not wip_30d_series.empty
-                    else pd.Series(dtype=int)
-                )
-                for center_name in centers_list:
-                    center_total_value = int(total_center_series.get(center_name, 0))
-                    wip_30d_dict[("__TOTAL__", center_name)] = center_total_value
-
-            wip_pipeline_totals = pipeline_dict
-            wip_30d_by_center = wip_30d_dict
+    wip_pipeline_totals, wip_30d_by_center = calculate_wip_pipeline(
+        moves, sku_list, centers_list, today_dt
+    )
 
     start_dt = (
         pd.to_datetime(start).normalize()
