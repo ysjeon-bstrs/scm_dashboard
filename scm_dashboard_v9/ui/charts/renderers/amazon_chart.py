@@ -24,6 +24,8 @@ from .amazon_chart_helpers import (
     calculate_moving_average,
     normalize_snapshot_data,
     process_moves_data,
+    process_inventory_forecast,
+    process_sales_forecast,
 )
 
 if TYPE_CHECKING:
@@ -99,66 +101,17 @@ def render_amazon_sales_vs_inventory(
     missing_sales_skus: set[str] = set(skus)
     missing_inv_skus: set[str] = set(skus)
 
-    inv_forecast_ctx = getattr(ctx, "inv_forecast", pd.DataFrame()).copy()
-    if not inv_forecast_ctx.empty:
-        inv_forecast_ctx["date"] = pd.to_datetime(
-            inv_forecast_ctx.get("date"), errors="coerce"
-        ).dt.normalize()
-        inv_forecast_ctx["center"] = inv_forecast_ctx.get("center", "").astype(str)
-        inv_forecast_ctx["resource_code"] = inv_forecast_ctx.get("resource_code", "").astype(str)
-        inv_forecast_ctx["stock_qty"] = pd.to_numeric(
-            inv_forecast_ctx.get("stock_qty"), errors="coerce"
-        ).fillna(0.0)
-        inv_forecast_ctx = inv_forecast_ctx[
-            inv_forecast_ctx["center"].isin(target_centers)
-            & inv_forecast_ctx["resource_code"].isin(skus)
-            & (inv_forecast_ctx["date"] >= fcst_start)
-            & (inv_forecast_ctx["date"] <= end)
-        ]
-        if not inv_forecast_ctx.empty:
-            grouped = (
-                inv_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
-                    "stock_qty"
-                ].sum()
-            )
-            fallback_inv_rows.append(grouped)
-            missing_inv_skus = missing_inv_skus - set(grouped["resource_code"].unique())
+    # Process inventory forecast from context
+    inv_rows, missing_inv_skus = process_inventory_forecast(
+        ctx, target_centers, skus, fcst_start, end, missing_inv_skus
+    )
+    fallback_inv_rows.extend(inv_rows)
 
-    sales_forecast_ctx = getattr(ctx, "sales_forecast", pd.DataFrame()).copy()
-    if not sales_forecast_ctx.empty:
-        sales_forecast_ctx["date"] = pd.to_datetime(
-            sales_forecast_ctx.get("date"), errors="coerce"
-        ).dt.normalize()
-        sales_forecast_ctx["center"] = sales_forecast_ctx.get("center", "").astype(str)
-        sales_forecast_ctx["resource_code"] = (
-            sales_forecast_ctx.get("resource_code", "").astype(str)
-        )
-        value_col: str | None = None
-        if "sales_ea" in sales_forecast_ctx.columns:
-            value_col = "sales_ea"
-        elif "sales_qty" in sales_forecast_ctx.columns:
-            value_col = "sales_qty"
-
-        if value_col is not None:
-            sales_forecast_ctx[value_col] = pd.to_numeric(
-                sales_forecast_ctx.get(value_col), errors="coerce"
-            ).fillna(0.0)
-            sales_forecast_ctx = sales_forecast_ctx[
-                sales_forecast_ctx["center"].isin(target_centers)
-                & sales_forecast_ctx["resource_code"].isin(skus)
-                & (sales_forecast_ctx["date"] >= fcst_start)
-                & (sales_forecast_ctx["date"] <= end)
-            ]
-            if not sales_forecast_ctx.empty:
-                grouped_sales = (
-                    sales_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
-                        value_col
-                    ].sum()
-                ).rename(columns={value_col: "sales_qty"})
-                fallback_sales_rows.append(grouped_sales)
-                missing_sales_skus = missing_sales_skus - set(
-                    grouped_sales["resource_code"].unique()
-                )
+    # Process sales forecast from context
+    sales_rows, missing_sales_skus = process_sales_forecast(
+        ctx, target_centers, skus, fcst_start, end, missing_sales_skus
+    )
+    fallback_sales_rows.extend(sales_rows)
 
     fallback_skus = sorted((missing_sales_skus | missing_inv_skus))
 
