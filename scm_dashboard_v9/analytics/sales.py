@@ -10,6 +10,13 @@ import numpy as np
 from scm_dashboard_v4 import sales as v4_sales
 
 
+class AmazonSalesResult(NamedTuple):
+    """Container for aggregated Amazon sales/inventory series."""
+
+    data: pd.DataFrame
+    center: str
+
+
 class AmazonSeriesResult(NamedTuple):
     """Container with aligned Amazon inventory, sales and forecast series."""
 

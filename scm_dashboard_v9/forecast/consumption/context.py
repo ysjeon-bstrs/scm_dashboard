@@ -12,7 +12,6 @@ import pandas as pd
 import streamlit as st
 
 from center_alias import normalize_center_value
-from scm_dashboard_v4 import consumption as v4_consumption
 from scm_dashboard_v9.core import build_timeline
 
 from .models import AmazonForecastContext
