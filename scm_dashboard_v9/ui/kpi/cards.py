@@ -26,6 +26,11 @@ from .metrics import (
     movement_breakdown_per_center,
 )
 from .styles import inject_responsive_styles
+from .cards_helpers import (
+    validate_and_prepare_snapshot,
+    prepare_moves_data,
+    calculate_wip_pipeline,
+)
 
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
     classes = ["kpi-metric-card"]
