@@ -19,6 +19,13 @@ from .models import AmazonForecastContext
 from .sales import load_amazon_daily_sales_from_snapshot_raw, make_forecast_sales_capped
 from .inventory import forecast_sales_and_inventory
 from .estimation import apply_consumption_with_events
+from .context_helpers import (
+    calculate_promotion_multiplier,
+    normalize_inputs,
+    calculate_latest_snapshot,
+    process_inventory_data,
+    process_sales_history,
+)
 
 def build_amazon_forecast_context(
     *,
@@ -42,30 +49,10 @@ def build_amazon_forecast_context(
     snapshot_long_df = snap_long.copy()
     moves_df = moves.copy() if moves is not None else pd.DataFrame()
 
-    promo_multiplier = 1.0
-    if promotion_events:
-        for event in promotion_events:
-            try:
-                uplift_val = float(event.get("uplift", 0.0))
-            except (TypeError, ValueError):
-                continue
-            uplift_val = min(3.0, max(-1.0, uplift_val))
-            promo_multiplier *= 1.0 + uplift_val
-    if not np.isfinite(promo_multiplier) or promo_multiplier <= 0:
-        promo_multiplier = 1.0
-
-    start_norm = pd.to_datetime(start).normalize()
-    end_norm = pd.to_datetime(end).normalize()
-    today_norm = pd.to_datetime(today).normalize()
-
-    center_list: list[str] = []
-    for raw_center in centers:
-        normalized = normalize_center_value(raw_center)
-        if not normalized:
-            continue
-        if normalized not in center_list:
-            center_list.append(normalized)
-    sku_list = [str(sku) for sku in skus if str(sku).strip()]
+    promo_multiplier = calculate_promotion_multiplier(promotion_events)
+    center_list, sku_list, start_norm, end_norm, today_norm = normalize_inputs(
+        centers, skus, start, end, today
+    )
 
     if not center_list or not sku_list or end_norm < start_norm:
         return AmazonForecastContext(
@@ -86,18 +73,7 @@ def build_amazon_forecast_context(
             promotion_multiplier=float(promo_multiplier),
         )
 
-    snapshot_cols = {c.lower(): c for c in snap_long.columns}
-    snap_date_col = snapshot_cols.get("snapshot_date") or snapshot_cols.get("date")
-    if snap_date_col is not None:
-        snap_dates = pd.to_datetime(snap_long[snap_date_col], errors="coerce")
-        latest_snapshot = snap_dates.dropna().max()
-    else:
-        latest_snapshot = pd.NaT
-
-    if pd.isna(latest_snapshot):
-        latest_snapshot = today_norm
-    else:
-        latest_snapshot = pd.to_datetime(latest_snapshot).normalize()
+    latest_snapshot = calculate_latest_snapshot(snap_long, today_norm)
 
     horizon_days = int(max(0, (end_norm - latest_snapshot).days))
 
@@ -131,11 +107,7 @@ def build_amazon_forecast_context(
             promotion_multiplier=float(promo_multiplier),
         )
 
-    timeline = timeline[timeline["center"].isin(center_list)].copy()
-    timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce").dt.normalize()
-    timeline["stock_qty"] = pd.to_numeric(timeline.get("stock_qty"), errors="coerce").fillna(0)
-
-    inv_actual = timeline[timeline["date"] <= today_norm].copy()
+    inv_actual, timeline = process_inventory_data(timeline, today_norm, center_list)
 
     latest_stock_lookup: dict[tuple[str, str], float] = {}
     if not inv_actual.empty:
@@ -181,11 +153,7 @@ def build_amazon_forecast_context(
     )
     if not sales_hist.empty:
         sales_hist = sales_hist[(sales_hist["date"] >= start_norm) & (sales_hist["date"] <= today_norm)]
-    sales_hist = sales_hist.copy()
-    sales_hist["date"] = pd.to_datetime(sales_hist.get("date"), errors="coerce").dt.normalize()
-    sales_hist["sales_ea"] = pd.to_numeric(sales_hist.get("sales_ea"), errors="coerce").fillna(0).astype(int)
-    sales_hist = sales_hist.dropna(subset=["date"])
-    sales_hist = sales_hist[(sales_hist["center"].isin(center_list)) & (sales_hist["resource_code"].isin(sku_list))]
+    sales_hist = process_sales_history(sales_hist, center_list, sku_list)
 
     future_index = (
         pd.date_range(today_norm + pd.Timedelta(days=1), end_norm, freq="D")
