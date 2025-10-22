@@ -11,8 +11,8 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from scm_dashboard_v4.config import CENTER_COL
-from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
+from scm_dashboard_v9.core.config import CENTER_COL
+from scm_dashboard_v9.analytics.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v4.loaders import load_snapshot_raw
 
 

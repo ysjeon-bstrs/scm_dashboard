@@ -16,9 +16,9 @@ from scm_dashboard_v4.loaders import load_from_excel
 from scm_dashboard_v4.processing import (
     load_wip_from_incoming,
     merge_wip_as_moves,
-    normalize_moves,
-    normalize_refined_snapshot,
 )
+
+from scm_dashboard_v9.domain.normalization import normalize_moves, normalize_snapshot as normalize_refined_snapshot
 
 
 @dataclass

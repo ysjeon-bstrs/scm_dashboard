@@ -10,12 +10,65 @@ import numpy as np
 
 import pandas as pd
 
-from scm_dashboard_v4 import consumption as v4_consumption
 
-def estimate_daily_consumption(sales: pd.DataFrame, *, window: int = 28) -> pd.DataFrame:
-    """Delegate to the stable v4 estimator while keeping the new namespace."""
+def estimate_daily_consumption(
+    snap_long: pd.DataFrame,
+    centers_sel: list[str],
+    skus_sel: list[str],
+    asof_dt: pd.Timestamp,
+    lookback_days: int = 28,
+) -> dict[tuple[str, str], float]:
+    """과거 재고 스냅샷으로부터 일평균 소비율을 추정합니다.
 
-    return v4_consumption.estimate_daily_consumption(sales, window=window)
+    Args:
+        snap_long: 장기 스냅샷 DataFrame (snapshot_date 또는 date 컬럼 필요)
+        centers_sel: 대상 센터 리스트
+        skus_sel: 대상 SKU 리스트
+        asof_dt: 기준 날짜 (이 날짜까지의 데이터 사용)
+        lookback_days: 과거 조회 기간 (기본 28일)
+
+    Returns:
+        (center, sku) -> 일평균 소비율 매핑 딕셔너리
+    """
+    snap = snap_long.rename(columns={"snapshot_date": "date"}).copy()
+    snap["date"] = pd.to_datetime(snap["date"], errors="coerce").dt.normalize()
+    start = (asof_dt - pd.Timedelta(days=int(lookback_days) - 1)).normalize()
+
+    hist = snap[
+        (snap["date"] >= start)
+        & (snap["date"] <= asof_dt)
+        & (snap["center"].isin(centers_sel))
+        & (snap["resource_code"].isin(skus_sel))
+    ]
+
+    rates: dict[tuple[str, str], float] = {}
+    if hist.empty:
+        return rates
+
+    for (ct, sku), g in hist.groupby(["center", "resource_code"]):
+        series = (
+            g.dropna(subset=["date"])  # drop rows without a usable date
+            .sort_values("date")
+            .groupby("date", as_index=False)["stock_qty"]
+            .last()
+        )
+        if series.empty:
+            continue
+
+        ts = (
+            series.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
+        )
+        if ts.dropna().shape[0] < max(7, lookback_days // 2):
+            continue
+        x = np.arange(len(ts), dtype=float)
+        y = ts.values.astype(float)
+        rate_reg = max(0.0, -np.polyfit(x, y, 1)[0])
+        dec = (-np.diff(y)).clip(min=0)
+        rate_dec = dec.mean() if len(dec) else 0.0
+        rate = max(rate_reg, rate_dec)
+        if rate > 0:
+            rates[(ct, sku)] = float(rate)
+    return rates
 
 
 
@@ -82,7 +135,7 @@ def apply_consumption_with_events(
 
     rates = {}
     if not pd.isna(latest_snap):
-        rates = v4_consumption.estimate_daily_consumption(
+        rates = estimate_daily_consumption(
             snapshot,
             centers_list,
             skus_list,
