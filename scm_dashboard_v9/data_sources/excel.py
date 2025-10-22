@@ -12,8 +12,8 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from scm_dashboard_v4.loaders import load_from_excel
-from scm_dashboard_v4.processing import (
+from scm_dashboard_v9.data_sources.loaders import (
+    load_from_excel,
     load_wip_from_incoming,
     merge_wip_as_moves,
 )
