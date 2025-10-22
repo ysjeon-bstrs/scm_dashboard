@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import re
 
 import pandas as pd
@@ -91,7 +91,7 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 @st.cache_data(ttl=300)
-def load_from_excel(file) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+def load_from_excel(file: Any) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Excel 파일에서 데이터를 로드합니다.
 
     Args:
