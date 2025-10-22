@@ -22,6 +22,8 @@ from .amazon_chart_helpers import (
     aggregate_actual_data,
     calculate_sku_metrics,
     calculate_moving_average,
+    normalize_snapshot_data,
+    process_moves_data,
 )
 
 if TYPE_CHECKING:
@@ -59,44 +61,18 @@ def render_amazon_sales_vs_inventory(
         st.info("AMZUS 데이터가 없습니다.")
         return
 
-    cols_lower = {str(c).strip().lower(): c for c in snap_long.columns}
-    date_col = cols_lower.get("date") or cols_lower.get("snapshot_date")
-    center_col = cols_lower.get("center")
-    sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
-    stock_col = cols_lower.get("stock_qty") or cols_lower.get("qty")
-    sales_col = cols_lower.get("sales_qty") or cols_lower.get("sale_qty")
-
-    if not all([date_col, center_col, sku_col, stock_col]):
-        st.warning("정제 스냅샷 형식이 예상과 다릅니다.")
-        return
-
-    rename_map = {
-        date_col: "date",
-        center_col: "center",
-        sku_col: "resource_code",
-        stock_col: "stock_qty",
-    }
-    if sales_col:
-        rename_map[sales_col] = "sales_qty"
-
-    df = snap_long.rename(columns=rename_map).copy()
-    if "sales_qty" not in df.columns:
-        df["sales_qty"] = 0
-
-    df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.normalize()
-    df = df.dropna(subset=["date"])
-    df["center"] = df.get("center", "").astype(str)
-    df["resource_code"] = df.get("resource_code", "").astype(str)
-    df["stock_qty"] = pd.to_numeric(df.get("stock_qty"), errors="coerce").fillna(0)
-    df["sales_qty"] = pd.to_numeric(df.get("sales_qty"), errors="coerce").fillna(0)
-
-    df = df[
-        df["center"].isin(target_centers)
-        & df["resource_code"].isin(skus)
-    ].copy()
-
+    df = normalize_snapshot_data(snap_long, target_centers, skus)
     if df.empty:
-        st.info("AMZUS 데이터가 없습니다.")
+        # 컬럼 검증 실패 또는 필터링 후 데이터 없음
+        cols_lower = {str(c).strip().lower(): c for c in snap_long.columns}
+        date_col = cols_lower.get("date") or cols_lower.get("snapshot_date")
+        center_col = cols_lower.get("center")
+        sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
+        stock_col = cols_lower.get("stock_qty") or cols_lower.get("qty")
+        if not all([date_col, center_col, sku_col, stock_col]):
+            st.warning("정제 스냅샷 형식이 예상과 다릅니다.")
+        else:
+            st.info("AMZUS 데이터가 없습니다.")
         return
 
     start, end, today, lookback_days, promo_multiplier = extract_forecast_parameters(ctx, df)
@@ -114,35 +90,7 @@ def render_amazon_sales_vs_inventory(
 
     avg_demand_by_sku, last_stock_by_sku = calculate_sku_metrics(df, today, lookback_days)
 
-    moves_df = getattr(ctx, "moves", pd.DataFrame()).copy()
-    if not moves_df.empty:
-        mv_cols = {str(c).lower(): c for c in moves_df.columns}
-        rename_moves = {mv_cols.get("event_date", "event_date"): "event_date"}
-        for name in ["to_center", "resource_code", "qty_ea"]:
-            if name in mv_cols:
-                rename_moves[mv_cols[name]] = name
-        moves_df = moves_df.rename(columns=rename_moves)
-        moves_df["event_date"] = pd.to_datetime(
-            moves_df.get("event_date"), errors="coerce"
-        ).dt.normalize()
-        moves_df = moves_df.dropna(subset=["event_date"])
-        moves_df["to_center"] = moves_df.get("to_center", "").astype(str)
-        moves_df["resource_code"] = moves_df.get("resource_code", "").astype(str)
-        moves_df["qty_ea"] = pd.to_numeric(moves_df.get("qty_ea"), errors="coerce").fillna(0)
-        moves_df = moves_df[
-            moves_df["to_center"].isin(target_centers)
-            & moves_df["resource_code"].isin(skus)
-            & (moves_df["event_date"] >= today + pd.Timedelta(days=1))
-            & (moves_df["event_date"] <= end)
-        ]
-    else:
-        moves_df = pd.DataFrame(columns=["event_date", "resource_code", "qty_ea"])
-
-    inbound = (
-        moves_df.groupby(["resource_code", "event_date"], as_index=False)["qty_ea"].sum()
-        if not moves_df.empty
-        else pd.DataFrame(columns=["resource_code", "event_date", "qty_ea"])
-    )
+    moves_df, inbound = process_moves_data(ctx, target_centers, skus, today, end)
 
     fcst_start = max(today + pd.Timedelta(days=1), start)
     fallback_sales_rows: list[pd.DataFrame] = []
