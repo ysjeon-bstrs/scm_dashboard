@@ -16,8 +16,9 @@ from scm_dashboard_v4 import consumption as v4_consumption
 from scm_dashboard_v9.core import build_timeline
 
 from .models import AmazonForecastContext
-from .sales import load_amazon_daily_sales_from_snapshot_raw
+from .sales import load_amazon_daily_sales_from_snapshot_raw, make_forecast_sales_capped
 from .inventory import forecast_sales_and_inventory
+from .estimation import apply_consumption_with_events
 
 def build_amazon_forecast_context(
     *,

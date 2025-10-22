@@ -51,7 +51,7 @@ def render_step_chart(
     timeline: columns=[date, center, resource_code, stock_qty] (apply_consumption_with_events 반영 가능)
     """
 
-    if not _ensure_plotly_available():
+    if not ensure_plotly_available():
         return
 
     if timeline is None or timeline.empty:
@@ -135,7 +135,7 @@ def render_step_chart(
         wip_skus_for_colors = sorted({str(v) for v in wip_source["resource_code"].unique()})
         color_labels.extend([f"{sku} @ 태광KR" for sku in wip_skus_for_colors])
 
-    sku_colors = _step_sku_color_map(color_labels)
+    sku_colors = step_sku_color_map(color_labels)
     sku_center_seen: Dict[str, Dict[str, int]] = {}
     for tr in fig.data:
         name = tr.name or ""
@@ -152,8 +152,8 @@ def render_step_chart(
         if center not in centers_for_sku:
             centers_for_sku[center] = len(centers_for_sku)
         center_index = centers_for_sku[center]
-        shade = _shade_for(center, center_index)
-        color = _tint(base_color, shade)
+        shade = shade_for(center, center_index)
+        color = tint(base_color, shade)
         tr.update(line=dict(color=color, dash="solid", width=2.4), opacity=0.95)
 
     wip_plot: Optional[pd.DataFrame] = None
@@ -166,9 +166,9 @@ def render_step_chart(
         )
         wip_pivot = wip_pivot.reindex(columns=wip_skus, fill_value=0.0).sort_index()
         if not wip_pivot.empty:
-            wip_plot = _safe_dataframe(wip_pivot.round(0), columns=wip_skus)
+            wip_plot = safe_dataframe(wip_pivot.round(0), columns=wip_skus)
             if not wip_plot.empty:
-                wip_plot.index = _ensure_naive_index(wip_plot.index)
+                wip_plot.index = ensure_naive_index(wip_plot.index)
 
     if wip_plot is not None and not wip_plot.empty:
         for sku in wip_plot.columns:
