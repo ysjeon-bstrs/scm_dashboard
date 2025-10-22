@@ -9,6 +9,9 @@ from typing import Dict, Mapping, Sequence, Tuple
 
 import pandas as pd
 
+# WIP 파이프라인 계산 상수
+WIP_WINDOW_DAYS = 30  # 30일 내 완료 예정 WIP 계산 기간
+
 
 def validate_and_prepare_snapshot(
     snapshot: pd.DataFrame,
@@ -156,7 +159,7 @@ def calculate_wip_pipeline(
     wip_pipeline_totals: Dict[str, int] = {}
     wip_30d_by_center: Dict[tuple[str, str], int] = {}
 
-    window_end = today_dt + pd.Timedelta(days=30)
+    window_end = today_dt + pd.Timedelta(days=WIP_WINDOW_DAYS)
 
     if moves is None or moves.empty or not sku_list:
         return wip_pipeline_totals, wip_30d_by_center
