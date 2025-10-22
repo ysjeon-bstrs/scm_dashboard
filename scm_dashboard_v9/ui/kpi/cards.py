@@ -311,7 +311,8 @@ def render_sku_summary_cards(
         display_name = name_map.get(sku, "") if isinstance(name_map, Mapping) else ""
 
         base_current = kpi_df.at[sku, "current"] if sku in kpi_df.index else 0
-        total_current = int(current_totals.get(sku, base_current) or base_current)
+        current_val = current_totals.get(sku, base_current)
+        total_current = int(current_val) if pd.notna(current_val) else int(base_current)
         if not global_current_totals.empty:
             current_all_val = global_current_totals.get(sku, float("nan"))
             total_current_all = (

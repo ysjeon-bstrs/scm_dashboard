@@ -399,13 +399,14 @@ def sales_forecast_from_inventory_projection(
 
     # 재고가 증가한 날(입고가 있었던 날)에도 최소한의 판매 막대를 유지하기 위해
     # 해당 SKU의 평균 판매량을 채워 넣는다. 평균이 정의되지 않으면 0으로 둔다.
+    # Vectorized operation으로 성능 개선
+    inbound_mask = diff > 0
+    avg_sales = sales.replace(0, np.nan).mean(skipna=True)
+    avg_sales = avg_sales.where(np.isfinite(avg_sales), 0.0)
+
     for sku in sales.columns:
-        avg_val = sales[sku].replace(0, np.nan).mean(skipna=True)
-        if not np.isfinite(avg_val):
-            avg_val = 0.0
-        inbound_days = diff[sku][diff[sku] > 0].index
-        if len(inbound_days) > 0:
-            sales.loc[inbound_days, sku] = avg_val
+        if sku in inbound_mask.columns and inbound_mask[sku].any():
+            sales.loc[inbound_mask[sku], sku] = avg_sales[sku]
 
     # Once the stock reaches zero we clamp subsequent sales to zero.  This
     # prevents tiny negative diffs introduced by floating point noise from
