@@ -17,6 +17,12 @@ from ..data_utils import normalize_inventory_frame
 from ..plotly_helpers import ensure_plotly_available, go
 from ..inventory import clamped_forecast_series
 from ..sales import sales_forecast_from_inventory_projection
+from .amazon_chart_helpers import (
+    extract_forecast_parameters,
+    aggregate_actual_data,
+    calculate_sku_metrics,
+    calculate_moving_average,
+)
 
 if TYPE_CHECKING:
     from scm_dashboard_v9.forecast import AmazonForecastContext
@@ -31,7 +37,7 @@ def render_amazon_sales_vs_inventory(
 ) -> None:
     """Draw the Amazon US panel, optionally using a precomputed inventory timeline."""
 
-    if not _ensure_plotly_available() or go is None:
+    if not ensure_plotly_available() or go is None:
         return
 
     if ctx is None:
@@ -93,14 +99,7 @@ def render_amazon_sales_vs_inventory(
         st.info("AMZUS 데이터가 없습니다.")
         return
 
-    start = pd.to_datetime(getattr(ctx, "start", df["date"].min())).normalize()
-    end = pd.to_datetime(getattr(ctx, "end", df["date"].max())).normalize()
-    today = pd.to_datetime(getattr(ctx, "today", pd.Timestamp.today())).normalize()
-    lookback_days = int(getattr(ctx, "lookback_days", 28) or 28)
-    lookback_days = max(1, lookback_days)
-    promo_multiplier = float(getattr(ctx, "promotion_multiplier", 1.0) or 1.0)
-    if not np.isfinite(promo_multiplier) or promo_multiplier <= 0:
-        promo_multiplier = 1.0
+    start, end, today, lookback_days, promo_multiplier = extract_forecast_parameters(ctx, df)
 
     df = df[
         (df["date"] >= start - pd.Timedelta(days=lookback_days + 2))
@@ -111,32 +110,9 @@ def render_amazon_sales_vs_inventory(
     display_start = start
     display_end = end
 
-    df["kind"] = np.where(df["date"] <= today, "actual", "future")
+    inv_actual_snapshot, sales_actual = aggregate_actual_data(df, today)
 
-    inv_actual_snapshot = (
-        df[df["kind"] == "actual"]
-        .groupby(["date", "resource_code"], as_index=False)["stock_qty"]
-        .sum()
-    )
-
-    sales_actual = (
-        df[df["kind"] == "actual"]
-        .groupby(["date", "resource_code"], as_index=False)["sales_qty"]
-        .sum()
-    )
-
-    avg_demand_by_sku: dict[str, float] = {}
-    last_stock_by_sku: dict[str, float] = {}
-    for sku, group in df.groupby("resource_code"):
-        history = group[group["date"] <= today].sort_values("date")
-        tail = history.tail(lookback_days)
-        avg = float(tail["sales_qty"].mean() or 0.0)
-        avg_demand_by_sku[sku] = max(0.0, avg)
-
-        if not history.empty:
-            last_stock_by_sku[sku] = float(history.iloc[-1]["stock_qty"])
-        else:
-            last_stock_by_sku[sku] = 0.0
+    avg_demand_by_sku, last_stock_by_sku = calculate_sku_metrics(df, today, lookback_days)
 
     moves_df = getattr(ctx, "moves", pd.DataFrame()).copy()
     if not moves_df.empty:
@@ -248,7 +224,7 @@ def render_amazon_sales_vs_inventory(
             }
 
             daily_demand = avg_demand_by_sku.get(sku, 0.0) * promo_multiplier
-            fcst_sales, inv_series = _clamped_forecast_series(
+            fcst_sales, inv_series = clamped_forecast_series(
                 start_date=fcst_start,
                 end_date=end,
                 base_stock=base_stock,
@@ -290,23 +266,23 @@ def render_amazon_sales_vs_inventory(
     )
 
     default_center = target_centers[0] if target_centers else None
-    inv_actual_df = _normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
-    inv_forecast_df = _normalize_inventory_frame(inv_forecast_df, default_center=default_center)
+    inv_actual_df = normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
+    inv_forecast_df = normalize_inventory_frame(inv_forecast_df, default_center=default_center)
 
     override_inventory = False
     if inv_actual is not None:
         override_inventory = True
-        inv_actual_df = _normalize_inventory_frame(inv_actual, default_center=default_center)
+        inv_actual_df = normalize_inventory_frame(inv_actual, default_center=default_center)
     if inv_forecast is not None:
         override_inventory = True
-        inv_forecast_df = _normalize_inventory_frame(inv_forecast, default_center=default_center)
+        inv_forecast_df = normalize_inventory_frame(inv_forecast, default_center=default_center)
 
     if override_inventory and inv_forecast is None:
         # When only actuals are injected we should not keep stale fallback forecasts.
         inv_forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
 
     if use_inventory_for_sales and not inv_actual_df.empty and not inv_forecast_df.empty:
-        derived_sales = _sales_forecast_from_inventory_projection(
+        derived_sales = sales_forecast_from_inventory_projection(
             inv_actual_df,
             inv_forecast_df,
             centers=target_centers,
@@ -323,16 +299,7 @@ def render_amazon_sales_vs_inventory(
             )
 
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
-    if show_ma7 and not sales_actual.empty:
-        ma = (
-            sales_actual.set_index("date")
-            .groupby("resource_code")["sales_qty"]
-            .apply(lambda s: s.rolling(7, min_periods=1).mean())
-            .reset_index()
-            .rename(columns={"sales_qty": "sales_ma7"})
-        )
-    else:
-        ma = pd.DataFrame(columns=["date", "resource_code", "sales_ma7"])
+    ma = calculate_moving_average(show_ma7, sales_actual)
 
     # --- 실측→예측 연결용 앵커 추가 ---
     if (
@@ -372,7 +339,7 @@ def render_amazon_sales_vs_inventory(
     sales_forecast_df = _trim_range(sales_forecast_df)
     ma = _trim_range(ma) if ma is not None and not ma.empty else ma
 
-    colors = sku_colors or _sku_color_map(skus)
+    colors = sku_colors or sku_color_map(skus)
     fig = go.Figure()
 
     if not sales_actual.empty:
