@@ -503,3 +503,87 @@ def finalize_forecast_dataframes(
             )
 
     return sales_forecast_df, inv_actual_df, inv_forecast_df
+
+
+def add_anchor_to_forecast(
+    inv_actual_df: pd.DataFrame,
+    inv_forecast_df: pd.DataFrame,
+    today: pd.Timestamp,
+    display_start: pd.Timestamp,
+    display_end: pd.Timestamp,
+) -> pd.DataFrame:
+    """실측→예측 연결을 위한 앵커를 forecast에 추가합니다.
+
+    Args:
+        inv_actual_df: 실측 재고 DataFrame
+        inv_forecast_df: 재고 예측 DataFrame
+        today: 현재 날짜
+        display_start: 표시 시작일
+        display_end: 표시 종료일
+
+    Returns:
+        pd.DataFrame: 앵커가 추가된 inv_forecast_df
+    """
+    if (
+        display_start <= today <= display_end
+        and not inv_actual_df.empty
+        and not inv_forecast_df.empty
+    ):
+        last_actual = (
+            inv_actual_df[inv_actual_df["date"] <= today]
+            .sort_values(["resource_code", "date"])
+            .groupby("resource_code", as_index=False)
+            .last()[["resource_code", "stock_qty"]]
+        )
+        if not last_actual.empty:
+            anchor = last_actual.assign(date=pd.to_datetime(today).normalize())
+            inv_forecast_df = pd.concat(
+                [anchor[["date", "resource_code", "stock_qty"]], inv_forecast_df],
+                ignore_index=True,
+            )
+            inv_forecast_df = (
+                inv_forecast_df.sort_values(["resource_code", "date"])
+                .drop_duplicates(subset=["resource_code", "date"], keep="last")
+            )
+
+    return inv_forecast_df
+
+
+def trim_data_to_display_range(
+    inv_actual_df: pd.DataFrame,
+    inv_forecast_df: pd.DataFrame,
+    sales_actual: pd.DataFrame,
+    sales_forecast_df: pd.DataFrame,
+    ma: Optional[pd.DataFrame],
+    display_start: pd.Timestamp,
+    display_end: pd.Timestamp,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+    """모든 데이터를 표시 범위로 슬라이스합니다.
+
+    Args:
+        inv_actual_df: 실측 재고 DataFrame
+        inv_forecast_df: 재고 예측 DataFrame
+        sales_actual: 실측 판매 DataFrame
+        sales_forecast_df: 판매 예측 DataFrame
+        ma: MA7 DataFrame
+        display_start: 표시 시작일
+        display_end: 표시 종료일
+
+    Returns:
+        tuple: (inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma) - trimmed
+    """
+    def _trim_range(df_in: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        if df_in is None or df_in.empty:
+            return df_in
+        out = df_in[
+            (df_in["date"] >= display_start) & (df_in["date"] <= display_end)
+        ].copy()
+        return out
+
+    inv_actual_df = _trim_range(inv_actual_df)
+    inv_forecast_df = _trim_range(inv_forecast_df)
+    sales_actual = _trim_range(sales_actual)
+    sales_forecast_df = _trim_range(sales_forecast_df)
+    ma = _trim_range(ma) if ma is not None and not ma.empty else ma
+
+    return inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma

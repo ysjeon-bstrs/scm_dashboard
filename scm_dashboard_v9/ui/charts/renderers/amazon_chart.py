@@ -28,6 +28,8 @@ from .amazon_chart_helpers import (
     process_sales_forecast,
     generate_fallback_forecasts,
     finalize_forecast_dataframes,
+    add_anchor_to_forecast,
+    trim_data_to_display_range,
 )
 
 if TYPE_CHECKING:
@@ -136,43 +138,16 @@ def render_amazon_sales_vs_inventory(
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
     ma = calculate_moving_average(show_ma7, sales_actual)
 
-    # --- 실측→예측 연결용 앵커 추가 ---
-    if (
-        display_start <= today <= display_end
-        and not inv_actual_df.empty
-        and not inv_forecast_df.empty
-    ):
-        last_actual = (
-            inv_actual_df[inv_actual_df["date"] <= today]
-            .sort_values(["resource_code", "date"])
-            .groupby("resource_code", as_index=False)
-            .last()[["resource_code", "stock_qty"]]
-        )
-        if not last_actual.empty:
-            anchor = last_actual.assign(date=pd.to_datetime(today).normalize())
-            inv_forecast_df = pd.concat(
-                [anchor[["date", "resource_code", "stock_qty"]], inv_forecast_df],
-                ignore_index=True,
-            )
-            inv_forecast_df = (
-                inv_forecast_df.sort_values(["resource_code", "date"])
-                .drop_duplicates(subset=["resource_code", "date"], keep="last")
-            )
+    # Add anchor to connect actual→forecast smoothly
+    inv_forecast_df = add_anchor_to_forecast(
+        inv_actual_df, inv_forecast_df, today, display_start, display_end
+    )
 
-    # 표시용으로만 [start, end]로 슬라이스
-    def _trim_range(df_in: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
-        if df_in is None or df_in.empty:
-            return df_in
-        out = df_in[
-            (df_in["date"] >= display_start) & (df_in["date"] <= display_end)
-        ].copy()
-        return out
-
-    inv_actual_df = _trim_range(inv_actual_df)
-    inv_forecast_df = _trim_range(inv_forecast_df)
-    sales_actual = _trim_range(sales_actual)
-    sales_forecast_df = _trim_range(sales_forecast_df)
-    ma = _trim_range(ma) if ma is not None and not ma.empty else ma
+    # Trim all data to display range
+    inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma = trim_data_to_display_range(
+        inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma,
+        display_start, display_end
+    )
 
     colors = sku_colors or sku_color_map(skus)
     fig = go.Figure()
