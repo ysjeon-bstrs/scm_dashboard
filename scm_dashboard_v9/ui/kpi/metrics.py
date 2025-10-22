@@ -180,16 +180,15 @@ def compute_depletion_metrics(
     if not depletion_map:
         return pd.DataFrame(columns=result_columns)
 
-    rows: List[Dict[str, object]] = []
-    for (center, sku), values in depletion_map.items():
-        rows.append(
-            {
-                "center": center,
-                "resource_code": sku,
-                "days_to_depletion": values.get("days"),
-                "depletion_date": values.get("date"),
-            }
-        )
+    rows: List[Dict[str, object]] = [
+        {
+            "center": center,
+            "resource_code": sku,
+            "days_to_depletion": values.get("days"),
+            "depletion_date": values.get("date"),
+        }
+        for (center, sku), values in depletion_map.items()
+    ]
 
     result = pd.DataFrame(rows, columns=result_columns)
 
