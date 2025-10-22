@@ -148,3 +148,119 @@ def process_sales_history(
     ]
 
     return sales_hist
+
+
+def build_inbound_lookup(
+    moves_df: pd.DataFrame,
+    future_index: pd.DatetimeIndex,
+    center_list: list[str],
+    sku_list: list[str],
+) -> dict[tuple[str, str], pd.Series]:
+    """Moves 데이터로부터 입고 예정 lookup을 생성합니다.
+
+    Args:
+        moves_df: 이동 데이터
+        future_index: 예측 기간 DatetimeIndex
+        center_list: 센터 목록
+        sku_list: SKU 목록
+
+    Returns:
+        dict: (center, sku) -> Series of inbound quantities by date
+    """
+    inbound_lookup: dict[tuple[str, str], pd.Series] = {}
+
+    if future_index.empty or moves_df.empty:
+        return inbound_lookup
+
+    move_cols = {str(c).strip().lower(): c for c in moves_df.columns}
+    event_col = move_cols.get("event_date")
+    to_center_col = move_cols.get("to_center")
+    sku_col = move_cols.get("resource_code") or move_cols.get("sku")
+    qty_col = move_cols.get("qty_ea") or move_cols.get("qty")
+
+    if not (event_col and to_center_col and sku_col and qty_col):
+        return inbound_lookup
+
+    inbound_norm = moves_df.rename(
+        columns={
+            event_col: "event_date",
+            to_center_col: "to_center",
+            sku_col: "resource_code",
+            qty_col: "qty_ea",
+        }
+    ).copy()
+    inbound_norm["event_date"] = pd.to_datetime(
+        inbound_norm.get("event_date"), errors="coerce"
+    ).dt.normalize()
+    inbound_norm = inbound_norm.dropna(subset=["event_date"])
+    inbound_norm["to_center"] = inbound_norm.get("to_center", "").apply(
+        normalize_center_value
+    )
+    inbound_norm["resource_code"] = inbound_norm.get("resource_code", "").astype(str)
+    inbound_norm["qty_ea"] = pd.to_numeric(
+        inbound_norm.get("qty_ea"), errors="coerce"
+    ).fillna(0.0)
+
+    inbound_norm = inbound_norm[
+        inbound_norm["to_center"].isin(center_list)
+        & inbound_norm["resource_code"].isin(sku_list)
+    ]
+
+    if not inbound_norm.empty:
+        start_future = future_index[0]
+        end_future = future_index[-1]
+        inbound_norm = inbound_norm[
+            (inbound_norm["event_date"] >= start_future)
+            & (inbound_norm["event_date"] <= end_future)
+        ]
+
+        if not inbound_norm.empty:
+            inbound_grouped = (
+                inbound_norm.groupby(
+                    ["to_center", "resource_code", "event_date"],
+                    as_index=False,
+                )["qty_ea"].sum()
+            )
+
+            for (ct, sku), chunk in inbound_grouped.groupby(
+                ["to_center", "resource_code"], dropna=True
+            ):
+                series = (
+                    chunk.set_index("event_date")["qty_ea"]
+                    .reindex(future_index, fill_value=0.0)
+                )
+                inbound_lookup[(ct, sku)] = series
+
+    return inbound_lookup
+
+
+def calculate_promotion_uplift(
+    promotion_events: Optional[Iterable[dict]],
+    future_index: pd.DatetimeIndex,
+) -> pd.Series:
+    """프로모션 이벤트로부터 일별 uplift Series를 계산합니다.
+
+    Args:
+        promotion_events: 프로모션 이벤트 목록
+        future_index: 예측 기간 DatetimeIndex
+
+    Returns:
+        pd.Series: 일별 uplift multiplier (기본값 1.0)
+    """
+    uplift = pd.Series(1.0, index=future_index, dtype=float)
+
+    if not promotion_events or uplift.empty:
+        return uplift
+
+    for event in promotion_events:
+        start_evt = pd.to_datetime(event.get("start"), errors="coerce")
+        end_evt = pd.to_datetime(event.get("end"), errors="coerce")
+        uplift_val = float(event.get("uplift", 0.0))
+        uplift_val = min(3.0, max(-1.0, uplift_val))
+        if pd.notna(start_evt) and pd.notna(end_evt):
+            s_norm = max(start_evt.normalize(), future_index[0])
+            e_norm = min(end_evt.normalize(), future_index[-1])
+            if s_norm <= e_norm:
+                uplift.loc[s_norm:e_norm] = uplift.loc[s_norm:e_norm] * (1.0 + uplift_val)
+
+    return uplift

@@ -25,6 +25,8 @@ from .context_helpers import (
     calculate_latest_snapshot,
     process_inventory_data,
     process_sales_history,
+    build_inbound_lookup,
+    calculate_promotion_uplift,
 )
 
 def build_amazon_forecast_context(
@@ -161,79 +163,9 @@ def build_amazon_forecast_context(
         else pd.DatetimeIndex([], dtype="datetime64[ns]")
     )
 
-    inbound_lookup: dict[tuple[str, str], pd.Series] = {}
-    if not future_index.empty and not moves_df.empty:
-        move_cols = {str(c).strip().lower(): c for c in moves_df.columns}
-        event_col = move_cols.get("event_date")
-        to_center_col = move_cols.get("to_center")
-        sku_col = move_cols.get("resource_code") or move_cols.get("sku")
-        qty_col = move_cols.get("qty_ea") or move_cols.get("qty")
+    inbound_lookup = build_inbound_lookup(moves_df, future_index, center_list, sku_list)
 
-        if event_col and to_center_col and sku_col and qty_col:
-            inbound_norm = moves_df.rename(
-                columns={
-                    event_col: "event_date",
-                    to_center_col: "to_center",
-                    sku_col: "resource_code",
-                    qty_col: "qty_ea",
-                }
-            ).copy()
-            inbound_norm["event_date"] = pd.to_datetime(
-                inbound_norm.get("event_date"), errors="coerce"
-            ).dt.normalize()
-            inbound_norm = inbound_norm.dropna(subset=["event_date"])
-            inbound_norm["to_center"] = inbound_norm.get("to_center", "").apply(
-                normalize_center_value
-            )
-            inbound_norm["resource_code"] = inbound_norm.get(
-                "resource_code", ""
-            ).astype(str)
-            inbound_norm["qty_ea"] = pd.to_numeric(
-                inbound_norm.get("qty_ea"), errors="coerce"
-            ).fillna(0.0)
-
-            inbound_norm = inbound_norm[
-                inbound_norm["to_center"].isin(center_list)
-                & inbound_norm["resource_code"].isin(sku_list)
-            ]
-
-            if not inbound_norm.empty:
-                start_future = future_index[0]
-                end_future = future_index[-1]
-                inbound_norm = inbound_norm[
-                    (inbound_norm["event_date"] >= start_future)
-                    & (inbound_norm["event_date"] <= end_future)
-                ]
-
-                if not inbound_norm.empty:
-                    inbound_grouped = (
-                        inbound_norm.groupby(
-                            ["to_center", "resource_code", "event_date"],
-                            as_index=False,
-                        )["qty_ea"].sum()
-                    )
-
-                    for (ct, sku), chunk in inbound_grouped.groupby(
-                        ["to_center", "resource_code"], dropna=True
-                    ):
-                        series = (
-                            chunk.set_index("event_date")["qty_ea"]
-                            .reindex(future_index, fill_value=0.0)
-                        )
-                        inbound_lookup[(ct, sku)] = series
-
-    uplift = pd.Series(1.0, index=future_index, dtype=float)
-    if promotion_events and not uplift.empty:
-        for event in promotion_events:
-            start_evt = pd.to_datetime(event.get("start"), errors="coerce")
-            end_evt = pd.to_datetime(event.get("end"), errors="coerce")
-            uplift_val = float(event.get("uplift", 0.0))
-            uplift_val = min(3.0, max(-1.0, uplift_val))
-            if pd.notna(start_evt) and pd.notna(end_evt):
-                s_norm = max(start_evt.normalize(), future_index[0])
-                e_norm = min(end_evt.normalize(), future_index[-1])
-                if s_norm <= e_norm:
-                    uplift.loc[s_norm:e_norm] = uplift.loc[s_norm:e_norm] * (1.0 + uplift_val)
+    uplift = calculate_promotion_uplift(promotion_events, future_index)
 
     sales_ma7_frames: list[pd.DataFrame] = []
     sales_fc_frames: list[pd.DataFrame] = []
