@@ -27,6 +27,8 @@ from .context_helpers import (
     process_sales_history,
     build_inbound_lookup,
     calculate_promotion_uplift,
+    generate_sales_forecasts,
+    apply_stock_depletion,
 )
 
 def build_amazon_forecast_context(
@@ -167,118 +169,23 @@ def build_amazon_forecast_context(
 
     uplift = calculate_promotion_uplift(promotion_events, future_index)
 
-    sales_ma7_frames: list[pd.DataFrame] = []
-    sales_fc_frames: list[pd.DataFrame] = []
-
-    hist_index = pd.date_range(start_norm, today_norm, freq="D")
-
-    for (center, sku), group in sales_hist.groupby(["center", "resource_code"], dropna=True):
-        series = (
-            group.sort_values("date")
-            .set_index("date")["sales_ea"]
-            .reindex(hist_index, fill_value=0.0)
-        )
-        ma7 = series.rolling(7, min_periods=1).mean()
-        ma_df = (
-            ma7.to_frame("sales_ea")
-            .reset_index()
-            .rename(columns={"index": "date"})
-        )
-        ma_df["center"] = center
-        ma_df["resource_code"] = sku
-        sales_ma7_frames.append(ma_df)
-
-        if not future_index.empty:
-            base_rate = float(ma7.iloc[-1]) if not ma7.empty else 0.0
-            fc_values = pd.Series(base_rate, index=future_index, dtype=float)
-            if not uplift.empty:
-                fc_values = fc_values * uplift.reindex(future_index, fill_value=1.0)
-            inbound_series = inbound_lookup.get((center, sku))
-            latest_stock = latest_stock_lookup.get((center, sku), 0.0)
-            fc_values = make_forecast_sales_capped(
-                base_daily_pred=fc_values,
-                latest_stock=latest_stock,
-                inbound_by_day=inbound_series,
-            )
-            fc_df = (
-                fc_values.to_frame("sales_ea")
-                .reset_index()
-                .rename(columns={"index": "date"})
-            )
-            fc_df["center"] = center
-            fc_df["resource_code"] = sku
-            sales_fc_frames.append(fc_df)
-
-    sales_ma7 = (
-        pd.concat(sales_ma7_frames, ignore_index=True)
-        if sales_ma7_frames
-        else empty_sales.copy()
+    sales_ma7, sales_forecast = generate_sales_forecasts(
+        sales_hist=sales_hist,
+        start_norm=start_norm,
+        today_norm=today_norm,
+        future_index=future_index,
+        uplift=uplift,
+        inbound_lookup=inbound_lookup,
+        latest_stock_lookup=latest_stock_lookup,
+        empty_sales=empty_sales,
+        make_forecast_sales_capped_fn=make_forecast_sales_capped,
     )
-    sales_ma7["date"] = pd.to_datetime(sales_ma7.get("date"), errors="coerce").dt.normalize()
 
-    sales_forecast = (
-        pd.concat(sales_fc_frames, ignore_index=True)
-        if sales_fc_frames
-        else empty_sales.copy()
+    sales_forecast = apply_stock_depletion(
+        sales_forecast=sales_forecast,
+        latest_stock_lookup=latest_stock_lookup,
+        inbound_lookup=inbound_lookup,
     )
-    sales_forecast["date"] = pd.to_datetime(sales_forecast.get("date"), errors="coerce").dt.normalize()
-
-    if not sales_forecast.empty:
-        depletion_dates: dict[tuple[str, str], pd.Timestamp] = {}
-        tol = 1e-6
-
-        for (center, sku), grp in sales_forecast.groupby([
-            "center",
-            "resource_code",
-        ], dropna=True):
-            fc_series = (
-                grp.sort_values("date")
-                .set_index("date")["sales_ea"]
-                .astype(float)
-            )
-            if fc_series.empty:
-                continue
-
-            latest_stock = float(latest_stock_lookup.get((center, sku), 0.0))
-            inbound_series = inbound_lookup.get((center, sku))
-            if inbound_series is None:
-                inbound_series = pd.Series(0.0, index=fc_series.index, dtype=float)
-            else:
-                inbound_series = inbound_series.reindex(fc_series.index, fill_value=0.0).astype(float)
-
-            remain = max(latest_stock, 0.0)
-            remain_before: list[float] = []
-            sale_list: list[float] = []
-            for day in fc_series.index:
-                remain += float(inbound_series.loc[day])
-                available = max(remain, 0.0)
-                remain_before.append(available)
-                want = float(fc_series.loc[day])
-                sale = min(want, available)
-                remain -= sale
-                sale_list.append(sale)
-
-            if sale_list:
-                sale_array = np.asarray(sale_list, dtype=float)
-                before_array = np.asarray(remain_before, dtype=float)
-                if ((sale_array <= tol) & (before_array <= tol)).any():
-                    suffix_before = np.maximum.accumulate(before_array[::-1])[::-1]
-                    suffix_sale = np.maximum.accumulate(sale_array[::-1])[::-1]
-                    final_mask = (
-                        (sale_array <= tol)
-                        & (before_array <= tol)
-                        & (suffix_before <= tol)
-                        & (suffix_sale <= tol)
-                    )
-                    if final_mask.any():
-                        depletion_dates[(center, sku)] = fc_series.index[int(np.argmax(final_mask))]
-
-        if depletion_dates:
-            mask_center = sales_forecast[["center", "resource_code"]].apply(tuple, axis=1)
-            for key, dep_date in depletion_dates.items():
-                clip_mask = (mask_center == key) & (sales_forecast["date"] > dep_date)
-                if clip_mask.any():
-                    sales_forecast.loc[clip_mask, "sales_ea"] = 0.0
 
     sales_forecast["sales_ea"] = (
         pd.to_numeric(sales_forecast.get("sales_ea"), errors="coerce")
