@@ -7,6 +7,13 @@ from __future__ import annotations
 
 import pandas as pd
 
+# 폰트 크기 계산 상수
+FONT_SIZE_THRESHOLD_SHORT = 6
+FONT_SIZE_THRESHOLD_MEDIUM = 9
+FONT_SIZE_THRESHOLD_LONG = 12
+FONT_SIZE_STEP_MEDIUM = 0.15
+FONT_SIZE_STEP_LONG = 0.25
+
 
 def escape(value: object) -> str:
     """HTML 이스케이프 처리를 수행합니다.
@@ -41,24 +48,24 @@ def format_number(value: float | int | None) -> str:
 
 def value_font_size(value: str, *, base_size: float = 1.25, min_size: float = 0.9) -> str:
     """값의 길이에 따라 적절한 폰트 크기를 계산합니다.
-    
+
     긴 숫자는 작은 폰트로 표시하여 카드 내에 잘 맞도록 합니다.
-    
+
     Args:
         value: 표시할 값 문자열
         base_size: 기본 폰트 크기 (em 단위)
         min_size: 최소 폰트 크기 (em 단위)
-        
+
     Returns:
         "1.25em" 형식의 CSS 폰트 크기
     """
     length = len(str(value))
-    if length <= 6:
+    if length <= FONT_SIZE_THRESHOLD_SHORT:
         return f"{base_size}em"
-    elif length <= 9:
-        return f"{max(min_size, base_size - 0.15)}em"
-    elif length <= 12:
-        return f"{max(min_size, base_size - 0.25)}em"
+    elif length <= FONT_SIZE_THRESHOLD_MEDIUM:
+        return f"{max(min_size, base_size - FONT_SIZE_STEP_MEDIUM)}em"
+    elif length <= FONT_SIZE_THRESHOLD_LONG:
+        return f"{max(min_size, base_size - FONT_SIZE_STEP_LONG)}em"
     else:
         return f"{min_size}em"
 

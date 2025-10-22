@@ -52,7 +52,10 @@ def hex_to_rgb(hx: str) -> Tuple[int, int, int]:
     hx = hx.lstrip("#")
     if len(hx) == 3:
         hx = "".join(ch * 2 for ch in hx)
-    return tuple(int(hx[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore
+    r = int(hx[0:2], 16)
+    g = int(hx[2:4], 16)
+    b = int(hx[4:6], 16)
+    return (r, g, b)
 
 
 def rgb_to_hex(rgb: Tuple[float, float, float]) -> str:
