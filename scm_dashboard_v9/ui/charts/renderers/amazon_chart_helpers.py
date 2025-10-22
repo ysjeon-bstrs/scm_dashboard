@@ -347,3 +347,159 @@ def process_sales_forecast(
                 )
 
     return fallback_sales_rows, missing_sales_skus
+
+
+def generate_fallback_forecasts(
+    fallback_skus: list[str],
+    fcst_start: pd.Timestamp,
+    end: pd.Timestamp,
+    last_stock_by_sku: dict[str, float],
+    inbound: pd.DataFrame,
+    avg_demand_by_sku: dict[str, float],
+    promo_multiplier: float,
+    missing_sales_skus: set[str],
+    missing_inv_skus: set[str],
+) -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
+    """재고/판매 예측이 없는 SKU들에 대해 fallback forecast를 생성합니다.
+
+    Args:
+        fallback_skus: 예측이 필요한 SKU 목록
+        fcst_start: 예측 시작일
+        end: 종료 날짜
+        last_stock_by_sku: SKU별 마지막 재고
+        inbound: Inbound 데이터 (columns: resource_code, event_date, qty_ea)
+        avg_demand_by_sku: SKU별 평균 수요
+        promo_multiplier: 프로모션 승수
+        missing_sales_skus: 판매 예측이 없는 SKU 집합
+        missing_inv_skus: 재고 예측이 없는 SKU 집합
+
+    Returns:
+        tuple: (fallback_sales_rows, fallback_inv_rows)
+    """
+    from ..inventory import clamped_forecast_series
+
+    fallback_sales_rows: list[pd.DataFrame] = []
+    fallback_inv_rows: list[pd.DataFrame] = []
+
+    for sku in fallback_skus:
+        base_stock = float(last_stock_by_sku.get(sku, 0.0))
+        inbound_map = {
+            pd.to_datetime(day): float(qty)
+            for day, qty in inbound[inbound["resource_code"] == sku][["event_date", "qty_ea"]]
+            .itertuples(index=False, name=None)
+        }
+
+        daily_demand = avg_demand_by_sku.get(sku, 0.0) * promo_multiplier
+        fcst_sales, inv_series = clamped_forecast_series(
+            start_date=fcst_start,
+            end_date=end,
+            base_stock=base_stock,
+            inbound_by_day=inbound_map,
+            daily_demand=daily_demand,
+        )
+
+        if sku in missing_sales_skus and not fcst_sales.empty:
+            fallback_sales_rows.append(
+                pd.DataFrame(
+                    {
+                        "date": fcst_sales.index,
+                        "resource_code": sku,
+                        "sales_qty": fcst_sales.values,
+                    }
+                )
+            )
+        if sku in missing_inv_skus and not inv_series.empty:
+            fallback_inv_rows.append(
+                pd.DataFrame(
+                    {
+                        "date": inv_series.index,
+                        "resource_code": sku,
+                        "stock_qty": inv_series.values,
+                    }
+                )
+            )
+
+    return fallback_sales_rows, fallback_inv_rows
+
+
+def finalize_forecast_dataframes(
+    fallback_sales_rows: list[pd.DataFrame],
+    fallback_inv_rows: list[pd.DataFrame],
+    inv_actual_snapshot: pd.DataFrame,
+    inv_actual: Optional[pd.DataFrame],
+    inv_forecast: Optional[pd.DataFrame],
+    default_center: str | None,
+    use_inventory_for_sales: bool,
+    target_centers: list[str],
+    skus: list[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Fallback rows를 병합하고 inventory override를 처리하여 최종 DataFrame들을 생성합니다.
+
+    Args:
+        fallback_sales_rows: 판매 예측 fallback 리스트
+        fallback_inv_rows: 재고 예측 fallback 리스트
+        inv_actual_snapshot: 실측 재고 스냅샷
+        inv_actual: Override용 실측 재고 (optional)
+        inv_forecast: Override용 재고 예측 (optional)
+        default_center: 기본 센터
+        use_inventory_for_sales: 재고로부터 판매 예측 생성 여부
+        target_centers: 대상 센터 목록
+        skus: SKU 목록
+        start: 시작 날짜
+        end: 종료 날짜
+        today: 현재 날짜
+
+    Returns:
+        tuple: (sales_forecast_df, inv_actual_df, inv_forecast_df)
+    """
+    from ..data_utils import normalize_inventory_frame
+    from ..sales import sales_forecast_from_inventory_projection
+
+    sales_forecast_df = (
+        pd.concat(fallback_sales_rows, ignore_index=True)
+        if fallback_sales_rows
+        else pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
+    )
+
+    inv_forecast_df = (
+        pd.concat(fallback_inv_rows, ignore_index=True)
+        if fallback_inv_rows
+        else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+    )
+
+    inv_actual_df = normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
+    inv_forecast_df = normalize_inventory_frame(inv_forecast_df, default_center=default_center)
+
+    override_inventory = False
+    if inv_actual is not None:
+        override_inventory = True
+        inv_actual_df = normalize_inventory_frame(inv_actual, default_center=default_center)
+    if inv_forecast is not None:
+        override_inventory = True
+        inv_forecast_df = normalize_inventory_frame(inv_forecast, default_center=default_center)
+
+    if override_inventory and inv_forecast is None:
+        # When only actuals are injected we should not keep stale fallback forecasts.
+        inv_forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+
+    if use_inventory_for_sales and not inv_actual_df.empty and not inv_forecast_df.empty:
+        derived_sales = sales_forecast_from_inventory_projection(
+            inv_actual_df,
+            inv_forecast_df,
+            centers=target_centers,
+            skus=skus,
+            start=start,
+            end=end,
+            today=today,
+        )
+        if not derived_sales.empty:
+            sales_forecast_df = (
+                derived_sales.rename(columns={"sales_ea": "sales_qty"})
+                if "sales_ea" in derived_sales.columns
+                else derived_sales.copy()
+            )
+
+    return sales_forecast_df, inv_actual_df, inv_forecast_df

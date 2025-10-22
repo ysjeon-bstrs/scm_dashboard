@@ -26,6 +26,8 @@ from .amazon_chart_helpers import (
     process_moves_data,
     process_inventory_forecast,
     process_sales_forecast,
+    generate_fallback_forecasts,
+    finalize_forecast_dataframes,
 )
 
 if TYPE_CHECKING:
@@ -113,91 +115,23 @@ def render_amazon_sales_vs_inventory(
     )
     fallback_sales_rows.extend(sales_rows)
 
+    # Generate fallback forecasts for missing SKUs
     fallback_skus = sorted((missing_sales_skus | missing_inv_skus))
-
     if fcst_start <= end and fallback_skus:
-        for sku in fallback_skus:
-            base_stock = float(last_stock_by_sku.get(sku, 0.0))
-            inbound_map = {
-                pd.to_datetime(day): float(qty)
-                for day, qty in inbound[inbound["resource_code"] == sku][["event_date", "qty_ea"]]
-                .itertuples(index=False, name=None)
-            }
-
-            daily_demand = avg_demand_by_sku.get(sku, 0.0) * promo_multiplier
-            fcst_sales, inv_series = clamped_forecast_series(
-                start_date=fcst_start,
-                end_date=end,
-                base_stock=base_stock,
-                inbound_by_day=inbound_map,
-                daily_demand=daily_demand,
-            )
-
-            if sku in missing_sales_skus and not fcst_sales.empty:
-                fallback_sales_rows.append(
-                    pd.DataFrame(
-                        {
-                            "date": fcst_sales.index,
-                            "resource_code": sku,
-                            "sales_qty": fcst_sales.values,
-                        }
-                    )
-                )
-            if sku in missing_inv_skus and not inv_series.empty:
-                fallback_inv_rows.append(
-                    pd.DataFrame(
-                        {
-                            "date": inv_series.index,
-                            "resource_code": sku,
-                            "stock_qty": inv_series.values,
-                        }
-                    )
-                )
-
-    sales_forecast_df = (
-        pd.concat(fallback_sales_rows, ignore_index=True)
-        if fallback_sales_rows
-        else pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
-    )
-
-    inv_forecast_df = (
-        pd.concat(fallback_inv_rows, ignore_index=True)
-        if fallback_inv_rows
-        else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
-    )
-
-    default_center = target_centers[0] if target_centers else None
-    inv_actual_df = normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
-    inv_forecast_df = normalize_inventory_frame(inv_forecast_df, default_center=default_center)
-
-    override_inventory = False
-    if inv_actual is not None:
-        override_inventory = True
-        inv_actual_df = normalize_inventory_frame(inv_actual, default_center=default_center)
-    if inv_forecast is not None:
-        override_inventory = True
-        inv_forecast_df = normalize_inventory_frame(inv_forecast, default_center=default_center)
-
-    if override_inventory and inv_forecast is None:
-        # When only actuals are injected we should not keep stale fallback forecasts.
-        inv_forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
-
-    if use_inventory_for_sales and not inv_actual_df.empty and not inv_forecast_df.empty:
-        derived_sales = sales_forecast_from_inventory_projection(
-            inv_actual_df,
-            inv_forecast_df,
-            centers=target_centers,
-            skus=skus,
-            start=start,
-            end=end,
-            today=today,
+        fb_sales, fb_inv = generate_fallback_forecasts(
+            fallback_skus, fcst_start, end, last_stock_by_sku, inbound,
+            avg_demand_by_sku, promo_multiplier, missing_sales_skus, missing_inv_skus
         )
-        if not derived_sales.empty:
-            sales_forecast_df = (
-                derived_sales.rename(columns={"sales_ea": "sales_qty"})
-                if "sales_ea" in derived_sales.columns
-                else derived_sales.copy()
-            )
+        fallback_sales_rows.extend(fb_sales)
+        fallback_inv_rows.extend(fb_inv)
+
+    # Finalize forecast DataFrames
+    default_center = target_centers[0] if target_centers else None
+    sales_forecast_df, inv_actual_df, inv_forecast_df = finalize_forecast_dataframes(
+        fallback_sales_rows, fallback_inv_rows, inv_actual_snapshot,
+        inv_actual, inv_forecast, default_center, use_inventory_for_sales,
+        target_centers, skus, start, end, today
+    )
 
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
     ma = calculate_moving_average(show_ma7, sales_actual)
