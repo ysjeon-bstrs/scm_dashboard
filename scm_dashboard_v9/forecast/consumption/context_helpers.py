@@ -117,7 +117,7 @@ def process_inventory_data(
         mask = inv_actual.set_index(["center", "resource_code", "date"]).index.isin(
             [(c, r, d) for (c, r), d in last_actual_dates.items()]
         )
-        inv_actual = inv_actual[mask.values].copy()
+        inv_actual = inv_actual[mask].copy()
 
     inv_actual["stock_qty"] = inv_actual["stock_qty"].round().clip(lower=0).astype(int)
 
