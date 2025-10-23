@@ -434,30 +434,27 @@ def main() -> None:
         if show_delta and kpi_df is not None and not kpi_df.empty:
             latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
             if not pd.isna(latest_snap_ts):
-                cols_lower = {str(c).strip().lower(): c for c in snap_amz.columns}
-                snap_col_name = (
-                    cols_lower.get("snap_time")
-                    or cols_lower.get("snapshot_time")
-                    or cols_lower.get("snapshot_datetime")
-                    or cols_lower.get("snapshot_date")
-                    or cols_lower.get("date")
+                # snap_time이 모두 null이면 date 컬럼 사용
+                time_col = "snap_time" if snap_amz["snap_time"].notna().any() else "date"
+
+                snap_prev = snap_amz.copy()
+                snap_prev["__snap_ts"] = pd.to_datetime(
+                    snap_prev[time_col], errors="coerce"
                 )
-                if snap_col_name:
-                    snap_prev = snap_amz.copy()
-                    snap_prev["__snap_ts"] = pd.to_datetime(
-                        snap_prev[snap_col_name], errors="coerce"
+                snap_prev = snap_prev.dropna(subset=["__snap_ts"])
+                snap_prev = snap_prev[snap_prev["__snap_ts"] < latest_snap_ts]
+                snap_prev = snap_prev.drop(columns="__snap_ts")
+                if not snap_prev.empty:
+                    previous_df = build_amazon_snapshot_kpis(
+                        snap_prev,
+                        skus=selected_skus,
+                        center=amazon_centers,
+                        cover_base=cover_base_option,
+                        use_ma7=True,
                     )
-                    snap_prev = snap_prev.dropna(subset=["__snap_ts"])
-                    snap_prev = snap_prev[snap_prev["__snap_ts"] < latest_snap_ts]
-                    snap_prev = snap_prev.drop(columns="__snap_ts")
-                    if not snap_prev.empty:
-                        previous_df = build_amazon_snapshot_kpis(
-                            snap_prev,
-                            skus=selected_skus,
-                            center=amazon_centers,
-                            cover_base=cover_base_option,
-                            use_ma7=True,
-                        )
+
+        # SKU → 품명 매핑
+        amz_resource_name_map = build_resource_name_map(snap_amz)
 
         render_amazon_snapshot_kpis(
             kpi_df,
@@ -465,6 +462,7 @@ def main() -> None:
             show_delta=show_delta,
             previous_df=previous_df,
             max_cols=4,
+            resource_name_map=amz_resource_name_map,
         )
 
         amz_inv_pivot = _timeline_inventory_matrix(

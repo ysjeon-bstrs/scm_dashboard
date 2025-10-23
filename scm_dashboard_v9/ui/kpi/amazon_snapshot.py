@@ -347,6 +347,7 @@ def render_amazon_snapshot_kpis(
     show_delta: bool = False,
     previous_df: pd.DataFrame | None = None,
     max_cols: int = 4,
+    resource_name_map: dict[str, str] | None = None,
 ) -> None:
     """Amazon FBA KPI 카드를 렌더링합니다."""
 
@@ -400,10 +401,18 @@ def render_amazon_snapshot_kpis(
                 delta_val = int(row.get("stock_qty", 0)) - prev_value
                 delta_text = f"{delta_val:+,}" if delta_val else "±0"
 
-        header_html = (
-            f"<h4><span class='color-dot' style='background-color:{color}'></span>"
-            f"{sku}</h4>"
-        )
+        # SKU 헤더 (resource_name 포함)
+        resource_name = resource_name_map.get(sku, "") if resource_name_map else ""
+        if resource_name:
+            header_html = (
+                f"<h4><span class='color-dot' style='background-color:{color}'></span>"
+                f"{resource_name} <span style='color: #666; font-size: 0.9em;'>[{sku}]</span></h4>"
+            )
+        else:
+            header_html = (
+                f"<h4><span class='color-dot' style='background-color:{color}'></span>"
+                f"{sku}</h4>"
+            )
 
         metric_html_parts: list[str] = []
         for metric in metrics:
@@ -437,6 +446,6 @@ def render_amazon_snapshot_kpis(
     )
 
     st.caption(
-        "입고처리중=FC 접수→가능화 전 · 입고예정=ASN/재배치로 도착 예정 · "
-        "커버일수=사용가능 ÷ 7일 평균 일판매"
+        "입고처리중=FC 도착 후 재고화 진행 중 · 입고예정=입고예약+FC 도착+재고화 진행중 · "
+        "커버일수=총 재고 or 사용가능 ÷ 7일 평균 일판매"
     )
