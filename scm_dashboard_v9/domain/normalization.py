@@ -273,12 +273,20 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     - resource_code: SKU 코드 (문자열)
     - stock_qty: 재고 수량 (숫자)
 
+    선택적 컬럼 (있으면 포함):
+    - sales_qty: 판매 수량 (숫자)
+    - resource_name: 품명 (문자열)
+    - stock_available: 사용가능 재고 (숫자, Amazon FBA)
+    - stock_expected: 입고예정 재고 (숫자, Amazon FBA)
+    - stock_processing: 입고처리중 재고 (숫자, Amazon FBA)
+    - snap_time: 스냅샷 시간 (datetime64, Amazon FBA)
+
     Args:
         frame: 원본 스냅샷 데이터프레임
 
     Returns:
         표준 스키마로 정규화된 스냅샷 데이터프레임.
-        date, center, resource_code, stock_qty 컬럼만 포함.
+        기본 컬럼 + 선택적 컬럼 포함.
 
     Raises:
         KeyError: 'date' 또는 'snapshot_date' 컬럼이 없을 경우
@@ -287,7 +295,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         >>> raw_snapshot = pd.read_csv("snapshot.csv")
         >>> normalized = normalize_snapshot(raw_snapshot)
         >>> normalized.columns.tolist()
-        ['date', 'center', 'resource_code', 'stock_qty']
+        ['date', 'center', 'resource_code', 'stock_qty', 'sales_qty', ...]
     """
     out = frame.copy()
 
@@ -306,6 +314,12 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     sales_col = _pick_column(["sales_qty", "sale_qty", "판매량", "출고수량", "출고", "출고 수량", "sales_ea"])
     name_col = _pick_column(["resource_name", "품명", "상품명", "product_name"])
 
+    # Amazon FBA 스냅샷 전용 컬럼 (선택적)
+    available_col = _pick_column(["stock_available", "available_qty", "사용가능재고"])
+    expected_col = _pick_column(["stock_expected", "expected_qty", "입고예정"])
+    processing_col = _pick_column(["stock_processing", "processing_qty", "입고처리중"])
+    snap_time_col = _pick_column(["snap_time", "snapshot_time", "snapshot_datetime"])
+
     if not date_col or not center_col or not resource_col or not stock_col:
         raise KeyError("snapshot frame must include date/center/resource_code/stock_qty columns")
 
@@ -319,6 +333,16 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         rename_map[sales_col] = "sales_qty"
     if name_col:
         rename_map[name_col] = "resource_name"
+
+    # Amazon FBA 컬럼 매핑 (선택적)
+    if available_col:
+        rename_map[available_col] = "stock_available"
+    if expected_col:
+        rename_map[expected_col] = "stock_expected"
+    if processing_col:
+        rename_map[processing_col] = "stock_processing"
+    if snap_time_col:
+        rename_map[snap_time_col] = "snap_time"
 
     out = out.rename(columns=rename_map)
 
@@ -340,13 +364,24 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .replace({"nan": "", "None": ""})
         )
 
+    # Amazon FBA 컬럼 타입 변환 (선택적)
+    if "stock_available" in out.columns:
+        out["stock_available"] = pd.to_numeric(out.get("stock_available"), errors="coerce").fillna(0.0)
+    if "stock_expected" in out.columns:
+        out["stock_expected"] = pd.to_numeric(out.get("stock_expected"), errors="coerce").fillna(0.0)
+    if "stock_processing" in out.columns:
+        out["stock_processing"] = pd.to_numeric(out.get("stock_processing"), errors="coerce").fillna(0.0)
+    if "snap_time" in out.columns:
+        out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
+
     out = out.dropna(subset=["date"])
     out = out[(out["center"] != "") & (out["resource_code"] != "")]
 
+    # 기본 컬럼
     columns = ["date", "center", "resource_code", "stock_qty"]
-    if "sales_qty" in out.columns:
-        columns.append("sales_qty")
-    if "resource_name" in out.columns:
-        columns.append("resource_name")
+    # 선택적 컬럼 추가
+    for optional_col in ["sales_qty", "resource_name", "stock_available", "stock_expected", "stock_processing", "snap_time"]:
+        if optional_col in out.columns:
+            columns.append(optional_col)
 
     return out[columns].reset_index(drop=True)
