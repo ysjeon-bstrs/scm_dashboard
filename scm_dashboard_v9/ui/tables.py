@@ -11,6 +11,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
+from center_alias import normalize_center_value
 from scm_dashboard_v9.core.config import CENTER_COL
 from scm_dashboard_v9.analytics.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v9.data_sources.loaders import load_snapshot_raw
@@ -168,10 +169,17 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 3단계: 확정 입고 필터링 (운송 중)
     # ========================================
+    # selected_centers를 정규화 (normalize_moves에서 to_center가 정규화되므로)
+    normalized_selected_centers = {
+        norm for center in selected_centers
+        for norm in [normalize_center_value(center)]
+        if norm
+    }
+
     # inbound_date가 없는 운송 중 재고만 추출
     arr_transport = moves_view[
         (moves_view["carrier_mode"] != "WIP")
-        & (moves_view["to_center"].isin(selected_centers))
+        & (moves_view["to_center"].isin(normalized_selected_centers))
         & (moves_view["resource_code"].isin(selected_skus))
         & (moves_view["inbound_date"].isna())
     ].copy()
@@ -189,9 +197,13 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 4단계: WIP 필터링 (생산 중)
     # ========================================
-    # 태광KR만 WIP 표시
+    # 태광KR만 WIP 표시 (센터명도 정규화 체크)
     arr_wip = pd.DataFrame()
-    if "태광KR" in selected_centers:
+    show_wip = any(
+        normalize_center_value(center) == "태광KR"
+        for center in selected_centers
+    )
+    if show_wip:
         arr_wip = moves_view[
             (moves_view["carrier_mode"] == "WIP")
             & (moves_view["to_center"] == "태광KR")
