@@ -75,6 +75,8 @@ def load_amazon_daily_sales_from_snapshot_raw(
             rename_map[col] = "center"
         elif key in {"resource_code", "sku", "상품코드", "product_code"}:
             rename_map[col] = "resource_code"
+        elif key in {"sales_qty", "판매량", "sales_ea"}:
+            rename_map[col] = "sales_qty"
         elif "fba_output_stock" in key:
             rename_map[col] = "fba_output_stock"
 
@@ -96,14 +98,24 @@ def load_amazon_daily_sales_from_snapshot_raw(
             inferred_center = "AMZUS"
         df["center"] = inferred_center
 
-    required = {"date", "resource_code", "fba_output_stock", "center"}
+    # sales_qty 컬럼이 있으면 우선 사용 (snap_정제 시트), 없으면 fba_output_stock 사용 (snapshot_raw)
+    sales_col = None
+    if "sales_qty" in df.columns:
+        sales_col = "sales_qty"
+    elif "fba_output_stock" in df.columns:
+        sales_col = "fba_output_stock"
+
+    required = {"date", "resource_code", "center"}
+    if sales_col:
+        required.add(sales_col)
+
     missing = required - set(df.columns)
-    if missing:
+    if missing or sales_col is None:
         return pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
-    df["fba_output_stock"] = pd.to_numeric(df["fba_output_stock"], errors="coerce").fillna(0)
-    df = df[df["fba_output_stock"] >= 0]
+    df[sales_col] = pd.to_numeric(df[sales_col], errors="coerce").fillna(0)
+    df = df[df[sales_col] >= 0]
 
     if "center" in df.columns:
         df["center"] = df["center"].apply(normalize_center_value)
@@ -125,9 +137,9 @@ def load_amazon_daily_sales_from_snapshot_raw(
         df = df[df["resource_code"].astype(str).isin(sku_set)]
 
     grouped = (
-        df.groupby(["date", "center", "resource_code"], as_index=False)["fba_output_stock"]
+        df.groupby(["date", "center", "resource_code"], as_index=False)[sales_col]
         .sum()
-        .rename(columns={"fba_output_stock": "sales_ea"})
+        .rename(columns={sales_col: "sales_ea"})
     )
     grouped["sales_ea"] = grouped["sales_ea"].fillna(0).astype(float)
     return grouped
