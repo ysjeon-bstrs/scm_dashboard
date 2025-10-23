@@ -54,7 +54,8 @@ def prepare_amazon_sales_series(
         raise KeyError("snap_long must contain a 'date' column for sales prep")
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
-    df = df.astype({"center": str, "resource_code": str})
+    df["center"] = df["center"].astype(str)
+    df["resource_code"] = df["resource_code"].astype(str)
 
     df = df[(df["center"] == center) & (df["resource_code"].isin(sku_list))]
     if df.empty:
@@ -214,7 +215,8 @@ def prepare_amazon_inventory_layers(
     work = timeline.copy()
     work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
     work = work.dropna(subset=["date"])
-    work = work.astype({"center": str, "resource_code": str})
+    work["center"] = work["center"].astype(str)
+    work["resource_code"] = work["resource_code"].astype(str)
     work = work[
         work["center"].isin(center_list) & work["resource_code"].isin(sku_list)
     ]
@@ -251,7 +253,8 @@ def prepare_amazon_inventory_layers(
             fc = forecast_timeline.copy()
             fc["date"] = pd.to_datetime(fc["date"], errors="coerce").dt.normalize()
             fc = fc.dropna(subset=["date"])
-            fc = fc.astype({"center": str, "resource_code": str})
+            fc["center"] = fc["center"].astype(str)
+            fc["resource_code"] = fc["resource_code"].astype(str)
             fc = fc[
                 fc["center"].isin(center_list) & fc["resource_code"].isin(sku_list)
             ]
@@ -287,7 +290,8 @@ def prepare_amazon_inventory_layers(
                     inbound["inbound_date"], errors="coerce"
                 ).dt.normalize()
                 inbound = inbound.dropna(subset=["inbound_date"])
-                inbound = inbound.astype({"to_center": str, "resource_code": str})
+                inbound["to_center"] = inbound["to_center"].astype(str)
+                inbound["resource_code"] = inbound["resource_code"].astype(str)
                 inbound = inbound[
                     inbound["to_center"].isin(center_list)
                     & inbound["resource_code"].isin(sku_list)
