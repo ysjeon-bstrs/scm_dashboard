@@ -90,6 +90,12 @@ def _coerce_snapshot_frame(
         return pd.DataFrame(columns=list(required_cols | _NUMERIC_COLUMNS))
 
     df["snap_time"] = pd.to_datetime(df.get("snap_time"), errors="coerce")
+
+    # snap_time이 모두 null이면 date 컬럼을 폴백으로 사용
+    if df["snap_time"].isna().all():
+        if "date" in df.columns:
+            df["snap_time"] = pd.to_datetime(df.get("date"), errors="coerce")
+
     df = df.dropna(subset=["snap_time"]).copy()
 
     df["center"] = df.get("center", "").astype(str).str.strip()
