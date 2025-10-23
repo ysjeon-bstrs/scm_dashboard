@@ -35,19 +35,37 @@ def annotate_move_schedule(
     if has_inbound.any():
         pred.loc[has_inbound] = inbound_col.loc[has_inbound]
 
-    arrival_col = out["arrival_date"] if "arrival_date" in out else pd.Series(pd.NaT, index=out.index)
-    has_arrival = (~has_inbound) & arrival_col.notna()
+    arrival_raw = out.get("arrival_date")
+    if isinstance(arrival_raw, pd.Series):
+        arrival_series = pd.to_datetime(arrival_raw, errors="coerce").dt.normalize()
+    else:
+        arrival_series = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+
+    eta_raw = out.get("eta_date")
+    if isinstance(eta_raw, pd.Series):
+        eta_series = pd.to_datetime(eta_raw, errors="coerce").dt.normalize()
+    else:
+        eta_series = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+    effective_arrival = arrival_series.fillna(eta_series)
+    has_arrival = (~has_inbound) & effective_arrival.notna()
     if has_arrival.any():
-        arr_dates = arrival_col
+        arr_dates = effective_arrival
         past_arrival = has_arrival & (arr_dates <= today_norm)
         if past_arrival.any():
-            pred.loc[past_arrival] = out.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+            pred.loc[past_arrival] = today_norm + pd.Timedelta(days=int(lag_days))
 
         future_arrival = has_arrival & (arr_dates > today_norm)
         if future_arrival.any():
-            pred.loc[future_arrival] = out.loc[future_arrival, "arrival_date"]
+            pred.loc[future_arrival] = arr_dates.loc[future_arrival] + pd.Timedelta(
+                days=int(lag_days)
+            )
 
-    pred = pred.fillna(fallback_date)
+    has_signal = has_inbound | has_arrival
+    need_fallback = has_signal & pred.isna()
+    if need_fallback.any():
+        pred.loc[need_fallback] = fallback_date
+
+    pred = pred.where(has_signal, pd.NaT)
     out["pred_inbound_date"] = pd.to_datetime(pred).dt.normalize()
     out["pred_inbound_date"] = out["pred_inbound_date"].clip(upper=horizon_end + pd.Timedelta(days=1))
     out["in_transit_end_date"] = out["pred_inbound_date"]

@@ -177,21 +177,51 @@ def build_inbound_lookup(
     to_center_col = move_cols.get("to_center")
     sku_col = move_cols.get("resource_code") or move_cols.get("sku")
     qty_col = move_cols.get("qty_ea") or move_cols.get("qty")
+    arrival_col = move_cols.get("arrival_date")
+    eta_col = move_cols.get("eta_date")
+    pred_inbound_col = move_cols.get("pred_inbound_date")
 
-    if not (event_col and to_center_col and sku_col and qty_col):
+    if not (to_center_col and sku_col and qty_col):
         return inbound_lookup
 
     inbound_norm = moves_df.rename(
         columns={
-            event_col: "event_date",
             to_center_col: "to_center",
             sku_col: "resource_code",
             qty_col: "qty_ea",
         }
     ).copy()
-    inbound_norm["event_date"] = pd.to_datetime(
-        inbound_norm.get("event_date"), errors="coerce"
-    ).dt.normalize()
+    if event_col:
+        inbound_norm["event_date"] = pd.to_datetime(
+            inbound_norm.get(event_col), errors="coerce"
+        ).dt.normalize()
+    else:
+        inbound_norm["event_date"] = pd.NaT
+
+    if pred_inbound_col and pred_inbound_col in inbound_norm.columns:
+        pred_series = pd.to_datetime(
+            inbound_norm.get(pred_inbound_col), errors="coerce"
+        ).dt.normalize()
+        inbound_norm["event_date"] = inbound_norm["event_date"].fillna(pred_series)
+
+    if arrival_col:
+        inbound_norm["arrival_date"] = pd.to_datetime(
+            inbound_norm.get(arrival_col), errors="coerce"
+        ).dt.normalize()
+    else:
+        inbound_norm["arrival_date"] = pd.NaT
+
+    if eta_col:
+        inbound_norm["eta_date"] = pd.to_datetime(
+            inbound_norm.get(eta_col), errors="coerce"
+        ).dt.normalize()
+    else:
+        inbound_norm["eta_date"] = pd.NaT
+
+    has_eta = inbound_norm["arrival_date"].notna() | inbound_norm["eta_date"].notna()
+    inbound_norm = inbound_norm[has_eta]
+
+    inbound_norm["event_date"] = inbound_norm["event_date"].fillna(pd.NaT)
     inbound_norm = inbound_norm.dropna(subset=["event_date"])
     inbound_norm["to_center"] = inbound_norm.get("to_center", "").apply(
         normalize_center_value

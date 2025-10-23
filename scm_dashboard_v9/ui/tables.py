@@ -105,6 +105,7 @@ def render_inbound_and_wip_tables(
     """
     window_start = start
     window_end = end
+    today = pd.to_datetime(today).normalize()
 
     # ========================================
     # 1단계: 이동 원장 컬럼 보완
@@ -117,6 +118,7 @@ def render_inbound_and_wip_tables(
         "resource_code",
         "inbound_date",
         "arrival_date",
+        "eta_date",
         "onboard_date",
         "event_date",
         "lot",
@@ -140,27 +142,30 @@ def render_inbound_and_wip_tables(
         else:
             mask_inbound = pd.Series(False, index=moves_view.index)
 
-        # arrival_date로 계산 (inbound_date 없을 때)
-        arrival_series = moves_view.get("arrival_date")
-        if arrival_series is not None:
-            mask_arrival = (~mask_inbound) & arrival_series.notna()
-        else:
-            mask_arrival = pd.Series(False, index=moves_view.index)
+        # ETA/arrival 기반 계산 (inbound_date 없을 때)
+        arrival_series = pd.to_datetime(
+            moves_view.get("arrival_date"), errors="coerce"
+        ).dt.normalize()
+        eta_series = pd.to_datetime(
+            moves_view.get("eta_date"), errors="coerce"
+        ).dt.normalize()
+        effective_arrival = arrival_series.fillna(eta_series)
+        mask_eta = (~mask_inbound) & effective_arrival.notna()
 
-        if mask_arrival.any():
-            # 과거 도착: arrival_date + lag_days
-            past_arr = mask_arrival & (arrival_series <= today)
-            if past_arr.any():
-                pred_inbound.loc[past_arr] = moves_view.loc[past_arr, "arrival_date"] + pd.Timedelta(
+        if mask_eta.any():
+            # 과거/오늘 도착: today + lag_days
+            past_eta = mask_eta & (effective_arrival <= today)
+            if past_eta.any():
+                pred_inbound.loc[past_eta] = today + pd.Timedelta(days=int(lag_days))
+
+            # 미래 도착: ETA/arrival + lag_days
+            future_eta = mask_eta & (effective_arrival > today)
+            if future_eta.any():
+                pred_inbound.loc[future_eta] = effective_arrival.loc[future_eta] + pd.Timedelta(
                     days=int(lag_days)
                 )
 
-            # 미래 도착: arrival_date 그대로 (lag 적용 안 함)
-            fut_arr = mask_arrival & (arrival_series > today)
-            if fut_arr.any():
-                pred_inbound.loc[fut_arr] = moves_view.loc[fut_arr, "arrival_date"]
-
-        moves_view["pred_inbound_date"] = pred_inbound
+        moves_view["pred_inbound_date"] = pd.to_datetime(pred_inbound).dt.normalize()
     else:
         moves_view["pred_inbound_date"] = pd.Series(
             pd.NaT, index=moves_view.index, dtype="datetime64[ns]"
@@ -205,10 +210,11 @@ def render_inbound_and_wip_tables(
         & (moves_view["inbound_date"].isna())
     ].copy()
 
-    # 표시 날짜: arrival_date 또는 onboard_date
-    arr_transport["display_date"] = arr_transport["arrival_date"].fillna(
-        arr_transport["onboard_date"]
-    )
+    # 표시 날짜: arrival_date → eta_date → onboard_date
+    effective_display = arr_transport["arrival_date"].copy()
+    if "eta_date" in arr_transport.columns:
+        effective_display = effective_display.fillna(arr_transport["eta_date"])
+    arr_transport["display_date"] = effective_display.fillna(arr_transport["onboard_date"])
     arr_transport = arr_transport[arr_transport["display_date"].notna()]
     arr_transport = arr_transport[
         (arr_transport["display_date"] >= window_start)
@@ -253,9 +259,20 @@ def render_inbound_and_wip_tables(
         st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
     else:
         # 남은 일수 계산
-        confirmed_inbound["days_to_arrival"] = (
-            confirmed_inbound["display_date"].dt.normalize() - today
-        ).dt.days
+        arrival_basis = confirmed_inbound.get("arrival_date")
+        arrival_basis = pd.to_datetime(arrival_basis, errors="coerce").dt.normalize()
+        if "eta_date" in confirmed_inbound.columns:
+            eta_normalized = pd.to_datetime(
+                confirmed_inbound.get("eta_date"), errors="coerce"
+            ).dt.normalize()
+            arrival_basis = arrival_basis.fillna(eta_normalized)
+
+        days_arrival = (arrival_basis - today).dt.days.astype("Int64")
+        days_to_arrival = days_arrival.astype(object)
+        undefined_mask = arrival_basis.isna()
+        if undefined_mask.any():
+            days_to_arrival.loc[undefined_mask] = "not_defined"
+        confirmed_inbound["days_to_arrival"] = days_to_arrival
         confirmed_inbound["days_to_inbound"] = (
             confirmed_inbound["pred_inbound_date"].dt.normalize() - today
         ).dt.days
