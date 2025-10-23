@@ -207,12 +207,6 @@ def main() -> None:
 
         st.divider()
         st.header("표시 옵션")
-        cover_base_option = st.selectbox(
-            "커버일 기준",
-            options=("available", "total"),
-            index=0,
-            format_func=lambda key: "사용가능 기준" if key == "available" else "총 재고 기준",
-        )
         show_prod = st.checkbox("생산중 표시", value=False)
         show_transit = False
         st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
@@ -421,15 +415,22 @@ def main() -> None:
                         non_zero_count = (snap_amz[col] != 0).sum()
                         st.write(f"  - {col}: null이 아닌 값 {non_null_count}개, 0이 아닌 값 {non_zero_count}개")
 
+        # Amazon KPI 설정 토글
+        col1, col2 = st.columns(2)
+        with col1:
+            show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
+        with col2:
+            use_total_for_cover = st.toggle("커버일: 총 재고 기준", value=True, help="OFF = 사용가능 기준")
+
+        cover_base = "total" if use_total_for_cover else "available"
+
         kpi_df = build_amazon_snapshot_kpis(
             snap_amz,
             skus=selected_skus,
             center=amazon_centers,
-            cover_base=cover_base_option,
+            cover_base=cover_base,
             use_ma7=True,
         )
-
-        show_delta = st.toggle("전 스냅샷 대비 Δ", value=False)
         previous_df = None
         if show_delta and kpi_df is not None and not kpi_df.empty:
             latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
