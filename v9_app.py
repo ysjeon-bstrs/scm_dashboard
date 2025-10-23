@@ -450,7 +450,7 @@ def main() -> None:
                         snap_prev,
                         skus=selected_skus,
                         center=amazon_centers,
-                        cover_base=cover_base_option,
+                        cover_base=cover_base,
                         use_ma7=True,
                     )
 
