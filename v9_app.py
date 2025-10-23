@@ -78,6 +78,135 @@ def get_consumption_params_from_ui() -> dict[str, object]:
     return {"lookback_days": lookback_days, "events": events}
 
 
+def _render_sidebar_filters(
+    *,
+    centers: list[str],
+    skus: list[str],
+    bound_min: pd.Timestamp,
+    bound_max: pd.Timestamp,
+    today: pd.Timestamp,
+    default_past_days: int,
+    default_future_days: int,
+) -> dict:
+    """
+    사이드바 필터를 렌더링하고 선택된 값들을 반환합니다.
+
+    6-7단계: 세션 상태 초기화 & 사이드바 필터 렌더링
+    """
+    # 날짜 범위 클램핑 함수
+    def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
+        start_val, end_val = range_value
+        start_val = pd.Timestamp(start_val).normalize()
+        end_val = pd.Timestamp(end_val).normalize()
+        start_val = max(min(start_val, bound_max), bound_min)
+        end_val = max(min(end_val, bound_max), bound_min)
+        if end_val < start_val:
+            end_val = start_val
+        return (start_val, end_val)
+
+    # 세션 상태 초기화
+    def _init_range() -> None:
+        if "date_range" not in st.session_state:
+            default_start = max(today - pd.Timedelta(days=default_past_days), bound_min)
+            default_end = min(today + pd.Timedelta(days=default_future_days), bound_max)
+            if default_start > default_end:
+                default_start = default_end
+            st.session_state.date_range = (default_start, default_end)
+        else:
+            st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
+
+    _init_range()
+
+    # 사이드바 필터 렌더링
+    with st.sidebar:
+        st.header("필터")
+        st.caption(
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−20일 ~ +30일."
+        )
+
+        preset_centers = ["태광KR", "AMZUS"]
+        default_centers = [c for c in preset_centers if c in centers]
+        if not default_centers:
+            default_centers = centers
+        selected_centers = st.multiselect("센터", centers, default=default_centers)
+
+        preset_skus = ["BA00021", "BA00022"]
+        default_skus = [s for s in preset_skus if s in skus]
+        if not default_skus:
+            default_skus = skus if len(skus) <= 10 else skus[:10]
+        selected_skus = st.multiselect("SKU", skus, default=default_skus)
+
+        st.subheader("기간 설정")
+        date_range_value = st.slider(
+            "기간",
+            min_value=bound_min.to_pydatetime(),
+            max_value=bound_max.to_pydatetime(),
+            value=tuple(
+                d.to_pydatetime() for d in _clamp_range(st.session_state.date_range)
+            ),
+            format="YYYY-MM-DD",
+        )
+        start_ts = pd.Timestamp(date_range_value[0]).normalize()
+        end_ts = pd.Timestamp(date_range_value[1]).normalize()
+        st.session_state.date_range = (start_ts, end_ts)
+
+        st.divider()
+        st.header("표시 옵션")
+        show_prod = st.checkbox("생산중 표시", value=False)
+        show_transit = False
+        st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
+
+        use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
+        st.subheader("추세 계산 설정")
+        lookback_days = int(
+            st.number_input(
+                "추세 계산 기간(일)",
+                min_value=7,
+                max_value=56,
+                value=28,
+                step=7,
+                key="trend_lookback_days",
+            )
+        )
+
+        with st.expander("프로모션 가중치(+%)", expanded=False):
+            st.checkbox("가중치 적용", value=False, key="promo_enabled")
+            st.date_input("시작일", key="promo_start")
+            st.date_input("종료일", key="promo_end")
+            st.number_input(
+                "가중치(%)",
+                min_value=-100.0,
+                max_value=300.0,
+                value=30.0,
+                step=5.0,
+                key="promo_uplift_pct",
+            )
+
+        st.divider()
+        st.header("입고 반영 가정")
+        lag_days = int(
+            st.number_input(
+                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
+                min_value=0,
+                max_value=21,
+                value=5,
+                step=1,
+            )
+        )
+
+    return {
+        "selected_centers": selected_centers,
+        "selected_skus": selected_skus,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "show_prod": show_prod,
+        "show_transit": show_transit,
+        "use_cons_forecast": use_cons_forecast,
+        "lookback_days": lookback_days,
+        "lag_days": lag_days,
+    }
+
+
 def _render_amazon_section(
     *,
     selected_centers: list[str],
@@ -313,108 +442,26 @@ def main() -> None:
     )
 
     # ========================================
-    # 6단계: 세션 상태 초기화 (날짜 범위)
+    # 6-7단계: 세션 상태 초기화 & 사이드바 필터 렌더링
     # ========================================
-    def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
-        start_val, end_val = range_value
-        start_val = pd.Timestamp(start_val).normalize()
-        end_val = pd.Timestamp(end_val).normalize()
-        start_val = max(min(start_val, bound_max), bound_min)
-        end_val = max(min(end_val, bound_max), bound_min)
-        if end_val < start_val:
-            end_val = start_val
-        return (start_val, end_val)
+    filters = _render_sidebar_filters(
+        centers=centers,
+        skus=skus,
+        bound_min=bound_min,
+        bound_max=bound_max,
+        today=today,
+        default_past_days=default_past_days,
+        default_future_days=default_future_days,
+    )
 
-    def _init_range() -> None:
-        if "date_range" not in st.session_state:
-            default_start = max(today - pd.Timedelta(days=default_past_days), bound_min)
-            default_end = min(today + pd.Timedelta(days=default_future_days), bound_max)
-            if default_start > default_end:
-                default_start = default_end
-            st.session_state.date_range = (default_start, default_end)
-        else:
-            st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
-
-    _init_range()
-
-    # ========================================
-    # 7단계: 사이드바 필터 렌더링
-    # ========================================
-    with st.sidebar:
-        st.header("필터")
-        st.caption(
-            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−20일 ~ +30일."
-        )
-
-        preset_centers = ["태광KR", "AMZUS"]
-        default_centers = [c for c in preset_centers if c in centers]
-        if not default_centers:
-            default_centers = centers
-        selected_centers = st.multiselect("센터", centers, default=default_centers)
-
-        preset_skus = ["BA00021", "BA00022"]
-        default_skus = [s for s in preset_skus if s in skus]
-        if not default_skus:
-            default_skus = skus if len(skus) <= 10 else skus[:10]
-        selected_skus = st.multiselect("SKU", skus, default=default_skus)
-
-        st.subheader("기간 설정")
-        date_range_value = st.slider(
-            "기간",
-            min_value=bound_min.to_pydatetime(),
-            max_value=bound_max.to_pydatetime(),
-            value=tuple(
-                d.to_pydatetime() for d in _clamp_range(st.session_state.date_range)
-            ),
-            format="YYYY-MM-DD",
-        )
-        start_ts = pd.Timestamp(date_range_value[0]).normalize()
-        end_ts = pd.Timestamp(date_range_value[1]).normalize()
-        st.session_state.date_range = (start_ts, end_ts)
-
-        st.divider()
-        st.header("표시 옵션")
-        show_prod = st.checkbox("생산중 표시", value=False)
-        show_transit = False
-        st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
-
-        use_cons_forecast = st.checkbox("추세 기반 재고 예측", value=True)
-        st.subheader("추세 계산 설정")
-        lookback_days = int(
-            st.number_input(
-                "추세 계산 기간(일)",
-                min_value=7,
-                max_value=56,
-                value=28,
-                step=7,
-                key="trend_lookback_days",
-            )
-        )
-
-        with st.expander("프로모션 가중치(+%)", expanded=False):
-            st.checkbox("가중치 적용", value=False, key="promo_enabled")
-            st.date_input("시작일", key="promo_start")
-            st.date_input("종료일", key="promo_end")
-            st.number_input(
-                "가중치(%)",
-                min_value=-100.0,
-                max_value=300.0,
-                value=30.0,
-                step=5.0,
-                key="promo_uplift_pct",
-            )
-
-        st.divider()
-        st.header("입고 반영 가정")
-        lag_days = int(
-            st.number_input(
-                "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
-                min_value=0,
-                max_value=21,
-                value=5,
-                step=1,
-            )
-        )
+    selected_centers = filters["selected_centers"]
+    selected_skus = filters["selected_skus"]
+    start_ts = filters["start_ts"]
+    end_ts = filters["end_ts"]
+    show_prod = filters["show_prod"]
+    show_transit = filters["show_transit"]
+    use_cons_forecast = filters["use_cons_forecast"]
+    lag_days = filters["lag_days"]
 
     # ========================================
     # 8단계: 필터 유효성 검증
