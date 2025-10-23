@@ -11,13 +11,13 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from scm_dashboard_v4.loaders import load_from_gsheet_api
-from scm_dashboard_v4.processing import (
+from scm_dashboard_v9.data_sources.loaders import (
+    load_from_gsheet_api,
     load_wip_from_incoming,
     merge_wip_as_moves,
-    normalize_moves,
-    normalize_refined_snapshot,
 )
+
+from scm_dashboard_v9.domain.normalization import normalize_moves, normalize_snapshot as normalize_refined_snapshot
 
 from .excel import LoadedData
 

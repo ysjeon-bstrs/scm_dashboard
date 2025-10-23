@@ -5,12 +5,23 @@ render_sku_summary_cards 함수를 작은 함수들로 분해한 헬퍼들입니
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Sequence, Tuple
+from typing import Dict, Mapping, Sequence, Tuple, NamedTuple
 
 import pandas as pd
 
 # WIP 파이프라인 계산 상수
 WIP_WINDOW_DAYS = 30  # 30일 내 완료 예정 WIP 계산 기간
+
+
+class AggregatedMetrics(NamedTuple):
+    """집계된 메트릭들을 담는 컨테이너."""
+
+    current_by_center: pd.Series
+    current_totals: pd.Series
+    global_current_totals: pd.Series
+    daily_demand_series: pd.Series
+    in_transit_series: pd.Series
+    global_in_transit_totals: pd.Series
 
 
 def validate_and_prepare_snapshot(
@@ -239,3 +250,99 @@ def calculate_wip_pipeline(
         wip_30d_by_center = wip_30d_dict
 
     return wip_pipeline_totals, wip_30d_by_center
+
+
+def aggregate_metrics(
+    filtered_snapshot: pd.DataFrame,
+    snapshot_view: pd.DataFrame,
+    latest_snapshot_dt: pd.Timestamp,
+    global_latest_snapshot_dt: pd.Timestamp,
+    moves_view: pd.DataFrame,
+    moves_global: pd.DataFrame,
+    centers_list: list[str],
+    centers_all: list[str],
+    sku_list: list[str],
+    today_dt: pd.Timestamp,
+    lag_days: int,
+) -> AggregatedMetrics:
+    """재고, 이동중, 수요 등의 메트릭을 집계합니다.
+
+    Returns:
+        AggregatedMetrics: 집계된 메트릭들
+    """
+    from .metrics import extract_daily_demand, movement_breakdown_per_center
+
+    # Latest snapshot rows 필터링
+    latest_snapshot_rows = filtered_snapshot[
+        filtered_snapshot["date"] == latest_snapshot_dt
+    ].copy()
+    if "stock_qty" in latest_snapshot_rows.columns:
+        latest_snapshot_rows["stock_qty"] = pd.to_numeric(
+            latest_snapshot_rows["stock_qty"], errors="coerce"
+        )
+
+    # Global snapshot rows 필터링
+    global_snapshot_rows = snapshot_view[
+        snapshot_view["date"] == global_latest_snapshot_dt
+    ].copy()
+    if "stock_qty" in global_snapshot_rows.columns:
+        global_snapshot_rows["stock_qty"] = pd.to_numeric(
+            global_snapshot_rows["stock_qty"], errors="coerce"
+        )
+
+    # Current stock 집계
+    current_by_center = (
+        latest_snapshot_rows.groupby(["resource_code", "center"])["stock_qty"].sum()
+        if "stock_qty" in latest_snapshot_rows.columns
+        else pd.Series(dtype=float)
+    )
+    current_totals = (
+        current_by_center.groupby(level=0).sum()
+        if not current_by_center.empty
+        else pd.Series(dtype=float)
+    )
+
+    # Global current stock 집계
+    global_current_totals = (
+        global_snapshot_rows.groupby("resource_code")["stock_qty"].sum()
+        if "stock_qty" in global_snapshot_rows.columns and not global_snapshot_rows.empty
+        else pd.Series(dtype=float)
+    )
+
+    # Daily demand 추출
+    daily_demand_series, _ = extract_daily_demand(latest_snapshot_rows)
+
+    # In-transit 계산
+    in_transit_series, _ = movement_breakdown_per_center(
+        moves_view,
+        centers_list,
+        sku_list,
+        today_dt,
+        int(lag_days),
+    )
+
+    # Global in-transit 계산
+    global_in_transit_series = pd.Series(dtype=float)
+    if centers_all:
+        global_in_transit_series, _ = movement_breakdown_per_center(
+            moves_global,
+            centers_all,
+            sku_list,
+            today_dt,
+            int(lag_days),
+        )
+
+    global_in_transit_totals = (
+        global_in_transit_series.groupby(level=0).sum()
+        if not global_in_transit_series.empty
+        else pd.Series(dtype=float)
+    )
+
+    return AggregatedMetrics(
+        current_by_center=current_by_center,
+        current_totals=current_totals,
+        global_current_totals=global_current_totals,
+        daily_demand_series=daily_demand_series,
+        in_transit_series=in_transit_series,
+        global_in_transit_totals=global_in_transit_totals,
+    )

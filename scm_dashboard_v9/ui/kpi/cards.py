@@ -30,6 +30,7 @@ from .cards_helpers import (
     validate_and_prepare_snapshot,
     prepare_moves_data,
     calculate_wip_pipeline,
+    aggregate_metrics,
 )
 
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
@@ -243,64 +244,26 @@ def render_sku_summary_cards(
             if center_name != "__TOTAL__":
                 center_depletion_map[(sku_code, center_name)] = row
 
-    latest_snapshot_rows = filtered_snapshot[
-        filtered_snapshot["date"] == latest_snapshot_dt
-    ].copy()
-    if "stock_qty" in latest_snapshot_rows.columns:
-        latest_snapshot_rows["stock_qty"] = pd.to_numeric(
-            latest_snapshot_rows["stock_qty"], errors="coerce"
-        )
-
-    global_snapshot_rows = snapshot_view[
-        snapshot_view["date"] == global_latest_snapshot_dt
-    ].copy()
-    if "stock_qty" in global_snapshot_rows.columns:
-        global_snapshot_rows["stock_qty"] = pd.to_numeric(
-            global_snapshot_rows["stock_qty"], errors="coerce"
-        )
-
-    current_by_center = (
-        latest_snapshot_rows.groupby(["resource_code", "center"])["stock_qty"].sum()
-        if "stock_qty" in latest_snapshot_rows.columns
-        else pd.Series(dtype=float)
-    )
-    current_totals = (
-        current_by_center.groupby(level=0).sum()
-        if not current_by_center.empty
-        else pd.Series(dtype=float)
-    )
-
-    global_current_totals = (
-        global_snapshot_rows.groupby("resource_code")["stock_qty"].sum()
-        if "stock_qty" in global_snapshot_rows.columns and not global_snapshot_rows.empty
-        else pd.Series(dtype=float)
-    )
-
-    daily_demand_series, total_demand_series = extract_daily_demand(latest_snapshot_rows)
-
-    in_transit_series, _ = movement_breakdown_per_center(
+    metrics = aggregate_metrics(
+        filtered_snapshot,
+        snapshot_view,
+        latest_snapshot_dt,
+        global_latest_snapshot_dt,
         moves_view,
+        moves_global,
         centers_list,
+        centers_all,
         sku_list,
         today_dt,
         int(lag_days),
     )
 
-    global_in_transit_series = pd.Series(dtype=float)
-    if centers_all:
-        global_in_transit_series, _ = movement_breakdown_per_center(
-            moves_global,
-            centers_all,
-            sku_list,
-            today_dt,
-            int(lag_days),
-        )
-
-    global_in_transit_totals = (
-        global_in_transit_series.groupby(level=0).sum()
-        if not global_in_transit_series.empty
-        else pd.Series(dtype=float)
-    )
+    current_by_center = metrics.current_by_center
+    current_totals = metrics.current_totals
+    global_current_totals = metrics.global_current_totals
+    daily_demand_series = metrics.daily_demand_series
+    in_transit_series = metrics.in_transit_series
+    global_in_transit_totals = metrics.global_in_transit_totals
 
     inject_responsive_styles()
 

@@ -108,8 +108,9 @@ def build_center_series(
             else:
                 eff_plus = pd.DataFrame(columns=["date", "delta"])
 
-            eff_all = pd.concat([eff_minus, eff_plus], ignore_index=True)
-            if not eff_all.empty:
+            frames_to_concat = [df for df in [eff_minus, eff_plus] if not df.empty]
+            if frames_to_concat:
+                eff_all = pd.concat(frames_to_concat, ignore_index=True)
                 delta_series = (
                     eff_all.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
                 )
@@ -134,9 +135,9 @@ def build_center_series(
             )
             ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
 
-        ts["stock_qty"] = ts["stock_qty"].fillna(0)
-        ts["stock_qty"] = ts["stock_qty"].replace([np.inf, -np.inf], 0)
-        ts["stock_qty"] = ts["stock_qty"].clip(lower=0)
+        ts["stock_qty"] = ts["stock_qty"].fillna(0).astype(float)
+        ts["stock_qty"] = ts["stock_qty"].replace([np.inf, -np.inf], 0.0)
+        ts["stock_qty"] = ts["stock_qty"].clip(lower=0.0)
         lines.append(ts.reset_index().rename(columns={"index": "date"}))
 
     if not lines:
