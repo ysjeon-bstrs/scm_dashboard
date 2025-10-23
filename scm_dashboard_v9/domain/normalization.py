@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 import pandas as pd
 
@@ -15,6 +15,74 @@ from center_alias import normalize_center_value
 
 # 기본적으로 정규화할 날짜 컬럼 목록
 DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
+
+
+# Common column aliases observed in upstream move ledgers. The lists should
+# contain lowercase, whitespace-trimmed values so that we can perform a case
+# insensitive lookup without allocating extra strings for every comparison.
+MOVE_COLUMN_ALIASES: dict[str, Sequence[str]] = {
+    "resource_code": (
+        "resource_code",
+        "resource code",
+        "상품코드",
+        "sku",
+        "sku code",
+        "product_code",
+    ),
+    "qty_ea": (
+        "qty_ea",
+        "qty",
+        "quantity",
+        "total_quantity",
+        "수량",
+        "수량(ea)",
+        "ea",
+    ),
+    "carrier_mode": (
+        "carrier_mode",
+        "carrier mode",
+        "carrier",
+        "운송방법",
+        "운송수단",
+    ),
+    "from_center": (
+        "from_center",
+        "from center",
+        "출발창고",
+        "출발센터",
+    ),
+    "to_center": (
+        "to_center",
+        "to center",
+        "도착창고",
+        "목적지",
+    ),
+    "onboard_date": (
+        "onboard_date",
+        "onboard",
+        "depart_date",
+        "depart date",
+        "배정일",
+        "출발일",
+        "h",
+    ),
+    "arrival_date": (
+        "arrival_date",
+        "arrival",
+        "eta",
+        "eta_date",
+        "도착일",
+    ),
+    "inbound_date": (
+        "inbound_date",
+        "입고일",
+        "입고완료일",
+    ),
+    "event_date": (
+        "event_date",
+        "event",
+    ),
+}
 
 
 def normalize_dates(
@@ -82,6 +150,41 @@ def _normalise_center_series(series: pd.Series) -> pd.Series:
     return values.map(_normalise).fillna("")
 
 
+def _build_column_lookup(columns: Iterable[object]) -> dict[str, str]:
+    """Create a mapping of normalised column names to the original labels."""
+
+    lookup: dict[str, str] = {}
+    for col in columns:
+        name = str(col).strip()
+        if not name:
+            continue
+        lookup[name.casefold()] = name
+    return lookup
+
+
+def _find_column(lookup: dict[str, str], aliases: Sequence[str]) -> Optional[str]:
+    """Return the first matching column for *aliases* using *lookup*."""
+
+    for alias in aliases:
+        key = str(alias).strip().casefold()
+        if not key:
+            continue
+        found = lookup.get(key)
+        if found is not None:
+            return found
+
+    # Fallback to partial matches so inputs like ``depart date`` match
+    # ``depart_date`` and vice versa.
+    for alias in aliases:
+        key = str(alias).strip().casefold()
+        if not key:
+            continue
+        for candidate_key, original in lookup.items():
+            if key in candidate_key or candidate_key in key:
+                return original
+    return None
+
+
 def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     """
     이동 원장 데이터의 핵심 컬럼들을 예측 가능한 타입으로 변환합니다.
@@ -107,7 +210,18 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     # ========================================
     # 1단계: 날짜 컬럼 정규화
     # ========================================
-    out = normalize_dates(frame)
+    column_lookup = _build_column_lookup(frame.columns)
+    rename_map: dict[str, str] = {}
+    consumed: set[str] = set()
+
+    for canonical, aliases in MOVE_COLUMN_ALIASES.items():
+        match = _find_column(column_lookup, aliases)
+        if match is None or match in consumed or match == canonical:
+            continue
+        rename_map[match] = canonical
+        consumed.add(match)
+
+    out = normalize_dates(frame.rename(columns=rename_map))
 
     # ========================================
     # 2단계: carrier_mode (운송 방식) 정규화
@@ -140,7 +254,11 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     # ========================================
     qty_src = out["qty_ea"] if "qty_ea" in out.columns else pd.Series(0, index=out.index)
     # 숫자로 변환 (변환 실패 시 NaN -> 0으로 대체)
-    out["qty_ea"] = pd.to_numeric(qty_src, errors="coerce").fillna(0).astype(int)
+    out["qty_ea"] = (
+        pd.to_numeric(qty_src.astype(str).str.replace(",", ""), errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
 
     return out
 
