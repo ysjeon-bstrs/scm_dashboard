@@ -176,6 +176,27 @@ def render_inbound_and_wip_tables(
         if norm
     }
 
+    # DEBUG: 디버깅 정보 출력
+    with st.expander("🔍 DEBUG: 입고 테이블 필터 정보", expanded=False):
+        st.write("**선택된 센터 (원본):**", selected_centers)
+        st.write("**정규화된 선택 센터:**", normalized_selected_centers)
+        st.write("**moves_view에 있는 고유 to_center 값:**", moves_view["to_center"].unique().tolist())
+        st.write("**moves_view에 있는 고유 carrier_mode 값:**", moves_view["carrier_mode"].unique().tolist())
+        st.write("**총 moves_view 행 수:**", len(moves_view))
+
+        # 각 조건별 필터링 결과 확인
+        cond1 = moves_view["carrier_mode"] != "WIP"
+        cond2 = moves_view["to_center"].isin(normalized_selected_centers)
+        cond3 = moves_view["resource_code"].isin(selected_skus)
+        cond4 = moves_view["inbound_date"].isna()
+
+        st.write("**조건별 매칭 행 수:**")
+        st.write(f"- carrier_mode != 'WIP': {cond1.sum()}")
+        st.write(f"- to_center.isin(normalized_selected_centers): {cond2.sum()}")
+        st.write(f"- resource_code.isin(selected_skus): {cond3.sum()}")
+        st.write(f"- inbound_date.isna(): {cond4.sum()}")
+        st.write(f"- **모든 조건 만족 (최종 결과): {(cond1 & cond2 & cond3 & cond4).sum()}**")
+
     # inbound_date가 없는 운송 중 재고만 추출
     arr_transport = moves_view[
         (moves_view["carrier_mode"] != "WIP")
