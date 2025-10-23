@@ -366,40 +366,81 @@ def render_amazon_snapshot_kpis(
 
     _inject_card_styles()
 
-    prev_map: dict[str, int] = {}
+    # 이전 스냅샷 데이터를 SKU별 dict로 변환 (모든 지표 포함)
+    prev_data: dict[str, dict[str, float]] = {}
     if show_delta and previous_df is not None and not previous_df.empty:
-        prev_map = {
-            str(row["resource_code"]): int(row["stock_qty"])
-            for _, row in previous_df.iterrows()
-            if not pd.isna(row.get("stock_qty"))
-        }
+        for _, row in previous_df.iterrows():
+            sku = str(row["resource_code"])
+            prev_data[sku] = {
+                "stock_qty": float(row.get("stock_qty", 0)),
+                "stock_available": float(row.get("stock_available", 0)),
+                "stock_processing": float(row.get("stock_processing", 0)),
+                "stock_expected": float(row.get("stock_expected", 0)),
+                "sales_yday": float(row.get("sales_yday", 0)),
+                "cover_days": float(row.get("cover_days", 0)) if pd.notna(row.get("cover_days")) else 0,
+            }
 
     cards_html: list[str] = []
     for _, row in kpi_df.iterrows():
         sku = str(row["resource_code"])
         color = sku_colors.get(sku, "#4E79A7")
-        total = _format_int(row.get("stock_qty"))
-        available = _format_int(row.get("stock_available"))
-        processing = _format_int(row.get("stock_processing"))
-        expected = _format_int(row.get("stock_expected"))
-        sales_yday = _format_int(row.get("sales_yday"))
-        cover = _format_cover_days(row.get("cover_days"))
+
+        # 현재 값
+        total = int(row.get("stock_qty", 0))
+        available = int(row.get("stock_available", 0))
+        processing = int(row.get("stock_processing", 0))
+        expected = int(row.get("stock_expected", 0))
+        sales_yday = int(row.get("sales_yday", 0))
+        cover_days = row.get("cover_days")
+
+        # 증감값 계산 (show_delta가 True일 때만)
+        prev = prev_data.get(sku, {})
+        delta_total = None
+        delta_available = None
+        delta_processing = None
+        delta_expected = None
+        delta_sales = None
+        delta_cover = None
+
+        if show_delta and prev:
+            delta_total = total - int(prev.get("stock_qty", 0))
+            delta_available = available - int(prev.get("stock_available", 0))
+            delta_processing = processing - int(prev.get("stock_processing", 0))
+            delta_expected = expected - int(prev.get("stock_expected", 0))
+            delta_sales = sales_yday - int(prev.get("sales_yday", 0))
+            if pd.notna(cover_days) and prev.get("cover_days", 0) > 0:
+                delta_cover = float(cover_days) - prev.get("cover_days", 0)
+
+        # 포맷팅 (delta 포함)
+        def _fmt_with_delta(value: int, delta: int | None) -> str:
+            formatted = _format_int(value)
+            if delta is not None and delta != 0:
+                delta_str = f"{delta:+,}"
+                return f"{formatted} <span class='delta'>(Δ{delta_str})</span>"
+            return formatted
+
+        def _fmt_cover_with_delta(value: float | None, delta: float | None) -> str:
+            formatted = _format_cover_days(value)
+            if delta is not None and abs(delta) >= 0.1:
+                delta_str = f"{delta:+.1f}"
+                return f"{formatted} <span class='delta'>(Δ{delta_str})</span>"
+            return formatted
+
+        total_str = _fmt_with_delta(total, delta_total)
+        available_str = _fmt_with_delta(available, delta_available)
+        processing_str = _fmt_with_delta(processing, delta_processing)
+        expected_str = _fmt_with_delta(expected, delta_expected)
+        sales_str = _fmt_with_delta(sales_yday, delta_sales)
+        cover_str = _fmt_cover_with_delta(cover_days, delta_cover)
 
         metrics: list[_MetricValue] = [
-            _MetricValue("총 재고", total, "센터별 총재고 합계"),
-            _MetricValue("사용가능", available, "Available 재고"),
-            _MetricValue("입고처리중", processing, "FC 접수→가능화 전"),
-            _MetricValue("입고예정", expected, "ASN/재배치 도착 예정"),
-            _MetricValue("어제 판매", sales_yday, "전일 판매량"),
-            _MetricValue("커버일수", cover, "사용가능 ÷ 일평균 수요"),
+            _MetricValue("총 재고", total_str, "센터별 총재고 합계"),
+            _MetricValue("사용가능", available_str, "Available 재고"),
+            _MetricValue("입고처리중", processing_str, "FC 도착 후 재고화 진행 중"),
+            _MetricValue("입고예정", expected_str, "입고예약+FC 도착+재고화 진행중"),
+            _MetricValue("어제 판매", sales_str, "전일 판매량"),
+            _MetricValue("커버일수", cover_str, "총 재고 or 사용가능 ÷ 일평균 수요"),
         ]
-
-        delta_text: str | None = None
-        if show_delta:
-            prev_value = prev_map.get(sku)
-            if prev_value is not None:
-                delta_val = int(row.get("stock_qty", 0)) - prev_value
-                delta_text = f"{delta_val:+,}" if delta_val else "±0"
 
         # SKU 헤더 (resource_name 포함)
         resource_name = resource_name_map.get(sku, "") if resource_name_map else ""
@@ -424,13 +465,6 @@ def render_amazon_snapshot_kpis(
                 "</div>"
             )
 
-        if delta_text:
-            metric_html_parts[0] = metric_html_parts[0].replace(
-                "</div>",
-                f"<span class='delta'>Δ {delta_text}</span></div>",
-                1,
-            )
-
         card_html = (
             "<div class='amz-kpi-card'>"
             + header_html
@@ -446,6 +480,6 @@ def render_amazon_snapshot_kpis(
     )
 
     st.caption(
-        "입고처리중=FC 도착 후 재고화 진행 중 · 입고예정=입고예약+FC 도착+재고화 진행중 · "
-        "커버일수=총 재고 or 사용가능 ÷ 7일 평균 일판매"
+        "총 재고=사용가능+FC 처리 중+고객주문 · 입고처리중=FC 도착 후 재고화 진행 중 · "
+        "입고예정=입고예약+FC 도착+재고화 진행중 · 커버일수=총 재고 or 사용가능 ÷ 7일 평균 일판매"
     )
