@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any, Optional
 
 import math
@@ -43,26 +42,14 @@ def normalize_center_series(series: pd.Series) -> pd.Series:
     return normalized.replace(CENTER_ALIAS)
 
 
-@lru_cache(maxsize=128)
-def _normalize_center_cached(text: str) -> Optional[str]:
-    """캐시된 센터 이름 정규화 (내부 헬퍼)."""
-    if not text:
-        return None
-    normalized = CENTER_ALIAS.get(text, text)
-    if normalized.casefold() in _IGNORED_CENTER_VALUES_CI:
-        return None
-    return normalized
-
-
 def normalize_center_value(value: Any) -> Optional[str]:
     """Normalise a single center name for use in filters and lookups.
 
     The function trims whitespace, applies alias mapping and drops ignored
     placeholders (such as ``WIP`` or ``In-Transit``). ``None`` is returned for
     values that should not participate in downstream filters.
-
-    Performance: 캐싱을 통해 반복 호출 시 20-30% 성능 향상.
     """
+
     if value is None:
         return None
     if isinstance(value, float) and math.isnan(value):
@@ -71,4 +58,10 @@ def normalize_center_value(value: Any) -> Optional[str]:
         return None
 
     text = str(value).strip()
-    return _normalize_center_cached(text)
+    if not text:
+        return None
+
+    normalized = CENTER_ALIAS.get(text, text)
+    if normalized.casefold() in _IGNORED_CENTER_VALUES_CI:
+        return None
+    return normalized
