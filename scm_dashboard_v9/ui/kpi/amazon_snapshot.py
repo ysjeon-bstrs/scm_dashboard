@@ -216,9 +216,15 @@ def _inject_card_styles() -> None:
         font-weight: 600;
         font-size: 1.15rem;
     }
-    .amz-kpi-metric span.delta {
+    .amz-kpi-metric span.delta-up {
         font-size: 0.8rem;
-        color: rgba(15, 118, 110, 0.9);
+        color: rgba(34, 197, 94, 0.9);
+        font-weight: 500;
+    }
+    .amz-kpi-metric span.delta-down {
+        font-size: 0.8rem;
+        color: rgba(239, 68, 68, 0.9);
+        font-weight: 500;
     }
     @media (max-width: 768px) {
         .amz-kpi-container {
@@ -415,15 +421,23 @@ def render_amazon_snapshot_kpis(
         def _fmt_with_delta(value: int, delta: int | None) -> str:
             formatted = _format_int(value)
             if delta is not None and delta != 0:
-                delta_str = f"{delta:+,}"
-                return f"{formatted} <span class='delta'>(Δ{delta_str})</span>"
+                if delta > 0:
+                    delta_str = f"{delta:+,}"
+                    return f"{formatted} <span class='delta-up'>(↑{delta_str})</span>"
+                else:
+                    delta_str = f"{abs(delta):,}"
+                    return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
             return formatted
 
         def _fmt_cover_with_delta(value: float | None, delta: float | None) -> str:
             formatted = _format_cover_days(value)
             if delta is not None and abs(delta) >= 0.1:
-                delta_str = f"{delta:+.1f}"
-                return f"{formatted} <span class='delta'>(Δ{delta_str})</span>"
+                if delta > 0:
+                    delta_str = f"+{delta:.1f}"
+                    return f"{formatted} <span class='delta-up'>(↑{delta_str})</span>"
+                else:
+                    delta_str = f"{abs(delta):.1f}"
+                    return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
             return formatted
 
         total_str = _fmt_with_delta(total, delta_total)
