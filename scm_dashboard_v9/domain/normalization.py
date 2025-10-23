@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Optional
 
 import pandas as pd
+
+from center_alias import normalize_center_value
 
 # 기본적으로 정규화할 날짜 컬럼 목록
 DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
@@ -58,6 +60,28 @@ def normalize_dates(
     return out
 
 
+def _normalise_center_series(series: pd.Series) -> pd.Series:
+    """Return a normalised centre series using ``normalize_center_value``."""
+
+    values = series.copy()
+    if values.empty:
+        return pd.Series("", index=series.index, dtype=object)
+
+    def _normalise(value: object) -> str:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in {"nan", "none", "null"}:
+            return ""
+        normalised = normalize_center_value(text)
+        return normalised or text
+
+    return values.map(_normalise).fillna("")
+
+
 def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     """
     이동 원장 데이터의 핵심 컬럼들을 예측 가능한 타입으로 변환합니다.
@@ -90,33 +114,33 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     # ========================================
     # 컬럼이 없으면 빈 문자열로 채운 시리즈 생성
     carrier_src = out["carrier_mode"] if "carrier_mode" in out.columns else pd.Series("", index=out.index)
-    # 문자열로 변환하고 대문자로 통일 (예: "sea" -> "SEA")
-    out["carrier_mode"] = carrier_src.astype(str).str.upper()
+    # 문자열로 변환하고 대문자/공백 정리 (예: "sea" -> "SEA")
+    out["carrier_mode"] = carrier_src.astype(str).str.strip().str.upper()
 
     # ========================================
     # 3단계: resource_code (SKU) 정규화
     # ========================================
     resource_src = out["resource_code"] if "resource_code" in out.columns else pd.Series("", index=out.index)
-    out["resource_code"] = resource_src.astype(str)
+    out["resource_code"] = resource_src.astype(str).str.strip()
 
     # ========================================
     # 4단계: from_center (출발 센터) 정규화
     # ========================================
     from_src = out["from_center"] if "from_center" in out.columns else pd.Series("", index=out.index)
-    out["from_center"] = from_src.astype(str)
+    out["from_center"] = _normalise_center_series(from_src)
 
     # ========================================
     # 5단계: to_center (목적지 센터) 정규화
     # ========================================
     to_src = out["to_center"] if "to_center" in out.columns else pd.Series("", index=out.index)
-    out["to_center"] = to_src.astype(str)
+    out["to_center"] = _normalise_center_series(to_src)
 
     # ========================================
     # 6단계: qty_ea (수량) 정규화
     # ========================================
     qty_src = out["qty_ea"] if "qty_ea" in out.columns else pd.Series(0, index=out.index)
     # 숫자로 변환 (변환 실패 시 NaN -> 0으로 대체)
-    out["qty_ea"] = pd.to_numeric(qty_src, errors="coerce").fillna(0)
+    out["qty_ea"] = pd.to_numeric(qty_src, errors="coerce").fillna(0).astype(int)
 
     return out
 
@@ -149,47 +173,62 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     """
     out = frame.copy()
 
-    # ========================================
-    # 1단계: 날짜 컬럼 찾기
-    # ========================================
-    # 'date' 또는 'snapshot_date' 컬럼 중 존재하는 것을 사용
-    date_col = None
-    for candidate in ("date", "snapshot_date"):
-        if candidate in out.columns:
-            date_col = candidate
-            break
+    cols_lower = {str(col).strip().lower(): col for col in out.columns}
 
-    if not date_col:
-        raise KeyError("snapshot frame must include a 'date' or 'snapshot_date' column")
+    def _pick_column(keys: Iterable[str]) -> Optional[str]:
+        for key in keys:
+            if key in cols_lower:
+                return cols_lower[key]
+        return None
 
-    # ========================================
-    # 2단계: 날짜 정규화
-    # ========================================
-    out["date"] = pd.to_datetime(out[date_col], errors="coerce").dt.normalize()
+    date_col = _pick_column(["date", "snapshot_date"])
+    center_col = _pick_column(["center", "센터", "창고", "warehouse"])
+    resource_col = _pick_column(["resource_code", "resource_cc", "sku", "상품코드", "product_code"])
+    stock_col = _pick_column(["stock_qty", "qty", "수량", "재고", "quantity"])
+    sales_col = _pick_column(["sales_qty", "sale_qty", "판매량", "출고수량", "출고", "출고 수량", "sales_ea"])
+    name_col = _pick_column(["resource_name", "품명", "상품명", "product_name"])
 
-    # ========================================
-    # 3단계: center (센터명) 정규화
-    # ========================================
-    center_src = out["center"] if "center" in out.columns else pd.Series("", index=out.index)
-    out["center"] = center_src.astype(str)
+    if not date_col or not center_col or not resource_col or not stock_col:
+        raise KeyError("snapshot frame must include date/center/resource_code/stock_qty columns")
 
-    # ========================================
-    # 4단계: resource_code (SKU) 정규화
-    # ========================================
-    resource_src = out["resource_code"] if "resource_code" in out.columns else pd.Series("", index=out.index)
-    out["resource_code"] = resource_src.astype(str)
+    rename_map = {
+        date_col: "date",
+        center_col: "center",
+        resource_col: "resource_code",
+        stock_col: "stock_qty",
+    }
+    if sales_col:
+        rename_map[sales_col] = "sales_qty"
+    if name_col:
+        rename_map[name_col] = "resource_name"
 
-    # ========================================
-    # 5단계: stock_qty (재고 수량) 정규화
-    # ========================================
-    stock_src = out["stock_qty"] if "stock_qty" in out.columns else pd.Series(0, index=out.index)
-    out["stock_qty"] = pd.to_numeric(stock_src, errors="coerce")
+    out = out.rename(columns=rename_map)
 
-    # ========================================
-    # 6단계: 유효하지 않은 행 제거 및 스키마 표준화
-    # ========================================
-    # 날짜가 NaT인 행은 제거 (필수 필드)
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out["center"] = _normalise_center_series(out.get("center", pd.Series("", index=out.index)))
+    out["resource_code"] = out.get("resource_code", pd.Series("", index=out.index)).astype(str).str.strip()
+    out["stock_qty"] = pd.to_numeric(out.get("stock_qty"), errors="coerce").fillna(0.0)
+
+    if "sales_qty" in out.columns:
+        out["sales_qty"] = pd.to_numeric(out.get("sales_qty"), errors="coerce").fillna(0).astype(int)
+    else:
+        out["sales_qty"] = 0
+
+    if "resource_name" in out.columns:
+        out["resource_name"] = (
+            out.get("resource_name", pd.Series("", index=out.index))
+            .astype(str)
+            .str.strip()
+            .replace({"nan": "", "None": ""})
+        )
+
     out = out.dropna(subset=["date"])
+    out = out[(out["center"] != "") & (out["resource_code"] != "")]
 
-    # 표준 컬럼만 반환
-    return out[["date", "center", "resource_code", "stock_qty"]]
+    columns = ["date", "center", "resource_code", "stock_qty"]
+    if "sales_qty" in out.columns:
+        columns.append("sales_qty")
+    if "resource_name" in out.columns:
+        columns.append("resource_name")
+
+    return out[columns].reset_index(drop=True)
