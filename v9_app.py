@@ -34,7 +34,9 @@ from scm_dashboard_v9.forecast import (
     build_amazon_forecast_context,
 )
 from scm_dashboard_v9.ui import (
+    build_amazon_snapshot_kpis,
     render_amazon_sales_vs_inventory,
+    render_amazon_snapshot_kpis,
     render_sku_summary_cards,
     render_step_chart,
 )
@@ -205,6 +207,12 @@ def main() -> None:
 
         st.divider()
         st.header("표시 옵션")
+        cover_base_option = st.selectbox(
+            "커버일 기준",
+            options=("available", "total"),
+            index=0,
+            format_func=lambda key: "사용가능 기준" if key == "available" else "총 재고 기준",
+        )
         show_prod = st.checkbox("생산중 표시", value=False)
         show_transit = False
         st.caption("체크 시 계단식 차트에 생산중 라인이 표시됩니다.")
@@ -386,6 +394,54 @@ def main() -> None:
     if not amazon_centers:
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
     else:
+        sku_colors_map = _sku_color_map(selected_skus)
+        snap_amz = snapshot_df[snapshot_df["center"].isin(amazon_centers)].copy()
+        kpi_df = build_amazon_snapshot_kpis(
+            snap_amz,
+            skus=selected_skus,
+            center=amazon_centers,
+            cover_base=cover_base_option,
+            use_ma7=True,
+        )
+
+        show_delta = st.toggle("전 스냅샷 대비 Δ", value=False)
+        previous_df = None
+        if show_delta and kpi_df is not None and not kpi_df.empty:
+            latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
+            if not pd.isna(latest_snap_ts):
+                cols_lower = {str(c).strip().lower(): c for c in snap_amz.columns}
+                snap_col_name = (
+                    cols_lower.get("snap_time")
+                    or cols_lower.get("snapshot_time")
+                    or cols_lower.get("snapshot_datetime")
+                    or cols_lower.get("snapshot_date")
+                    or cols_lower.get("date")
+                )
+                if snap_col_name:
+                    snap_prev = snap_amz.copy()
+                    snap_prev["__snap_ts"] = pd.to_datetime(
+                        snap_prev[snap_col_name], errors="coerce"
+                    )
+                    snap_prev = snap_prev.dropna(subset=["__snap_ts"])
+                    snap_prev = snap_prev[snap_prev["__snap_ts"] < latest_snap_ts]
+                    snap_prev = snap_prev.drop(columns="__snap_ts")
+                    if not snap_prev.empty:
+                        previous_df = build_amazon_snapshot_kpis(
+                            snap_prev,
+                            skus=selected_skus,
+                            center=amazon_centers,
+                            cover_base=cover_base_option,
+                            use_ma7=True,
+                        )
+
+        render_amazon_snapshot_kpis(
+            kpi_df,
+            sku_colors=sku_colors_map,
+            show_delta=show_delta,
+            previous_df=previous_df,
+            max_cols=4,
+        )
+
         amz_inv_pivot = _timeline_inventory_matrix(
             timeline_for_chart,
             centers=amazon_centers,
@@ -401,8 +457,6 @@ def main() -> None:
             mask_forecast = None
         inv_actual_from_step = _tidy_from_pivot(amz_inv_pivot, mask_actual)
         inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
-        sku_colors_map = _sku_color_map(selected_skus)
-
         # snap_정제 시트의 sales_qty 컬럼을 사용하여 판매 데이터 로드
         # (snapshot_raw의 fba_output_stock 대신 snap_정제의 sales_qty 사용)
         amz_ctx = build_amazon_forecast_context(
