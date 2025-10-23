@@ -20,7 +20,6 @@ import streamlit as st
 from center_alias import normalize_center_value
 from scm_dashboard_v4.config import CENTER_COL
 from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
-from scm_dashboard_v4.loaders import load_snapshot_raw
 
 # v9 모듈 임포트
 from scm_dashboard_v9.core import build_timeline as build_core_timeline
@@ -404,11 +403,12 @@ def main() -> None:
         inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
         sku_colors_map = _sku_color_map(selected_skus)
 
-        snapshot_raw_df = load_snapshot_raw()
+        # snap_정제 시트의 sales_qty 컬럼을 사용하여 판매 데이터 로드
+        # (snapshot_raw의 fba_output_stock 대신 snap_정제의 sales_qty 사용)
         amz_ctx = build_amazon_forecast_context(
             snap_long=snapshot_df,
             moves=data.moves,
-            snapshot_raw=snapshot_raw_df,
+            snapshot_raw=snapshot_df,  # snap_정제 데이터 전달 (sales_qty 컬럼 포함)
             centers=amazon_centers,
             skus=selected_skus,
             start=start_ts,
