@@ -74,7 +74,7 @@ def _normalise_center_series(series: pd.Series) -> pd.Series:
         if not text:
             return ""
         lowered = text.lower()
-        if lowered in {"nan", "none", "null"}:
+        if lowered in {"nan", "none", "null", "<na>"}:
             return ""
         normalised = normalize_center_value(text)
         return normalised or text
