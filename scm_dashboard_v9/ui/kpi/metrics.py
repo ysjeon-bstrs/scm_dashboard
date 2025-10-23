@@ -295,6 +295,7 @@ def movement_breakdown_per_center(
         return empty, empty
 
     mv = moves.copy()
+    today_norm = pd.to_datetime(today).normalize()
     mv["qty_ea"] = pd.to_numeric(mv["qty_ea"], errors="coerce").fillna(0)
     mv = mv[mv["qty_ea"] != 0]
 
@@ -317,23 +318,50 @@ def movement_breakdown_per_center(
     else:
         inbound_mask = pd.Series(False, index=mv.index)
 
-    if "arrival_date" in mv.columns:
-        arrival_mask = (~inbound_mask) & mv["arrival_date"].notna()
-        if arrival_mask.any():
-            past_arrival = arrival_mask & (mv["arrival_date"] <= today)
-            pred_end.loc[past_arrival] = mv.loc[past_arrival, "arrival_date"] + pd.Timedelta(days=lag_days)
+    arrival_raw = mv.get("arrival_date")
+    if isinstance(arrival_raw, pd.Series):
+        arrival_series = pd.to_datetime(arrival_raw, errors="coerce").dt.normalize()
+    else:
+        arrival_series = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
 
-            future_arrival = arrival_mask & (mv["arrival_date"] > today)
-            pred_end.loc[future_arrival] = mv.loc[future_arrival, "arrival_date"]
+    eta_raw = mv.get("eta_date")
+    if isinstance(eta_raw, pd.Series):
+        eta_series = pd.to_datetime(eta_raw, errors="coerce").dt.normalize()
+    else:
+        eta_series = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+    effective_arrival = arrival_series.fillna(eta_series)
+    arrival_mask = (~inbound_mask) & effective_arrival.notna()
+    if arrival_mask.any():
+        past_arrival = arrival_mask & (effective_arrival <= today_norm)
+        if past_arrival.any():
+            pred_end.loc[past_arrival] = today_norm + pd.Timedelta(days=lag_days)
 
-    pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
-    mv["pred_end_date"] = pred_end
+        future_arrival = arrival_mask & (effective_arrival > today_norm)
+        if future_arrival.any():
+            pred_end.loc[future_arrival] = effective_arrival.loc[future_arrival] + pd.Timedelta(
+                days=lag_days
+            )
+
+    has_signal = inbound_mask | arrival_mask
+    pred_end = pred_end.where(has_signal, pd.NaT)
+    mv["pred_end_date"] = pd.to_datetime(pred_end).dt.normalize()
 
     carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else ""
 
     in_transit_series = pd.Series(dtype=float)
     if "onboard_date" in mv.columns:
-        in_transit_mask = mv["onboard_date"].notna() & (mv["onboard_date"] <= today) & (today < mv["pred_end_date"])
+        onboard_raw = mv.get("onboard_date")
+        if isinstance(onboard_raw, pd.Series):
+            onboard_series = pd.to_datetime(onboard_raw, errors="coerce").dt.normalize()
+        else:
+            onboard_series = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+        mv["onboard_date"] = onboard_series
+        pred_series = mv.get("pred_end_date")
+        in_transit_mask = (
+            onboard_series.notna()
+            & (onboard_series <= today_norm)
+            & (pred_series.isna() | (today_norm < pred_series))
+        )
         if "carrier_mode" in mv.columns:
             in_transit_mask &= carrier_mode != "WIP"
         if in_transit_mask.any():

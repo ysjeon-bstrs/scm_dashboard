@@ -207,13 +207,28 @@ def process_moves_data(
     if not moves_df.empty:
         mv_cols = {str(c).lower(): c for c in moves_df.columns}
         rename_moves = {mv_cols.get("event_date", "event_date"): "event_date"}
-        for name in ["to_center", "resource_code", "qty_ea"]:
+        for name in ["to_center", "resource_code", "qty_ea", "arrival_date", "eta_date"]:
             if name in mv_cols:
                 rename_moves[mv_cols[name]] = name
         moves_df = moves_df.rename(columns=rename_moves)
         moves_df["event_date"] = pd.to_datetime(
             moves_df.get("event_date"), errors="coerce"
         ).dt.normalize()
+        if "arrival_date" in moves_df.columns:
+            moves_df["arrival_date"] = pd.to_datetime(
+                moves_df.get("arrival_date"), errors="coerce"
+            ).dt.normalize()
+        else:
+            moves_df["arrival_date"] = pd.NaT
+        if "eta_date" in moves_df.columns:
+            moves_df["eta_date"] = pd.to_datetime(
+                moves_df.get("eta_date"), errors="coerce"
+            ).dt.normalize()
+        else:
+            moves_df["eta_date"] = pd.NaT
+
+        has_eta = moves_df["arrival_date"].notna() | moves_df["eta_date"].notna()
+        moves_df = moves_df[has_eta]
         moves_df = moves_df.dropna(subset=["event_date"])
         moves_df["to_center"] = moves_df.get("to_center", "").astype(str)
         moves_df["resource_code"] = moves_df.get("resource_code", "").astype(str)

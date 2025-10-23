@@ -14,7 +14,7 @@ import pandas as pd
 from center_alias import normalize_center_value
 
 # 기본적으로 정규화할 날짜 컬럼 목록
-DATE_COLUMNS = ("onboard_date", "arrival_date", "inbound_date", "event_date")
+DATE_COLUMNS = ("onboard_date", "arrival_date", "eta_date", "inbound_date", "event_date")
 
 
 # Common column aliases observed in upstream move ledgers. The lists should
