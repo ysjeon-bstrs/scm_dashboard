@@ -148,6 +148,54 @@ def sales_from_snapshot_raw(
     *,
     debug: Optional[dict[str, object]] = None,
 ) -> pd.DataFrame:
+    """원시 스냅샷 데이터로부터 매출 데이터를 추출하고 변환합니다.
+
+    이 함수는 다국어 컬럼명을 지원하는 강건한 데이터 파이프라인으로:
+    1. 컬럼명 정규화 (한글/영문 다국어 지원)
+    2. 센터명 정규화 (normalize_center_value 적용)
+    3. 센터 및 SKU 필터링
+    4. 기간 필터링 및 유효성 검증
+    5. 일자별 매출 집계 (중복 제거)
+
+    Args:
+        snap_raw: 원시 스냅샷 DataFrame (다양한 컬럼명 형식 지원)
+            - 필수 컬럼: date/snapshot_date/스냅샷일자 중 하나
+            - 필수 컬럼: fba_output_stock/출고수량/fba출고 중 하나
+            - 선택 컬럼: center/센터/warehouse, resource_code/sku/상품코드
+        centers: 대상 센터 리스트 (정규화 전 값)
+        skus: 대상 SKU 리스트
+        start: 조회 시작 날짜
+        end: 조회 종료 날짜
+        debug: 디버그 정보 수집 딕셔너리 (선택)
+            - 'rows_before_center_filter': 센터 필터 전 행 수
+            - 'rows_after_center_filter': 센터 필터 후 행 수
+            - 'snapshot_centers': 스냅샷에 포함된 센터 리스트
+            - 'warning': 오류 메시지 (있을 경우)
+
+    Returns:
+        일자별 SKU 매출 DataFrame
+        - 컬럼: date, resource_code, sales_ea
+        - sales_ea: 0 이상 정수 (음수 제거됨)
+        - 빈 결과 시: 동일 스키마의 빈 DataFrame
+
+    Notes:
+        - 센터 컬럼이 없으면 첫 번째 요청 센터를 기본값으로 사용 (또는 AMZUS)
+        - 필수 컬럼 누락 시 경고와 함께 빈 DataFrame 반환
+        - 중복 데이터는 합계로 집계됨
+
+    Examples:
+        >>> debug_info = {}
+        >>> sales_df = sales_from_snapshot_raw(
+        ...     snap_raw=raw_snapshot,
+        ...     centers=["AMZUS", "AMZEU"],
+        ...     skus=["SKU001", "SKU002"],
+        ...     start=pd.Timestamp("2024-01-01"),
+        ...     end=pd.Timestamp("2024-01-31"),
+        ...     debug=debug_info,
+        ... )
+        >>> print(debug_info['snapshot_centers'])
+        ['AMZEU', 'AMZUS']
+    """
     if snap_raw is None or snap_raw.empty:
         if debug is not None:
             debug.clear()

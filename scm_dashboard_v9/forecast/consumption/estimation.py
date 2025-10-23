@@ -85,6 +85,45 @@ def apply_consumption_with_events(
     events: Optional[Iterable[dict]] = None,
     cons_start: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
+    """재고 타임라인에 일평균 소비율과 프로모션 이벤트를 적용하여 미래 재고를 시뮬레이션합니다.
+
+    이 함수는 다음 단계로 재고 시뮬레이션을 수행합니다:
+    1. 과거 스냅샷 데이터로부터 일평균 소비율 추정
+    2. 프로모션 이벤트에 따른 소비량 변화(uplift) 계산
+    3. 각 센터/SKU별로 일자별 재고 감소 시뮬레이션
+    4. 최종 재고량 계산 (음수 방지, 정수 변환)
+
+    Args:
+        timeline: 시뮬레이션 대상 타임라인 DataFrame (center, resource_code, date, stock_qty 필요)
+        snapshot: 과거 재고 스냅샷 DataFrame (소비율 추정용)
+        centers: 대상 센터 리스트
+        skus: 대상 SKU (resource_code) 리스트
+        start: 시뮬레이션 시작 날짜
+        end: 시뮬레이션 종료 날짜
+        lookback_days: 소비율 추정 시 과거 조회 기간 (기본 28일)
+        events: 프로모션 이벤트 리스트 (각 이벤트: {start, end, uplift})
+            - uplift: 소비 증감률 (-1.0 ~ 3.0, 예: 0.5 = 50% 증가)
+        cons_start: 소비 시작 날짜 (None이면 latest_snap + 1일로 자동 설정)
+
+    Returns:
+        재고 감소가 적용된 타임라인 DataFrame
+        - In-Transit, WIP 센터는 소비 적용 안 함
+        - 재고량은 0 이상 정수로 제한됨
+
+    Examples:
+        >>> events = [
+        ...     {"start": "2024-01-10", "end": "2024-01-15", "uplift": 0.5},  # 50% 증가
+        ... ]
+        >>> result = apply_consumption_with_events(
+        ...     timeline=timeline_df,
+        ...     snapshot=snapshot_df,
+        ...     centers=["center1", "center2"],
+        ...     skus=["SKU001", "SKU002"],
+        ...     start=pd.Timestamp("2024-01-01"),
+        ...     end=pd.Timestamp("2024-01-31"),
+        ...     events=events,
+        ... )
+    """
     centers_list = list(centers)
     skus_list = list(skus)
     start_norm = pd.to_datetime(start).normalize()

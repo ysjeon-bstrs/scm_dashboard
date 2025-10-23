@@ -32,6 +32,7 @@ from .cards_helpers import (
     calculate_wip_pipeline,
     aggregate_metrics,
 )
+from ...analytics.kpi import kpi_breakdown_per_sku
 
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
     classes = ["kpi-metric-card"]
