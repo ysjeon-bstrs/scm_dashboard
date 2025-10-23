@@ -243,6 +243,48 @@ def movement_breakdown_per_center(
     today: pd.Timestamp,
     lag_days: int,
 ) -> tuple[pd.Series, pd.Series]:
+    """재고 이동 데이터로부터 In-Transit 및 WIP 재고를 센터/SKU별로 집계합니다.
+
+    이 함수는 현재 시점(today)을 기준으로:
+    1. In-Transit 재고: 출고되었지만 아직 입고되지 않은 물량 계산
+       - onboard_date <= today < pred_end_date 조건
+       - carrier_mode != "WIP"
+    2. WIP 재고: 제조 시작되었지만 완료되지 않은 물량 계산
+       - carrier_mode == "WIP"
+       - onboard_date부터 event_date까지의 누적 흐름 추적
+
+    Args:
+        moves: 재고 이동 계획 DataFrame
+            - 필수 컬럼: resource_code, to_center, qty_ea
+            - 선택 컬럼: onboard_date, inbound_date, arrival_date, event_date, carrier_mode
+        centers: 대상 센터 리스트 (to_center 필터링용)
+        skus: 대상 SKU 리스트
+        today: 현재 날짜 (기준일)
+        lag_days: 입고 지연 일수 (arrival_date 기반 예측에 사용)
+
+    Returns:
+        (in_transit_series, wip_series) 튜플
+        - in_transit_series: (resource_code, to_center) 인덱스의 Series (단위: ea, 정수)
+        - wip_series: (resource_code, to_center) 인덱스의 Series (단위: ea, 정수)
+        - 빈 결과 시: 두 Series 모두 빈 Series (dtype=float)
+
+    Notes:
+        - pred_end_date 우선순위: inbound_date > arrival_date (+lag) > today+1일
+        - WIP 재고는 event_date까지의 누적 변화량으로 계산 (onboard에 +, event에 -)
+        - 모든 재고량은 0 이상 정수로 제한됨
+        - 필수 컬럼 누락 시 빈 Series 반환
+
+    Examples:
+        >>> in_transit, wip = movement_breakdown_per_center(
+        ...     moves=moves_df,
+        ...     centers=["center1", "center2"],
+        ...     skus=["SKU001", "SKU002"],
+        ...     today=pd.Timestamp("2024-01-15"),
+        ...     lag_days=2,
+        ... )
+        >>> print(in_transit.loc[("SKU001", "center1")])
+        150
+    """
     if moves is None or moves.empty:
         empty = pd.Series(dtype=float)
         return empty, empty

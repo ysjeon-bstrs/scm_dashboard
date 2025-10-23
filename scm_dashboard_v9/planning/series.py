@@ -51,6 +51,52 @@ def build_center_series(
     skus: Iterable[str],
     index: SeriesIndex,
 ) -> pd.DataFrame:
+    """센터별 재고 타임라인을 생성하고 예정된 입출고를 반영합니다.
+
+    이 함수는 다음 단계로 재고 시계열을 구축합니다:
+    1. 과거 스냅샷 데이터로부터 센터별 재고 기준선 생성
+    2. 예정 출고 (from_center) 이벤트 반영 (재고 감소)
+    3. 예정 입고 (to_center) 이벤트 반영 (재고 증가)
+    4. WIP 완료 이벤트 반영 (제조 완료 시 재고 증가)
+    5. 누적 변화량을 시계열에 적용하여 미래 재고 예측
+
+    Args:
+        snapshot: 과거 재고 스냅샷 DataFrame
+            - 필수 컬럼: center, resource_code, date, stock_qty
+        moves: 재고 이동 계획 DataFrame
+            - 필수 컬럼: resource_code, from_center, to_center, qty_ea
+            - 필수 컬럼: ship_start_date/onboard_date (중 하나)
+            - 선택 컬럼: pred_inbound_date, event_date, carrier_mode
+        centers: 대상 센터 리스트
+        skus: 대상 SKU (resource_code) 리스트
+        index: 타임라인 인덱스 (SeriesIndex 객체)
+            - index.range: 날짜 범위 (pd.DatetimeIndex)
+
+    Returns:
+        센터별 재고 타임라인 DataFrame
+        - 컬럼: date, center, resource_code, stock_qty
+        - stock_qty: 0 이상 실수 (음수 제거됨)
+        - 빈 결과 시: 동일 스키마의 빈 DataFrame
+
+    Notes:
+        - 스냅샷의 마지막 날짜 이후의 moves만 반영됨
+        - 출고는 ship_start_date에 차감, 입고는 pred_inbound_date에 추가
+        - WIP 모드는 event_date에 재고 추가
+        - 재고량은 forward fill 후 0 이하 값 제거
+
+    Examples:
+        >>> idx = SeriesIndex(
+        ...     start=pd.Timestamp("2024-01-01"),
+        ...     end=pd.Timestamp("2024-01-31")
+        ... )
+        >>> timeline = build_center_series(
+        ...     snapshot=snapshot_df,
+        ...     moves=moves_df,
+        ...     centers=["center1", "center2"],
+        ...     skus=["SKU001"],
+        ...     index=idx,
+        ... )
+    """
     centers_set = _normalise_selection(centers)
     skus_set = _normalise_selection(skus)
     if snapshot.empty or not centers_set or not skus_set:
@@ -155,6 +201,50 @@ def build_in_transit_series(
     today: pd.Timestamp,
     lag_days: int,
 ) -> pd.DataFrame:
+    """In-Transit (운송 중) 재고 타임라인을 생성합니다.
+
+    이 함수는 다음 로직으로 운송 중 재고를 추적합니다:
+    1. 출고 시작일 (ship_start_date/onboard_date)에 In-Transit 재고 증가
+    2. 입고 예정일 (in_transit_end_date)에 In-Transit 재고 감소
+    3. 타임라인 시작 전에 출고되어 아직 입고되지 않은 건(carry) 반영
+    4. 누적 변화량을 적용하여 일자별 In-Transit 재고 계산
+
+    Args:
+        moves: 재고 이동 계획 DataFrame
+            - 필수 컬럼: resource_code, to_center, qty_ea, carrier_mode
+            - 필수 컬럼: ship_start_date/onboard_date (중 하나)
+            - 필수 컬럼: in_transit_end_date
+        centers: 대상 센터 리스트 (to_center 필터링용)
+        skus: 대상 SKU 리스트
+        index: 타임라인 인덱스 (SeriesIndex 객체)
+        today: 현재 날짜 (사용 안 함, 호환성 유지)
+        lag_days: 지연 일수 (사용 안 함, 호환성 유지)
+
+    Returns:
+        In-Transit 재고 타임라인 DataFrame
+        - 컬럼: date, center="In-Transit", resource_code, stock_qty
+        - stock_qty: 0 이상 정수 (음수 제거됨)
+        - 빈 결과 시: 동일 스키마의 빈 DataFrame
+
+    Notes:
+        - WIP 모드 (carrier_mode="WIP")는 제외됨
+        - carry: 타임라인 시작 전 출고되어 아직 입고 안 된 물량
+        - 각 SKU별로 독립적으로 계산됨
+
+    Examples:
+        >>> idx = SeriesIndex(
+        ...     start=pd.Timestamp("2024-01-01"),
+        ...     end=pd.Timestamp("2024-01-31")
+        ... )
+        >>> in_transit = build_in_transit_series(
+        ...     moves=moves_df,
+        ...     centers=["center1"],
+        ...     skus=["SKU001"],
+        ...     index=idx,
+        ...     today=pd.Timestamp("2024-01-15"),
+        ...     lag_days=0,
+        ... )
+    """
     if moves.empty:
         return _empty_timeline()
 
@@ -223,6 +313,46 @@ def build_wip_series(
     skus: Iterable[str],
     index: SeriesIndex,
 ) -> pd.DataFrame:
+    """WIP (Work In Progress, 제조 중) 재고 타임라인을 생성합니다.
+
+    이 함수는 다음 로직으로 제조 중 재고를 추적합니다:
+    1. 제조 시작일 (ship_start_date/onboard_date)에 WIP 재고 증가
+    2. 제조 완료일 (event_date)에 WIP 재고 감소
+    3. 누적 변화량을 적용하여 일자별 WIP 재고 계산
+    4. 타임라인 시작 전에 시작된 WIP 건(carry) 반영
+
+    Args:
+        moves: 재고 이동 계획 DataFrame
+            - 필수 컬럼: resource_code, qty_ea, carrier_mode
+            - 필수 컬럼: ship_start_date/onboard_date (중 하나)
+            - 선택 컬럼: event_date (WIP 완료일)
+            - carrier_mode="WIP"인 행만 처리됨
+        skus: 대상 SKU 리스트
+        index: 타임라인 인덱스 (SeriesIndex 객체)
+
+    Returns:
+        WIP 재고 타임라인 DataFrame
+        - 컬럼: date, center="WIP", resource_code, stock_qty
+        - stock_qty: 0 이상 정수 (음수 제거됨)
+        - 빈 결과 시: 동일 스키마의 빈 DataFrame
+
+    Notes:
+        - carrier_mode="WIP"인 이동 건만 처리됨
+        - event_date 누락 시 완료되지 않은 것으로 간주 (재고 유지)
+        - carry: 타임라인 시작 전 제조 시작되어 아직 완료 안 된 물량
+        - 각 SKU별로 독립적으로 계산됨
+
+    Examples:
+        >>> idx = SeriesIndex(
+        ...     start=pd.Timestamp("2024-01-01"),
+        ...     end=pd.Timestamp("2024-01-31")
+        ... )
+        >>> wip_timeline = build_wip_series(
+        ...     moves=moves_df,
+        ...     skus=["SKU001", "SKU002"],
+        ...     index=idx,
+        ... )
+    """
     if moves.empty:
         return _empty_timeline()
 
