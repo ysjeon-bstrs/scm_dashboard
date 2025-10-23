@@ -96,11 +96,13 @@ def _coerce_snapshot_frame(
     df["resource_code"] = df.get("resource_code", "").astype(str).str.strip()
 
     for column in _NUMERIC_COLUMNS:
-        df[column] = (
-            pd.to_numeric(df.get(column), errors="coerce")
-            .fillna(0)
-            .astype(float)
+        values = pd.to_numeric(
+            df.get(column, pd.Series(dtype=float)), errors="coerce"
         )
+        if not isinstance(values, pd.Series):
+            values = pd.Series(values, index=df.index, dtype=float)
+        values = values.reindex(df.index)
+        df[column] = values.fillna(0).astype(float)
         df[column] = df[column].clip(lower=0)
 
     if centers:
