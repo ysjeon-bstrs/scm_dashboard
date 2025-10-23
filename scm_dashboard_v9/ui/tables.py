@@ -15,6 +15,11 @@ from center_alias import normalize_center_value
 from scm_dashboard_v9.core.config import CENTER_COL
 from scm_dashboard_v9.analytics.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v9.data_sources.loaders import load_snapshot_raw
+from scm_dashboard_v9.domain.filters import (
+    filter_by_centers,
+    is_empty_or_none,
+    safe_to_datetime,
+)
 
 
 def build_resource_name_map(snapshot: pd.DataFrame) -> dict[str, str]:
@@ -143,12 +148,8 @@ def render_inbound_and_wip_tables(
             mask_inbound = pd.Series(False, index=moves_view.index)
 
         # ETA/arrival 기반 계산 (inbound_date 없을 때)
-        arrival_series = pd.to_datetime(
-            moves_view.get("arrival_date"), errors="coerce"
-        ).dt.normalize()
-        eta_series = pd.to_datetime(
-            moves_view.get("eta_date"), errors="coerce"
-        ).dt.normalize()
+        arrival_series = safe_to_datetime(moves_view.get("arrival_date"))
+        eta_series = safe_to_datetime(moves_view.get("eta_date"))
         effective_arrival = arrival_series.fillna(eta_series)
         mask_eta = (~mask_inbound) & effective_arrival.notna()
 
@@ -165,7 +166,7 @@ def render_inbound_and_wip_tables(
                     days=int(lag_days)
                 )
 
-        moves_view["pred_inbound_date"] = pd.to_datetime(pred_inbound).dt.normalize()
+        moves_view["pred_inbound_date"] = safe_to_datetime(pred_inbound)
     else:
         moves_view["pred_inbound_date"] = pd.Series(
             pd.NaT, index=moves_view.index, dtype="datetime64[ns]"
@@ -260,11 +261,9 @@ def render_inbound_and_wip_tables(
     else:
         # 남은 일수 계산
         arrival_basis = confirmed_inbound.get("arrival_date")
-        arrival_basis = pd.to_datetime(arrival_basis, errors="coerce").dt.normalize()
+        arrival_basis = safe_to_datetime(arrival_basis)
         if "eta_date" in confirmed_inbound.columns:
-            eta_normalized = pd.to_datetime(
-                confirmed_inbound.get("eta_date"), errors="coerce"
-            ).dt.normalize()
+            eta_normalized = safe_to_datetime(confirmed_inbound.get("eta_date"))
             arrival_basis = arrival_basis.fillna(eta_normalized)
 
         days_arrival = (arrival_basis - today).dt.days.astype("Int64")

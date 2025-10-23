@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from center_alias import normalize_center_value
+from scm_dashboard_v9.domain.filters import filter_by_centers, safe_to_datetime
 from .data_utils import coerce_cols, empty_sales_frame
 
 def sales_from_snapshot(
@@ -31,7 +32,7 @@ def sales_from_snapshot(
         columns={c["date"]: "date", c["center"]: "center", c["sku"]: "resource_code", c["qty"]: "stock_qty"}
     )[["date", "center", "resource_code", "stock_qty"]].copy()
 
-    s["date"] = pd.to_datetime(s["date"], errors="coerce").dt.normalize()
+    s["date"] = safe_to_datetime(s["date"])
     s = s[s["center"].astype(str).isin(centers) & s["resource_code"].astype(str).isin(skus)]
     if s.empty:
         idx = pd.date_range(start, end, freq="D")
