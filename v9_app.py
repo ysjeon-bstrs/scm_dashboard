@@ -27,6 +27,9 @@ from scm_dashboard_v9.data_sources import LoadedData, ensure_data
 from scm_dashboard_v9.domain import (
     calculate_date_bounds,
     extract_center_and_sku_options,
+    filter_by_centers,
+    is_empty_or_none,
+    safe_to_datetime,
     validate_timeline_inputs,
 )
 from scm_dashboard_v9.forecast import (
@@ -258,7 +261,7 @@ def _render_amazon_section(
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
     else:
         sku_colors_map = _sku_color_map(selected_skus)
-        snap_amz = snapshot_df[snapshot_df["center"].isin(amazon_centers)].copy()
+        snap_amz = filter_by_centers(snapshot_df, amazon_centers)
 
         # DEBUG: 아마존 KPI 데이터 진단
         with st.expander("🔍 DEBUG: Amazon KPI 데이터 정보", expanded=False):
@@ -400,13 +403,9 @@ def main() -> None:
     # ========================================
     snapshot_df = data.snapshot.copy()
     if "date" in snapshot_df.columns:
-        snapshot_df["date"] = (
-            pd.to_datetime(snapshot_df["date"], errors="coerce").dt.normalize()
-        )
+        snapshot_df["date"] = safe_to_datetime(snapshot_df["date"])
     elif "snapshot_date" in snapshot_df.columns:
-        snapshot_df["date"] = (
-            pd.to_datetime(snapshot_df["snapshot_date"], errors="coerce").dt.normalize()
-        )
+        snapshot_df["date"] = safe_to_datetime(snapshot_df["snapshot_date"])
     else:
         snapshot_df["date"] = pd.NaT
 
@@ -616,7 +615,7 @@ def main() -> None:
     # ========================================
     # center_latest_dates 계산 (재고 테이블 함수 내부에서 이미 계산됨)
     center_latest_series = (
-        snapshot_df[snapshot_df["center"].isin(selected_centers)]
+        filter_by_centers(snapshot_df, selected_centers)
         .groupby("center")["date"]
         .max()
     )

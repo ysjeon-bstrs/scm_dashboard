@@ -6,11 +6,232 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 import pandas as pd
 
 from center_alias import normalize_center_value
+
+
+# ========================================
+# 날짜 정규화 헬퍼
+# ========================================
+
+def safe_to_datetime(
+    series_or_value,
+    *,
+    normalize: bool = True,
+    errors: str = "coerce",
+) -> pd.Series | pd.Timestamp:
+    """
+    날짜를 안전하게 datetime으로 변환하고 선택적으로 정규화합니다.
+
+    Args:
+        series_or_value: Series 또는 단일 값
+        normalize: True이면 시간을 00:00:00으로 정규화
+        errors: pd.to_datetime의 errors 파라미터 (기본: 'coerce')
+
+    Returns:
+        변환된 datetime Series 또는 Timestamp
+
+    Examples:
+        >>> safe_to_datetime("2024-01-15 12:30:00")
+        Timestamp('2024-01-15 00:00:00')
+        >>> safe_to_datetime(df["date"], normalize=False)
+        <Series of datetimes>
+    """
+    result = pd.to_datetime(series_or_value, errors=errors)
+    if normalize:
+        if isinstance(result, pd.Series):
+            return result.dt.normalize()
+        elif isinstance(result, pd.Timestamp) and not pd.isna(result):
+            return result.normalize()
+    return result
+
+
+def normalize_timestamp(value) -> Optional[pd.Timestamp]:
+    """
+    단일 값을 정규화된 Timestamp로 변환합니다.
+
+    Args:
+        value: 변환할 날짜 값
+
+    Returns:
+        정규화된 Timestamp. 변환 실패 시 None.
+
+    Examples:
+        >>> normalize_timestamp("2024-01-15")
+        Timestamp('2024-01-15 00:00:00')
+        >>> normalize_timestamp(None)
+        None
+    """
+    if pd.isna(value):
+        return None
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+        return ts.normalize() if not pd.isna(ts) else None
+    except Exception:
+        return None
+
+
+# ========================================
+# DataFrame 필터 헬퍼
+# ========================================
+
+def filter_by_centers(
+    df: pd.DataFrame,
+    centers: str | Sequence[str],
+    *,
+    center_col: str = "center",
+) -> pd.DataFrame:
+    """
+    DataFrame을 센터 목록으로 필터링합니다.
+
+    Args:
+        df: 필터링할 DataFrame
+        centers: 단일 센터명 또는 센터 목록
+        center_col: 센터 컬럼명 (기본: 'center')
+
+    Returns:
+        필터링된 DataFrame (복사본)
+
+    Examples:
+        >>> filtered = filter_by_centers(df, ["태광KR", "AMZUS"])
+        >>> filtered = filter_by_centers(df, "태광KR")
+    """
+    if df.empty or center_col not in df.columns:
+        return df.copy()
+
+    centers_list = [centers] if isinstance(centers, str) else list(centers)
+    if not centers_list:
+        return df.copy()
+
+    return df[df[center_col].isin(centers_list)].copy()
+
+
+def filter_by_skus(
+    df: pd.DataFrame,
+    skus: str | Sequence[str],
+    *,
+    sku_col: str = "resource_code",
+) -> pd.DataFrame:
+    """
+    DataFrame을 SKU 목록으로 필터링합니다.
+
+    Args:
+        df: 필터링할 DataFrame
+        skus: 단일 SKU 또는 SKU 목록
+        sku_col: SKU 컬럼명 (기본: 'resource_code')
+
+    Returns:
+        필터링된 DataFrame (복사본)
+
+    Examples:
+        >>> filtered = filter_by_skus(df, ["BA00021", "BA00022"])
+        >>> filtered = filter_by_skus(df, "BA00021")
+    """
+    if df.empty or sku_col not in df.columns:
+        return df.copy()
+
+    skus_list = [skus] if isinstance(skus, str) else list(skus)
+    if not skus_list:
+        return df.copy()
+
+    return df[df[sku_col].isin(skus_list)].copy()
+
+
+def filter_by_centers_and_skus(
+    df: pd.DataFrame,
+    *,
+    centers: Optional[str | Sequence[str]] = None,
+    skus: Optional[str | Sequence[str]] = None,
+    center_col: str = "center",
+    sku_col: str = "resource_code",
+) -> pd.DataFrame:
+    """
+    DataFrame을 센터와 SKU 목록으로 동시에 필터링합니다.
+
+    Args:
+        df: 필터링할 DataFrame
+        centers: 센터 목록 (None이면 필터링 안 함)
+        skus: SKU 목록 (None이면 필터링 안 함)
+        center_col: 센터 컬럼명
+        sku_col: SKU 컬럼명
+
+    Returns:
+        필터링된 DataFrame (복사본)
+
+    Examples:
+        >>> filtered = filter_by_centers_and_skus(
+        ...     df,
+        ...     centers=["태광KR", "AMZUS"],
+        ...     skus=["BA00021", "BA00022"]
+        ... )
+    """
+    result = df.copy()
+
+    if centers is not None:
+        result = filter_by_centers(result, centers, center_col=center_col)
+
+    if skus is not None:
+        result = filter_by_skus(result, skus, sku_col=sku_col)
+
+    return result
+
+
+# ========================================
+# 검증 헬퍼
+# ========================================
+
+def is_empty_or_none(df: Optional[pd.DataFrame]) -> bool:
+    """
+    DataFrame이 None이거나 비어있는지 확인합니다.
+
+    Args:
+        df: 확인할 DataFrame
+
+    Returns:
+        None이거나 비어있으면 True
+
+    Examples:
+        >>> is_empty_or_none(None)
+        True
+        >>> is_empty_or_none(pd.DataFrame())
+        True
+        >>> is_empty_or_none(pd.DataFrame({"a": [1]}))
+        False
+    """
+    return df is None or df.empty
+
+
+def ensure_list(value: Optional[str | Sequence[str]]) -> list[str]:
+    """
+    단일 값 또는 Sequence를 리스트로 변환합니다.
+
+    Args:
+        value: 단일 값, Sequence, 또는 None
+
+    Returns:
+        리스트. None이면 빈 리스트.
+
+    Examples:
+        >>> ensure_list("BA00021")
+        ['BA00021']
+        >>> ensure_list(["BA00021", "BA00022"])
+        ['BA00021', 'BA00022']
+        >>> ensure_list(None)
+        []
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+
+# ========================================
+# 기존 함수들
+# ========================================
 
 
 def norm_center(x: str) -> Optional[str]:
