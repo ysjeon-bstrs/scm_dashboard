@@ -292,10 +292,21 @@ def aggregate_metrics(
             latest_snapshot_rows["stock_qty"], errors="coerce"
         )
 
-    # Global snapshot rows 필터링
-    global_snapshot_rows = snapshot_view[
-        snapshot_view["date"] == global_latest_snapshot_dt
-    ].copy()
+    # Global snapshot rows 필터링 - 센터별 스냅샷 생성 시간이 다를 수 있으므로
+    # 각 센터의 최신 날짜 데이터를 사용 (고정된 global_latest_snapshot_dt 사용 안 함)
+    if not snapshot_view.empty:
+        center_latest_dates = snapshot_view.groupby("center")["date"].max()
+        global_snapshot_parts = []
+        for center, latest_date in center_latest_dates.items():
+            center_latest_data = snapshot_view[
+                (snapshot_view["center"] == center)
+                & (snapshot_view["date"] == latest_date)
+            ]
+            global_snapshot_parts.append(center_latest_data)
+        global_snapshot_rows = pd.concat(global_snapshot_parts, ignore_index=True) if global_snapshot_parts else pd.DataFrame()
+    else:
+        global_snapshot_rows = pd.DataFrame()
+
     if "stock_qty" in global_snapshot_rows.columns:
         global_snapshot_rows["stock_qty"] = pd.to_numeric(
             global_snapshot_rows["stock_qty"], errors="coerce"
