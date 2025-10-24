@@ -1,0 +1,6 @@
+to_center,from_center,resource_code,qty_ea,onboard_date,arrival_date,inbound_date,event_date,carrier_mode
+AMZUS,태광KR,BA00021,100,2024-12-22,2024-12-25,,2025-01-02,SEA
+AMZUS,태광KR,BA00022,80,2024-12-23,2024-12-28,,2025-01-03,SEA
+태광KR,,BA00021,200,2024-12-24,,,2025-01-10,WIP
+
+
