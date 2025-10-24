@@ -319,6 +319,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     expected_col = _pick_column(["stock_expected", "expected_qty", "입고예정"])
     processing_col = _pick_column(["stock_processing", "processing_qty", "입고처리중"])
     snap_time_col = _pick_column(["snap_time", "snapshot_time", "snapshot_datetime"])
+    pending_fc_col = _pick_column(["pending_fc", "pending_fc_qty", "fc_pending", "pending at fc"])  # 신규 컬럼
 
     if not date_col or not center_col or not resource_col or not stock_col:
         raise KeyError("snapshot frame must include date/center/resource_code/stock_qty columns")
@@ -343,6 +344,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         rename_map[processing_col] = "stock_processing"
     if snap_time_col:
         rename_map[snap_time_col] = "snap_time"
+    if pending_fc_col:
+        rename_map[pending_fc_col] = "pending_fc"
 
     out = out.rename(columns=rename_map)
 
@@ -371,6 +374,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         out["stock_expected"] = pd.to_numeric(out.get("stock_expected"), errors="coerce").fillna(0.0)
     if "stock_processing" in out.columns:
         out["stock_processing"] = pd.to_numeric(out.get("stock_processing"), errors="coerce").fillna(0.0)
+    if "pending_fc" in out.columns:
+        out["pending_fc"] = pd.to_numeric(out.get("pending_fc"), errors="coerce").fillna(0.0)
     if "snap_time" in out.columns:
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
@@ -380,7 +385,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     # 기본 컬럼
     columns = ["date", "center", "resource_code", "stock_qty"]
     # 선택적 컬럼 추가
-    for optional_col in ["sales_qty", "resource_name", "stock_available", "stock_expected", "stock_processing", "snap_time"]:
+    for optional_col in ["sales_qty", "resource_name", "stock_available", "stock_expected", "stock_processing", "pending_fc", "snap_time"]:
         if optional_col in out.columns:
             columns.append(optional_col)
 
