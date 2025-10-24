@@ -264,19 +264,14 @@ def _render_amazon_section(
         snap_amz = filter_by_centers(snapshot_df, amazon_centers)
 
         # Amazon KPI 설정 토글
-        col1, col2 = st.columns(2)
-        with col1:
-            show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
-        with col2:
-            use_total_for_cover = st.toggle("커버일: 총 재고 기준", value=True, help="OFF = 사용가능 기준")
-
-        cover_base = "total" if use_total_for_cover else "available"
+        # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
+        show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
 
         kpi_df = build_amazon_snapshot_kpis(
             snap_amz,
             skus=selected_skus,
             center=amazon_centers,
-            cover_base=cover_base,
+            cover_base="available",
             use_ma7=True,
         )
         previous_df = None
@@ -298,7 +293,7 @@ def _render_amazon_section(
                         snap_prev,
                         skus=selected_skus,
                         center=amazon_centers,
-                        cover_base=cover_base,
+                        cover_base="available",
                         use_ma7=True,
                     )
 
