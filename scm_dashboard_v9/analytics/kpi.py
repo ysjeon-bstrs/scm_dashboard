@@ -42,20 +42,38 @@ def kpi_breakdown_per_sku(
     )
 
     # moves 복사 및 pred_end_date 계산
+    # WIP: event_date 그대로, In-Transit: 리드타임 적용 (과거 arrival은 오늘+3일)
     mv_kpi = moves.copy()
     if not mv_kpi.empty:
         pred_end = pd.Series(pd.NaT, index=mv_kpi.index, dtype="datetime64[ns]")
 
-        mask_inb = mv_kpi["inbound_date"].notna()
+        # carrier_mode 확인
+        carrier_mode = mv_kpi.get("carrier_mode", pd.Series("", index=mv_kpi.index))
+        is_wip = carrier_mode.astype(str).str.upper() == "WIP"
+
+        # inbound_date가 있으면 우선 사용
+        mask_inb = mv_kpi["inbound_date"].notna() if "inbound_date" in mv_kpi.columns else pd.Series(False, index=mv_kpi.index)
         pred_end.loc[mask_inb] = mv_kpi.loc[mask_inb, "inbound_date"]
 
-        mask_arr = (~mask_inb) & mv_kpi["arrival_date"].notna()
-        if mask_arr.any():
-            past_arr = mask_arr & (mv_kpi["arrival_date"] <= today)
-            pred_end.loc[past_arr] = mv_kpi.loc[past_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+        # WIP: event_date 그대로 사용
+        wip_mask = is_wip & (~mask_inb)
+        if wip_mask.any() and "event_date" in mv_kpi.columns:
+            event_date_series = pd.to_datetime(mv_kpi["event_date"], errors="coerce")
+            wip_with_event = wip_mask & event_date_series.notna()
+            if wip_with_event.any():
+                pred_end.loc[wip_with_event] = event_date_series.loc[wip_with_event]
 
+        # In-Transit: arrival + 리드타임
+        intransit_mask = (~is_wip) & (~mask_inb)
+        mask_arr = intransit_mask & mv_kpi["arrival_date"].notna() if "arrival_date" in mv_kpi.columns else pd.Series(False, index=mv_kpi.index)
+        if mask_arr.any():
+            # 과거 arrival: today + 3일
+            past_arr = mask_arr & (mv_kpi["arrival_date"] <= today)
+            pred_end.loc[past_arr] = today + pd.Timedelta(days=3)
+
+            # 미래 arrival: arrival + lag_days
             fut_arr = mask_arr & (mv_kpi["arrival_date"] > today)
-            pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"]
+            pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
 
         pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
         mv_kpi["pred_end_date"] = pred_end

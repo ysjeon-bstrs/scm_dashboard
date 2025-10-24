@@ -311,13 +311,32 @@ def movement_breakdown_per_center(
         empty = pd.Series(dtype=float)
         return empty, empty
 
+    # pred_end_date 계산: WIP는 event_date, In-Transit는 리드타임 적용 (과거 arrival은 오늘+3일)
     pred_end = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
+
+    # carrier_mode 확인
+    carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else pd.Series("", index=mv.index)
+    is_wip = carrier_mode == "WIP"
+
+    # inbound_date가 있으면 우선 사용
     if "inbound_date" in mv.columns:
         inbound_mask = mv["inbound_date"].notna()
         pred_end.loc[inbound_mask] = mv.loc[inbound_mask, "inbound_date"]
     else:
         inbound_mask = pd.Series(False, index=mv.index)
 
+    # WIP: event_date 그대로 사용
+    wip_mask = is_wip & (~inbound_mask)
+    if wip_mask.any() and "event_date" in mv.columns:
+        event_raw = mv.get("event_date")
+        if isinstance(event_raw, pd.Series):
+            event_series = pd.to_datetime(event_raw, errors="coerce").dt.normalize()
+            wip_with_event = wip_mask & event_series.notna()
+            if wip_with_event.any():
+                pred_end.loc[wip_with_event] = event_series.loc[wip_with_event]
+
+    # In-Transit: arrival/eta + 리드타임
+    intransit_mask = (~is_wip) & (~inbound_mask)
     arrival_raw = mv.get("arrival_date")
     if isinstance(arrival_raw, pd.Series):
         arrival_series = pd.to_datetime(arrival_raw, errors="coerce").dt.normalize()
@@ -330,23 +349,23 @@ def movement_breakdown_per_center(
     else:
         eta_series = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
     effective_arrival = arrival_series.fillna(eta_series)
-    arrival_mask = (~inbound_mask) & effective_arrival.notna()
+    arrival_mask = intransit_mask & effective_arrival.notna()
     if arrival_mask.any():
+        # 과거/오늘 도착: today + 3일 (수정: 기존 lag_days=5일에서 3일로)
         past_arrival = arrival_mask & (effective_arrival <= today_norm)
         if past_arrival.any():
-            pred_end.loc[past_arrival] = today_norm + pd.Timedelta(days=lag_days)
+            pred_end.loc[past_arrival] = today_norm + pd.Timedelta(days=3)
 
+        # 미래 도착: effective_arrival + lag_days
         future_arrival = arrival_mask & (effective_arrival > today_norm)
         if future_arrival.any():
             pred_end.loc[future_arrival] = effective_arrival.loc[future_arrival] + pd.Timedelta(
                 days=lag_days
             )
 
-    has_signal = inbound_mask | arrival_mask
+    has_signal = inbound_mask | (wip_mask & pred_end.notna()) | arrival_mask
     pred_end = pred_end.where(has_signal, pd.NaT)
     mv["pred_end_date"] = pd.to_datetime(pred_end).dt.normalize()
-
-    carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else ""
 
     in_transit_series = pd.Series(dtype=float)
     if "onboard_date" in mv.columns:

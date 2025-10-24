@@ -137,27 +137,42 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 2단계: 예상 입고일 계산 (pred_inbound_date)
     # ========================================
+    # WIP: intended_push_date(event_date) 그대로 사용 (리드타임 추가 안 함)
+    # In-Transit: 리드타임 적용 (과거 arrival은 오늘+3일)
     if not moves_view.empty:
         pred_inbound = pd.Series(pd.NaT, index=moves_view.index, dtype="datetime64[ns]")
 
-        # inbound_date가 있으면 우선 사용
+        # carrier_mode 확인
+        carrier_mode = moves_view.get("carrier_mode", pd.Series("", index=moves_view.index))
+        is_wip = carrier_mode.astype(str).str.upper() == "WIP"
+
+        # inbound_date가 있으면 우선 사용 (WIP/In-Transit 공통)
         if "inbound_date" in moves_view.columns:
             mask_inbound = moves_view["inbound_date"].notna()
             pred_inbound.loc[mask_inbound] = moves_view.loc[mask_inbound, "inbound_date"]
         else:
             mask_inbound = pd.Series(False, index=moves_view.index)
 
-        # ETA/arrival 기반 계산 (inbound_date 없을 때)
+        # WIP: event_date(intended_push_date) 그대로 사용
+        wip_mask = is_wip & (~mask_inbound)
+        if wip_mask.any() and "event_date" in moves_view.columns:
+            event_series = safe_to_datetime(moves_view.get("event_date"))
+            wip_with_event = wip_mask & event_series.notna()
+            if wip_with_event.any():
+                pred_inbound.loc[wip_with_event] = event_series.loc[wip_with_event]
+
+        # In-Transit: arrival/eta + 리드타임
+        intransit_mask = (~is_wip) & (~mask_inbound)
         arrival_series = safe_to_datetime(moves_view.get("arrival_date"))
         eta_series = safe_to_datetime(moves_view.get("eta_date"))
         effective_arrival = arrival_series.fillna(eta_series)
-        mask_eta = (~mask_inbound) & effective_arrival.notna()
+        mask_eta = intransit_mask & effective_arrival.notna()
 
         if mask_eta.any():
-            # 과거/오늘 도착: today + lag_days
+            # 과거/오늘 도착: today + 3일 (수정: 기존 lag_days=5일에서 3일로)
             past_eta = mask_eta & (effective_arrival <= today)
             if past_eta.any():
-                pred_inbound.loc[past_eta] = today + pd.Timedelta(days=int(lag_days))
+                pred_inbound.loc[past_eta] = today + pd.Timedelta(days=3)
 
             # 미래 도착: ETA/arrival + lag_days
             future_eta = mask_eta & (effective_arrival > today)
