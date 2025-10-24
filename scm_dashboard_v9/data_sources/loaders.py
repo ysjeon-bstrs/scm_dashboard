@@ -135,7 +135,6 @@ def load_from_excel(file: Any) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.
     return df_move, df_ref, df_incoming, snapshot_raw_df
 
 
-@st.cache_data(ttl=300)
 def load_snapshot_raw() -> pd.DataFrame:
     """세션 상태에서 snapshot_raw 데이터를 로드합니다.
 
@@ -143,7 +142,7 @@ def load_snapshot_raw() -> pd.DataFrame:
         snapshot_raw DataFrame (없으면 빈 DataFrame)
     """
     if st.session_state.get("_snapshot_raw_cache") is not None:
-        return st.session_state["_snapshot_raw_cache"]
+        return st.session_state["_snapshot_raw_cache"].copy()
 
     fetch = globals().get("_fetch_sheet_via_webapp", None)
     if callable(fetch):

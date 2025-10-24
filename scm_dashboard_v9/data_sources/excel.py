@@ -64,7 +64,15 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
     # ========================================
     # 2단계: Excel 파일 로드 (v4 로더 사용)
     # ========================================
-    df_move, df_ref, df_incoming, _ = load_from_excel(file)
+    df_move, df_ref, df_incoming, snapshot_raw_df = load_from_excel(file)
+
+    # ========================================
+    # 2.5단계: snapshot_raw 캐싱 (있는 경우)
+    # ========================================
+    if snapshot_raw_df is not None and not snapshot_raw_df.empty:
+        st.session_state["_snapshot_raw_cache"] = snapshot_raw_df
+    else:
+        st.session_state["_snapshot_raw_cache"] = None
 
     # ========================================
     # 3단계: 데이터 정규화
