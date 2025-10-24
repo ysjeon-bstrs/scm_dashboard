@@ -88,20 +88,22 @@ def validate_and_prepare_snapshot(
     if pd.isna(selected_latest_snapshot):
         return pd.DataFrame(), pd.DataFrame(), [], [], [], pd.NaT, pd.NaT, {}
 
-    # 파라미터로 받은 latest_snapshot을 사용하되, filtered_snapshot에 해당 날짜 데이터가 없으면
-    # filtered_snapshot의 실제 최신 날짜를 사용 (센터별 스냅샷 생성 시간 차이 대응)
+    # 파라미터로 받은 latest_snapshot을 사용하되, 모든 선택 센터가 해당 날짜 데이터를
+    # 가지고 있지 않으면 filtered_snapshot의 실제 최신 날짜를 사용 (센터별 스냅샷 생성 시간 차이 대응)
     if latest_snapshot is None or pd.isna(latest_snapshot):
         latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
     else:
         requested_dt = pd.to_datetime(latest_snapshot).normalize()
-        # 요청한 날짜에 filtered_snapshot 데이터가 있는지 확인
-        has_data_at_requested_date = not filtered_snapshot[
-            filtered_snapshot["date"] == requested_dt
-        ].empty
-        if has_data_at_requested_date:
+        # 모든 선택된 센터가 요청한 날짜에 데이터를 가지고 있는지 확인
+        centers_with_data_at_requested = set(
+            filtered_snapshot[filtered_snapshot["date"] == requested_dt]["center"].unique()
+        )
+        all_centers_have_data = set(centers_list).issubset(centers_with_data_at_requested)
+
+        if all_centers_have_data:
             latest_snapshot_dt = requested_dt
         else:
-            # 요청한 날짜에 데이터가 없으면 filtered_snapshot의 실제 최신 날짜 사용
+            # 일부 센터에 요청 날짜 데이터가 없으면 filtered_snapshot의 실제 최신 날짜 사용
             latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
 
     # Name map 생성
