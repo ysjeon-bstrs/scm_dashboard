@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from center_alias import normalize_center_value
-from scm_dashboard_v9.core.config import CENTER_COL
+from scm_dashboard_v9.core.config import CENTER_COL, CONFIG
 from scm_dashboard_v9.analytics.inventory import pivot_inventory_cost_from_raw
 from scm_dashboard_v9.data_sources.loaders import load_snapshot_raw
 from scm_dashboard_v9.domain.filters import (
@@ -20,6 +20,7 @@ from scm_dashboard_v9.domain.filters import (
     is_empty_or_none,
     safe_to_datetime,
 )
+from scm_dashboard_v9.planning.schedule import calculate_predicted_inbound_date
 
 
 def build_resource_name_map(snapshot: pd.DataFrame) -> dict[str, str]:
@@ -137,55 +138,12 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 2단계: 예상 입고일 계산 (pred_inbound_date)
     # ========================================
-    # WIP: intended_push_date(event_date) 그대로 사용 (리드타임 추가 안 함)
-    # In-Transit: 리드타임 적용 (과거 arrival은 오늘+3일)
-    if not moves_view.empty:
-        pred_inbound = pd.Series(pd.NaT, index=moves_view.index, dtype="datetime64[ns]")
-
-        # carrier_mode 확인
-        carrier_mode = moves_view.get("carrier_mode", pd.Series("", index=moves_view.index))
-        is_wip = carrier_mode.astype(str).str.upper() == "WIP"
-
-        # inbound_date가 있으면 우선 사용 (WIP/In-Transit 공통)
-        if "inbound_date" in moves_view.columns:
-            mask_inbound = moves_view["inbound_date"].notna()
-            pred_inbound.loc[mask_inbound] = moves_view.loc[mask_inbound, "inbound_date"]
-        else:
-            mask_inbound = pd.Series(False, index=moves_view.index)
-
-        # WIP: event_date(intended_push_date) 그대로 사용
-        wip_mask = is_wip & (~mask_inbound)
-        if wip_mask.any() and "event_date" in moves_view.columns:
-            event_series = safe_to_datetime(moves_view.get("event_date"))
-            wip_with_event = wip_mask & event_series.notna()
-            if wip_with_event.any():
-                pred_inbound.loc[wip_with_event] = event_series.loc[wip_with_event]
-
-        # In-Transit: arrival/eta + 리드타임
-        intransit_mask = (~is_wip) & (~mask_inbound)
-        arrival_series = safe_to_datetime(moves_view.get("arrival_date"))
-        eta_series = safe_to_datetime(moves_view.get("eta_date"))
-        effective_arrival = arrival_series.fillna(eta_series)
-        mask_eta = intransit_mask & effective_arrival.notna()
-
-        if mask_eta.any():
-            # 과거/오늘 도착: today + 3일 (수정: 기존 lag_days=5일에서 3일로)
-            past_eta = mask_eta & (effective_arrival <= today)
-            if past_eta.any():
-                pred_inbound.loc[past_eta] = today + pd.Timedelta(days=3)
-
-            # 미래 도착: ETA/arrival + lag_days
-            future_eta = mask_eta & (effective_arrival > today)
-            if future_eta.any():
-                pred_inbound.loc[future_eta] = effective_arrival.loc[future_eta] + pd.Timedelta(
-                    days=int(lag_days)
-                )
-
-        moves_view["pred_inbound_date"] = safe_to_datetime(pred_inbound)
-    else:
-        moves_view["pred_inbound_date"] = pd.Series(
-            pd.NaT, index=moves_view.index, dtype="datetime64[ns]"
-        )
+    # 공통 함수 사용 (중복 코드 제거)
+    moves_view = calculate_predicted_inbound_date(
+        moves_view,
+        today=today,
+        lag_days=lag_days
+    )
 
     # ========================================
     # 3단계: 확정 입고 필터링 (운송 중)
@@ -305,9 +263,9 @@ def render_inbound_and_wip_tables(
         inbound_cols = [c for c in inbound_cols if c in confirmed_inbound.columns]
 
         st.dataframe(
-            confirmed_inbound[inbound_cols].head(1000),
+            confirmed_inbound[inbound_cols].head(CONFIG.ui.max_table_rows),
             use_container_width=True,
-            height=300,
+            height=CONFIG.ui.table_height_inbound,
         )
         st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
 
@@ -342,7 +300,7 @@ def render_inbound_and_wip_tables(
         ]
         wip_cols = [c for c in wip_cols if c in arr_wip.columns]
 
-        st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
+        st.dataframe(arr_wip[wip_cols].head(CONFIG.ui.max_table_rows), use_container_width=True, height=CONFIG.ui.table_height_wip)
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
 
@@ -544,7 +502,7 @@ def render_inventory_table(
     # ========================================
     # 9단계: 테이블 렌더링 + CSV 다운로드
     # ========================================
-    st.dataframe(show_df, use_container_width=True, height=380)
+    st.dataframe(show_df, use_container_width=True, height=CONFIG.ui.table_height_inventory)
 
     csv_bytes = show_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
@@ -747,5 +705,5 @@ def render_lot_details(
             .sort_values("합계", ascending=False)
             .reset_index(drop=True),
             use_container_width=True,
-            height=320,
+            height=CONFIG.ui.table_height_lot,
         )

@@ -23,6 +23,7 @@ from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
 
 # v9 모듈 임포트
 from scm_dashboard_v9.core import build_timeline as build_core_timeline
+from scm_dashboard_v9.core.config import CONFIG
 from scm_dashboard_v9.data_sources import LoadedData, ensure_data
 from scm_dashboard_v9.domain import (
     calculate_date_bounds,
@@ -62,7 +63,12 @@ def get_consumption_params_from_ui() -> dict[str, object]:
         - lookback_days: 추세 계산 기간 (일)
         - events: 프로모션 이벤트 목록
     """
-    lookback_days = int(st.session_state.get("trend_lookback_days", 28))
+    lookback_days = int(
+        st.session_state.get(
+            "trend_lookback_days",
+            CONFIG.consumption.default_lookback_days
+        )
+    )
     promo_on = bool(st.session_state.get("promo_enabled", False))
     promo_start = st.session_state.get("promo_start")
     promo_end = st.session_state.get("promo_end")
@@ -70,6 +76,11 @@ def get_consumption_params_from_ui() -> dict[str, object]:
 
     events: list[dict[str, object]] = []
     if promo_on and promo_start and promo_end and promo_uplift != 0.0:
+        # uplift 값을 설정된 범위로 클램핑
+        promo_uplift = max(
+            CONFIG.consumption.min_promo_uplift,
+            min(promo_uplift, CONFIG.consumption.max_promo_uplift)
+        )
         events.append(
             {
                 "start": pd.to_datetime(promo_start),
@@ -164,9 +175,9 @@ def _render_sidebar_filters(
         lookback_days = int(
             st.number_input(
                 "추세 계산 기간(일)",
-                min_value=7,
-                max_value=56,
-                value=28,
+                min_value=CONFIG.consumption.min_lookback_days,
+                max_value=CONFIG.consumption.max_lookback_days,
+                value=CONFIG.consumption.default_lookback_days,
                 step=7,
                 key="trend_lookback_days",
             )
@@ -192,7 +203,7 @@ def _render_sidebar_filters(
                 "입고 반영 리드타임(일) – inbound 미기록 시 arrival+N",
                 min_value=0,
                 max_value=21,
-                value=5,
+                value=CONFIG.timeline.default_lag_days,
                 step=1,
             )
         )
@@ -398,10 +409,11 @@ def main() -> None:
         None if pd.isna(latest_dt) else pd.to_datetime(latest_dt).normalize()
     )
 
-    default_past_days = 20
-    default_future_days = 30
-    base_past_days = 42
-    base_future_days = 42
+    # CONFIG에서 설정값 가져오기
+    default_past_days = CONFIG.ui.default_past_days
+    default_future_days = CONFIG.ui.default_future_days
+    base_past_days = CONFIG.ui.base_past_days
+    base_future_days = CONFIG.ui.base_future_days
 
     bound_min, bound_max = calculate_date_bounds(
         today=today,
@@ -471,7 +483,7 @@ def main() -> None:
         start=start_ts,
         end=end_ts,
         lookback_days=lookback_days,
-        horizon_pad_days=60,
+        horizon_pad_days=CONFIG.timeline.horizon_pad_days,
         events=events,
     )
 
