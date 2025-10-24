@@ -71,8 +71,11 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
     # ========================================
+    wip_source: Optional[pd.DataFrame] = None
     try:
         wip_df = load_wip_from_incoming(df_incoming)
+        if wip_df is not None and not wip_df.empty:
+            wip_source = wip_df.copy()
         moves = merge_wip_as_moves(moves, wip_df)
 
         if wip_df is not None and not wip_df.empty:
@@ -86,4 +89,4 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # ========================================
     st.success("Google Sheets 데이터가 업데이트되었습니다.")
 
-    return LoadedData(moves=moves, snapshot=snapshot)
+    return LoadedData(moves=moves, snapshot=snapshot, wip_source=wip_source)

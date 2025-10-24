@@ -573,6 +573,7 @@ def main() -> None:
         end=end_ts,
         lag_days=lag_days,
         today=today_norm,
+        wip_source=getattr(data, "wip_source", None),
     )
 
     # ========================================
