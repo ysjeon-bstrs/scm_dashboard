@@ -10,6 +10,7 @@ from typing import List, Mapping, Optional, Sequence
 import pandas as pd
 import streamlit as st
 
+from ...core.config import CONFIG
 from .formatters import (
     escape,
     format_number,
@@ -269,6 +270,9 @@ def render_sku_summary_cards(
     inject_responsive_styles()
 
     sku_cards_html: list[str] = []
+    # chunk_size 기본값을 CONFIG에서 가져옴 (None만 대체, 0은 유지)
+    if chunk_size is None:
+        chunk_size = CONFIG.ui.kpi_card_chunk_size
     sku_min_width = max(280, int(1024 / max(chunk_size, 1))) if chunk_size else 320
 
     for sku in sku_list:

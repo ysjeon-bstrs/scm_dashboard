@@ -10,6 +10,8 @@ import numpy as np
 
 import pandas as pd
 
+from ...core.config import CONFIG
+
 
 def estimate_daily_consumption(
     snap_long: pd.DataFrame,
@@ -163,7 +165,10 @@ def apply_consumption_with_events(
         for event in events_list:
             s = pd.to_datetime(event.get("start"), errors="coerce")
             t = pd.to_datetime(event.get("end"), errors="coerce")
-            u = min(3.0, max(-1.0, float(event.get("uplift", 0.0))))
+            u = min(
+                CONFIG.consumption.max_promo_uplift,
+                max(CONFIG.consumption.min_promo_uplift, float(event.get("uplift", 0.0)))
+            )
             if pd.notna(s) and pd.notna(t):
                 s = s.normalize()
                 t = t.normalize()
