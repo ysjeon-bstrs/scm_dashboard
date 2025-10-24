@@ -14,8 +14,15 @@ CENTER_ALIAS: dict[str, str] = {
     "AMZUS": "AMZUS",
     "아마존US": "AMZUS",
     "AmazonUS": "AMZUS",
+    "Amazon US": "AMZUS",
+    "AMZ US": "AMZUS",
+    "AMZ-US": "AMZUS",
+    "AMZ_US": "AMZUS",
     # Across B US fulfilment centre
     "AcrossBUS": "AcrossBUS",
+    "Across B US": "AcrossBUS",
+    "Across-B US": "AcrossBUS",
+    "Across_B US": "AcrossBUS",
     "어크로스비US": "AcrossBUS",
 }
 
@@ -35,11 +42,27 @@ _IGNORED_CENTER_VALUES = {
 _IGNORED_CENTER_VALUES_CI = {value.casefold() for value in _IGNORED_CENTER_VALUES}
 
 
+def _alias_key(value: str) -> str:
+    """Create a normalised lookup key by stripping separators and lowering case."""
+
+    return "".join(ch for ch in value.casefold() if ch.isalnum())
+
+
+_CENTER_ALIAS_LOOKUP = {_alias_key(key): canonical for key, canonical in CENTER_ALIAS.items()}
+
+
+def _apply_alias(text: str) -> str:
+    key = _alias_key(text)
+    return _CENTER_ALIAS_LOOKUP.get(key, text)
+
+
 def normalize_center_series(series: pd.Series) -> pd.Series:
     """Return *series* with known center aliases replaced by canonical names."""
 
     normalized = series.astype(str).str.strip()
-    return normalized.replace(CENTER_ALIAS)
+    mask_placeholder = normalized.str.casefold().isin({"nan", "none", "null", "<na>"})
+    normalized.loc[mask_placeholder] = ""
+    return normalized.map(_apply_alias)
 
 
 def normalize_center_value(value: Any) -> Optional[str]:
@@ -61,7 +84,13 @@ def normalize_center_value(value: Any) -> Optional[str]:
     if not text:
         return None
 
-    normalized = CENTER_ALIAS.get(text, text)
+    lowered = text.casefold()
+    if lowered in {"", "nan", "none", "null", "<na>"}:
+        return None
+
+    normalized = _CENTER_ALIAS_LOOKUP.get(_alias_key(text))
+    if not normalized:
+        normalized = text
     if normalized.casefold() in _IGNORED_CENTER_VALUES_CI:
         return None
     return normalized
