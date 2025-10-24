@@ -12,10 +12,18 @@ SCM Dashboard v9 메인 엔트리 포인트
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+import logging
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from center_alias import normalize_center_value
 
@@ -51,6 +59,47 @@ from scm_dashboard_v9.ui.tables import (
     render_inventory_table,
     render_lot_details,
 )
+
+
+def _validate_data_quality(
+    snapshot: pd.DataFrame,
+    moves: pd.DataFrame,
+) -> Tuple[bool, Optional[str]]:
+    """
+    데이터 품질을 검증합니다.
+    
+    Args:
+        snapshot: 스냅샷 데이터프레임
+        moves: 이동 원장 데이터프레임
+    
+    Returns:
+        (is_valid, error_message) 튜플
+    """
+    # 필수 컬럼 검증
+    required_snapshot_cols = ["resource_code", "center"]
+    missing_snap_cols = [col for col in required_snapshot_cols if col not in snapshot.columns]
+    if missing_snap_cols:
+        return False, f"스냅샷 데이터에 필수 컬럼이 없습니다: {', '.join(missing_snap_cols)}"
+    
+    required_moves_cols = ["resource_code", "to_center", "qty_ea"]
+    missing_move_cols = [col for col in required_moves_cols if col not in moves.columns]
+    if missing_move_cols:
+        return False, f"이동 원장에 필수 컬럼이 없습니다: {', '.join(missing_move_cols)}"
+    
+    # 데이터 크기 검증
+    if len(snapshot) == 0:
+        return False, "스냅샷 데이터가 비어있습니다"
+    
+    if len(moves) == 0:
+        logger.warning("이동 원장이 비어있음 (경고)")
+    
+    # 중복 데이터 검증
+    if "date" in snapshot.columns:
+        dup_count = snapshot.duplicated(subset=["date", "center", "resource_code"]).sum()
+        if dup_count > 0:
+            logger.warning(f"스냅샷에 중복 데이터 {dup_count}건 발견")
+    
+    return True, None
 
 
 def get_consumption_params_from_ui() -> dict[str, object]:
@@ -93,14 +142,14 @@ def get_consumption_params_from_ui() -> dict[str, object]:
 
 def _render_sidebar_filters(
     *,
-    centers: list[str],
-    skus: list[str],
+    centers: List[str],
+    skus: List[str],
     bound_min: pd.Timestamp,
     bound_max: pd.Timestamp,
     today: pd.Timestamp,
     default_past_days: int,
     default_future_days: int,
-) -> dict:
+) -> Dict[str, Any]:
     """
     사이드바 필터를 렌더링하고 선택된 값들을 반환합니다.
 
@@ -220,42 +269,45 @@ def _render_sidebar_filters(
     }
 
 
-def _render_amazon_section(
-    *,
-    selected_centers: list[str],
-    snapshot_df: pd.DataFrame,
-    selected_skus: list[str],
-    timeline_for_chart: pd.DataFrame,
-    start_ts: pd.Timestamp,
-    end_ts: pd.Timestamp,
-    today_norm: pd.Timestamp,
-    moves_df: pd.DataFrame,
-    lookback_days: int,
-    events: pd.DataFrame,
-    use_cons_forecast: bool,
-) -> None:
+def _tidy_from_pivot(
+    pivot: Optional[pd.DataFrame], 
+    mask: Optional[Sequence[bool]]
+) -> pd.DataFrame:
     """
-    Amazon US 판매 vs. 재고 차트 섹션을 렌더링합니다.
-
-    13단계: Amazon US 판매 vs 재고 차트
+    피벗 테이블을 tidy 형식으로 변환합니다.
+    
+    Args:
+        pivot: 피벗된 재고 데이터프레임
+        mask: 필터링할 행 마스크 (선택적)
+    
+    Returns:
+        tidy 형식의 데이터프레임 (date, resource_code, stock_qty 컬럼)
     """
-    def _tidy_from_pivot(
-        pivot: Optional[pd.DataFrame], mask: Optional[Sequence[bool]]
-    ) -> pd.DataFrame:
-        if pivot is None or pivot.empty:
-            return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
-        subset = pivot if mask is None else pivot.loc[mask]
-        if subset.empty:
-            return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
-        tidy = (
-            subset.stack()
-            .reset_index()
-            .rename(columns={"level_0": "date", "level_1": "resource_code", 0: "stock_qty"})
-        )
-        tidy["date"] = pd.to_datetime(tidy["date"]).dt.normalize()
-        tidy["stock_qty"] = pd.to_numeric(tidy["stock_qty"], errors="coerce").fillna(0)
-        return tidy
+    if pivot is None or pivot.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+    subset = pivot if mask is None else pivot.loc[mask]
+    if subset.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
+    tidy = (
+        subset.stack()
+        .reset_index()
+        .rename(columns={"level_0": "date", "level_1": "resource_code", 0: "stock_qty"})
+    )
+    tidy["date"] = pd.to_datetime(tidy["date"]).dt.normalize()
+    tidy["stock_qty"] = pd.to_numeric(tidy["stock_qty"], errors="coerce").fillna(0)
+    return tidy
 
+
+def _filter_amazon_centers(selected_centers: List[str]) -> List[str]:
+    """
+    선택된 센터에서 Amazon 계열 센터만 필터링합니다.
+    
+    Args:
+        selected_centers: 선택된 센터 목록
+    
+    Returns:
+        Amazon 계열 센터 목록
+    """
     amazon_centers = [
         c
         for c in selected_centers
@@ -263,6 +315,77 @@ def _render_amazon_section(
     ]
     if not amazon_centers and "AMZUS" in selected_centers:
         amazon_centers = ["AMZUS"]
+    return amazon_centers
+
+
+def _build_amazon_kpi_data(
+    *,
+    snap_amz: pd.DataFrame,
+    selected_skus: List[str],
+    amazon_centers: List[str],
+    show_delta: bool,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Amazon KPI 데이터를 빌드합니다.
+    
+    Args:
+        snap_amz: Amazon 스냅샷 데이터
+        selected_skus: 선택된 SKU 목록
+        amazon_centers: Amazon 센터 목록
+        show_delta: 전 스냅샷 대비 델타 표시 여부
+    
+    Returns:
+        (kpi_df, previous_df) 튜플
+    """
+    kpi_df = build_amazon_snapshot_kpis(
+        snap_amz,
+        skus=selected_skus,
+        center=amazon_centers,
+        cover_base="available",
+        use_ma7=True,
+    )
+    previous_df = None
+    if show_delta and kpi_df is not None and not kpi_df.empty:
+        latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
+        if not pd.isna(latest_snap_ts):
+            # snap_time이 모두 null이면 date 컬럼 사용
+            time_col = "snap_time" if snap_amz["snap_time"].notna().any() else "date"
+
+            # 성능 최적화: 필터링을 직접 수행하여 불필요한 copy 제거
+            snap_prev_ts = pd.to_datetime(snap_amz[time_col], errors="coerce")
+            snap_prev_mask = (snap_prev_ts.notna()) & (snap_prev_ts < latest_snap_ts)
+            snap_prev = snap_amz[snap_prev_mask]
+            if not snap_prev.empty:
+                previous_df = build_amazon_snapshot_kpis(
+                    snap_prev,
+                    skus=selected_skus,
+                    center=amazon_centers,
+                    cover_base="available",
+                    use_ma7=True,
+                )
+    return kpi_df, previous_df
+
+
+def _render_amazon_section(
+    *,
+    selected_centers: List[str],
+    snapshot_df: pd.DataFrame,
+    selected_skus: List[str],
+    timeline_for_chart: pd.DataFrame,
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    today_norm: pd.Timestamp,
+    moves_df: pd.DataFrame,
+    lookback_days: int,
+    events: List[Dict[str, Any]],
+    use_cons_forecast: bool,
+) -> None:
+    """
+    Amazon US 판매 vs. 재고 차트 섹션을 렌더링합니다.
+
+    13단계: Amazon US 판매 vs 재고 차트
+    """
+    amazon_centers = _filter_amazon_centers(selected_centers)
 
     st.divider()
     st.subheader("Amazon US 일별 판매 vs. 재고")
@@ -277,35 +400,12 @@ def _render_amazon_section(
         # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
         show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
 
-        kpi_df = build_amazon_snapshot_kpis(
-            snap_amz,
-            skus=selected_skus,
-            center=amazon_centers,
-            cover_base="available",
-            use_ma7=True,
+        kpi_df, previous_df = _build_amazon_kpi_data(
+            snap_amz=snap_amz,
+            selected_skus=selected_skus,
+            amazon_centers=amazon_centers,
+            show_delta=show_delta,
         )
-        previous_df = None
-        if show_delta and kpi_df is not None and not kpi_df.empty:
-            latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
-            if not pd.isna(latest_snap_ts):
-                # snap_time이 모두 null이면 date 컬럼 사용
-                time_col = "snap_time" if snap_amz["snap_time"].notna().any() else "date"
-
-                snap_prev = snap_amz.copy()
-                snap_prev["__snap_ts"] = pd.to_datetime(
-                    snap_prev[time_col], errors="coerce"
-                )
-                snap_prev = snap_prev.dropna(subset=["__snap_ts"])
-                snap_prev = snap_prev[snap_prev["__snap_ts"] < latest_snap_ts]
-                snap_prev = snap_prev.drop(columns="__snap_ts")
-                if not snap_prev.empty:
-                    previous_df = build_amazon_snapshot_kpis(
-                        snap_prev,
-                        skus=selected_skus,
-                        center=amazon_centers,
-                        cover_base="available",
-                        use_ma7=True,
-                    )
 
         # SKU → 품명 매핑
         amz_resource_name_map = build_resource_name_map(snap_amz)
@@ -319,6 +419,7 @@ def _render_amazon_section(
             resource_name_map=amz_resource_name_map,
         )
 
+        # 재고 피벗 생성 및 실제/예측 분리
         amz_inv_pivot = _timeline_inventory_matrix(
             timeline_for_chart,
             centers=amazon_centers,
@@ -326,12 +427,11 @@ def _render_amazon_section(
             start=start_ts,
             end=end_ts,
         )
+        mask_actual = None
+        mask_forecast = None
         if amz_inv_pivot is not None:
             mask_actual = amz_inv_pivot.index <= today_norm
             mask_forecast = amz_inv_pivot.index > today_norm
-        else:
-            mask_actual = None
-            mask_forecast = None
         inv_actual_from_step = _tidy_from_pivot(amz_inv_pivot, mask_actual)
         inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
         # snap_정제 시트의 sales_qty 컬럼을 사용하여 판매 데이터 로드
@@ -364,6 +464,8 @@ def main() -> None:
 
     전체 대시보드 UI를 렌더링하고 데이터 파이프라인을 실행합니다.
     """
+    logger.info("SCM Dashboard v9 시작")
+    
     # ========================================
     # 1단계: 페이지 설정
     # ========================================
@@ -374,9 +476,19 @@ def main() -> None:
     # ========================================
     # 2단계: 데이터 로드 (세션 관리)
     # ========================================
+    logger.info("데이터 로드 시작")
     data = ensure_data()
     if data is None:
+        logger.warning("데이터가 로드되지 않음")
         st.info("데이터를 로드하면 차트와 테이블이 표시됩니다.")
+        return
+    logger.info(f"데이터 로드 완료: 스냅샷 {len(data.snapshot)}행, 이동 {len(data.moves)}행")
+    
+    # 데이터 품질 검증
+    is_valid, error_msg = _validate_data_quality(data.snapshot, data.moves)
+    if not is_valid:
+        logger.error(f"데이터 검증 실패: {error_msg}")
+        st.error(f"데이터 품질 오류: {error_msg}")
         return
 
     # ========================================
@@ -394,7 +506,9 @@ def main() -> None:
     # 4단계: 센터 및 SKU 옵션 추출
     # ========================================
     centers, skus = extract_center_and_sku_options(data.moves, snapshot_df)
+    logger.info(f"센터 {len(centers)}개, SKU {len(skus)}개 추출")
     if not centers or not skus:
+        logger.error("센터 또는 SKU 정보 없음")
         st.warning("센터 또는 SKU 정보를 찾을 수 없습니다.")
         return
 
@@ -448,14 +562,17 @@ def main() -> None:
     # 8단계: 필터 유효성 검증
     # ========================================
     if not selected_centers:
+        logger.warning("센터가 선택되지 않음")
         st.warning("최소 한 개의 센터를 선택하세요.")
         return
     if not selected_skus:
+        logger.warning("SKU가 선택되지 않음")
         st.warning("최소 한 개의 SKU를 선택하세요.")
         return
 
     selected_centers = [str(center) for center in selected_centers if str(center).strip()]
     selected_skus = [str(sku) for sku in selected_skus if str(sku).strip()]
+    logger.info(f"필터 적용: 센터 {selected_centers}, SKU {len(selected_skus)}개, 기간 {start_ts} ~ {end_ts}")
 
     cons_params = get_consumption_params_from_ui()
     lookback_days = int(cons_params.get("lookback_days", 28))
@@ -492,6 +609,7 @@ def main() -> None:
     # 10단계: 타임라인 빌드 (입력 검증)
     # ========================================
     # 도메인 예외를 UI 에러 메시지로 변환
+    logger.info("타임라인 빌드 시작")
     with handle_domain_errors():
         validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts)
 
@@ -508,8 +626,10 @@ def main() -> None:
     )
 
     if timeline_actual is None or timeline_actual.empty:
+        logger.warning("타임라인 데이터가 비어있음")
         st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
         return
+    logger.info(f"타임라인 빌드 완료: {len(timeline_actual)}행")
 
     # ========================================
     # 11단계: 소비 예측 적용
@@ -530,10 +650,11 @@ def main() -> None:
         cons_start=cons_start,
     )
 
+    # 성능 최적화: 불필요한 copy 제거
     if timeline_forecast is None or timeline_forecast.empty:
-        timeline_forecast = timeline_actual.copy()
+        timeline_forecast = timeline_actual
 
-    timeline_for_chart = timeline_forecast.copy() if use_cons_forecast else timeline_actual.copy()
+    timeline_for_chart = timeline_forecast if use_cons_forecast else timeline_actual
 
     # ========================================
     # 12단계: 계단식 차트 렌더링
