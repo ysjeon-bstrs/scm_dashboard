@@ -263,30 +263,6 @@ def _render_amazon_section(
         sku_colors_map = _sku_color_map(selected_skus)
         snap_amz = filter_by_centers(snapshot_df, amazon_centers)
 
-        # DEBUG: 아마존 KPI 데이터 진단
-        with st.expander("🔍 DEBUG: Amazon KPI 데이터 정보", expanded=False):
-            st.write("**선택된 Amazon 센터:**", amazon_centers)
-            st.write("**선택된 SKU:**", selected_skus)
-            st.write("**snapshot_df 전체 센터 목록:**", snapshot_df["center"].unique().tolist() if "center" in snapshot_df.columns else "center 컬럼 없음")
-            st.write("**snapshot_df 컬럼 목록:**", snapshot_df.columns.tolist())
-            st.write("**snapshot_df 행 수:**", len(snapshot_df))
-            st.write("**snap_amz 행 수 (센터 필터 후):**", len(snap_amz))
-            if not snap_amz.empty:
-                st.write("**snap_amz 샘플 데이터 (최대 5행):**")
-                st.dataframe(snap_amz.head(5))
-                # 필수 컬럼 체크
-                required_cols = ["stock_qty", "stock_available", "stock_processing", "stock_expected", "sales_qty", "snap_time"]
-                missing_cols = [col for col in required_cols if col not in snap_amz.columns]
-                if missing_cols:
-                    st.warning(f"⚠️ 누락된 컬럼: {missing_cols}")
-                else:
-                    st.success("✅ 모든 필수 컬럼이 존재합니다")
-                    # 각 컬럼의 샘플 값 확인
-                    for col in required_cols:
-                        non_null_count = snap_amz[col].notna().sum()
-                        non_zero_count = (snap_amz[col] != 0).sum()
-                        st.write(f"  - {col}: null이 아닌 값 {non_null_count}개, 0이 아닌 값 {non_zero_count}개")
-
         # Amazon KPI 설정 토글
         col1, col2 = st.columns(2)
         with col1:

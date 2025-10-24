@@ -204,6 +204,37 @@ def render_sku_summary_cards(
 
     kpi_df.index = kpi_df.index.astype(str)
 
+    # DEBUG: 요약 KPI 데이터 진단
+    with st.expander("🔍 DEBUG: 요약 KPI 데이터 정보", expanded=False):
+        st.write("**선택된 센터:**", centers_list)
+        st.write("**선택된 SKU:**", sku_list)
+        st.write("**filtered_snapshot 행 수:**", len(filtered_snapshot))
+        st.write("**snapshot_view 행 수:**", len(snapshot_view))
+        st.write("**latest_snapshot_dt:**", latest_snapshot_dt)
+
+        st.write("\n**kpi_df (SKU별 KPI):**")
+        st.dataframe(kpi_df)
+
+        st.write("\n**filtered_snapshot 센터별 최신 재고:**")
+        if not filtered_snapshot.empty:
+            latest_by_center = (
+                filtered_snapshot[filtered_snapshot["date"] == filtered_snapshot["date"].max()]
+                .groupby("center")["stock_qty"]
+                .sum()
+            )
+            st.write(latest_by_center)
+            st.write(f"**선택 센터 재고 합계 (filtered):** {latest_by_center.sum()}")
+
+        st.write("\n**snapshot_view 센터별 최신 재고:**")
+        if not snapshot_view.empty:
+            all_centers_stock = (
+                snapshot_view[snapshot_view["date"] == snapshot_view["date"].max()]
+                .groupby("center")["stock_qty"]
+                .sum()
+            )
+            st.write(all_centers_stock)
+            st.write(f"**전체 센터 재고 합계 (snapshot_view):** {all_centers_stock.sum()}")
+
     latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
     today_dt = pd.to_datetime(today).normalize()
 
