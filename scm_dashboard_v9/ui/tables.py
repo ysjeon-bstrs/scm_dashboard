@@ -540,7 +540,7 @@ def render_lot_details(
 
     Notes:
         - snapshot_raw에서 센터별 컬럼을 읽어 로트별 집계
-        - CENTER_COL 매핑 사용 (scm_dashboard_v4.config)
+        - CENTER_COL 매핑 사용 (scm_dashboard_v9.core.config)
     """
     # ========================================
     # 1단계: 단일 SKU 검증
