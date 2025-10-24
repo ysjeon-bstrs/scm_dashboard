@@ -32,14 +32,30 @@ def kpi_breakdown_per_sku(
     Returns:
         current, in_transit, wip 컬럼을 가진 DataFrame (index: resource_code)
     """
-    # 현재 재고 계산
-    cur = (
-        snap_long[
-            (snap_long[snap_date_col] == latest_snapshot)
-            & (snap_long["center"].isin(centers_sel))
-            & (snap_long["resource_code"].astype(str).isin(skus_sel))
-        ].groupby("resource_code", as_index=True)["stock_qty"].sum()
-    )
+    # 현재 재고 계산 - 센터별 최신 날짜 사용 (센터별 스냅샷 생성 시간 차이 대응)
+    if snap_long.empty:
+        cur = pd.Series(dtype=float, name="resource_code")
+    else:
+        # 각 센터의 최신 날짜 데이터를 개별적으로 수집
+        snapshot_parts = []
+        for center in centers_sel:
+            center_data = snap_long[
+                (snap_long["center"] == center)
+                & (snap_long["resource_code"].astype(str).isin(skus_sel))
+            ]
+            if center_data.empty:
+                continue
+            center_latest_date = center_data[snap_date_col].max()
+            if pd.isna(center_latest_date):
+                continue
+            center_latest_data = center_data[center_data[snap_date_col] == center_latest_date]
+            snapshot_parts.append(center_latest_data)
+
+        if snapshot_parts:
+            latest_snapshot_data = pd.concat(snapshot_parts, ignore_index=True)
+            cur = latest_snapshot_data.groupby("resource_code", as_index=True)["stock_qty"].sum()
+        else:
+            cur = pd.Series(dtype=float, name="resource_code")
 
     # moves 복사 및 pred_end_date 계산
     # WIP: event_date 그대로, In-Transit: 리드타임 적용 (과거 arrival은 오늘+3일)
