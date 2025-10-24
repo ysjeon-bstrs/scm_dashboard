@@ -88,8 +88,9 @@ def validate_and_prepare_snapshot(
     if pd.isna(selected_latest_snapshot):
         return pd.DataFrame(), pd.DataFrame(), [], [], [], pd.NaT, pd.NaT, {}
 
-    # 파라미터로 받은 latest_snapshot을 사용하되, 모든 선택 센터가 해당 날짜 데이터를
-    # 가지고 있지 않으면 filtered_snapshot의 실제 최신 날짜를 사용 (센터별 스냅샷 생성 시간 차이 대응)
+    # latest_snapshot_dt 설정 (참조용)
+    # 주의: 실제 재고 계산(kpi_breakdown_per_sku, aggregate_metrics)은 센터별 최신 데이터를
+    # 개별적으로 가져오므로, 이 값은 주로 표시/로깅 목적으로 사용됩니다.
     if latest_snapshot is None or pd.isna(latest_snapshot):
         latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
     else:
@@ -103,8 +104,13 @@ def validate_and_prepare_snapshot(
         if all_centers_have_data:
             latest_snapshot_dt = requested_dt
         else:
-            # 일부 센터에 요청 날짜 데이터가 없으면 filtered_snapshot의 실제 최신 날짜 사용
-            latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
+            # 일부 센터에 요청 날짜 데이터가 없으면 센터별 최신 날짜의 최소값 사용
+            # (모든 센터가 데이터를 가진 가장 최근 날짜)
+            center_latest_dates = filtered_snapshot.groupby("center")["date"].max()
+            if not center_latest_dates.empty:
+                latest_snapshot_dt = pd.to_datetime(center_latest_dates.min()).normalize()
+            else:
+                latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
 
     # Name map 생성
     name_map: Mapping[str, str] = {}
@@ -285,10 +291,22 @@ def aggregate_metrics(
     """
     from .metrics import extract_daily_demand, movement_breakdown_per_center
 
-    # Latest snapshot rows 필터링
-    latest_snapshot_rows = filtered_snapshot[
-        filtered_snapshot["date"] == latest_snapshot_dt
-    ].copy()
+    # Latest snapshot rows 필터링 - 센터별 최신 날짜 사용
+    if not filtered_snapshot.empty:
+        center_latest_dates = filtered_snapshot.groupby("center")["date"].max()
+        latest_snapshot_parts = []
+        for center, latest_date in center_latest_dates.items():
+            if center not in centers_list:
+                continue
+            center_latest_data = filtered_snapshot[
+                (filtered_snapshot["center"] == center)
+                & (filtered_snapshot["date"] == latest_date)
+            ]
+            latest_snapshot_parts.append(center_latest_data)
+        latest_snapshot_rows = pd.concat(latest_snapshot_parts, ignore_index=True) if latest_snapshot_parts else pd.DataFrame()
+    else:
+        latest_snapshot_rows = pd.DataFrame()
+
     if "stock_qty" in latest_snapshot_rows.columns:
         latest_snapshot_rows["stock_qty"] = pd.to_numeric(
             latest_snapshot_rows["stock_qty"], errors="coerce"
