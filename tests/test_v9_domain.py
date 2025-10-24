@@ -76,6 +76,48 @@ def test_normalize_snapshot_with_sales():
     assert result.iloc[0]["sales_qty"] == 10
 
 
+def test_normalize_snapshot_stock_qty_always_float():
+    """스냅샷 정규화 - stock_qty는 항상 float (Bug Fix)"""
+    # 정수만 있는 경우에도 float여야 함
+    raw_integers = pd.DataFrame({
+        "date": ["2024-01-01", "2024-01-02"],
+        "center": ["태광KR", "태광KR"],
+        "resource_code": ["BA00021", "BA00021"],
+        "stock_qty": [100, 200],  # 정수만
+    })
+    
+    result = normalize_snapshot(raw_integers)
+    
+    # stock_qty가 float64여야 함
+    assert result["stock_qty"].dtype == "float64", \
+        f"Expected float64, got {result['stock_qty'].dtype}"
+    assert result.iloc[0]["stock_qty"] == 100.0
+    assert result.iloc[1]["stock_qty"] == 200.0
+
+
+def test_normalize_snapshot_fba_columns_always_float():
+    """스냅샷 정규화 - Amazon FBA 컬럼도 항상 float (Bug Fix)"""
+    raw = pd.DataFrame({
+        "date": ["2024-01-01"],
+        "center": ["AMZUS"],
+        "resource_code": ["BA00021"],
+        "stock_qty": [100],
+        "stock_available": [80],      # 정수
+        "stock_expected": [20],        # 정수
+        "stock_processing": [10],      # 정수
+        "pending_fc": [5],             # 정수
+    })
+    
+    result = normalize_snapshot(raw)
+    
+    # 모든 재고 컬럼이 float여야 함
+    assert result["stock_qty"].dtype == "float64"
+    assert result["stock_available"].dtype == "float64"
+    assert result["stock_expected"].dtype == "float64"
+    assert result["stock_processing"].dtype == "float64"
+    assert result["pending_fc"].dtype == "float64"
+
+
 def test_normalize_moves_basic():
     """이동 원장 정규화 - 기본 케이스"""
     raw = pd.DataFrame({

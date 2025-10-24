@@ -352,7 +352,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
     out["center"] = _normalise_center_series(out.get("center", pd.Series("", index=out.index)))
     out["resource_code"] = out.get("resource_code", pd.Series("", index=out.index)).astype(str).str.strip()
-    out["stock_qty"] = pd.to_numeric(out.get("stock_qty"), errors="coerce").fillna(0.0)
+    out["stock_qty"] = pd.to_numeric(out.get("stock_qty"), errors="coerce").fillna(0.0).astype(float)
 
     if "sales_qty" in out.columns:
         out["sales_qty"] = pd.to_numeric(out.get("sales_qty"), errors="coerce").fillna(0).astype(int)
@@ -367,15 +367,15 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .replace({"nan": "", "None": ""})
         )
 
-    # Amazon FBA 컬럼 타입 변환 (선택적)
+    # Amazon FBA 컬럼 타입 변환 (선택적) - 모두 float 보장
     if "stock_available" in out.columns:
-        out["stock_available"] = pd.to_numeric(out.get("stock_available"), errors="coerce").fillna(0.0)
+        out["stock_available"] = pd.to_numeric(out.get("stock_available"), errors="coerce").fillna(0.0).astype(float)
     if "stock_expected" in out.columns:
-        out["stock_expected"] = pd.to_numeric(out.get("stock_expected"), errors="coerce").fillna(0.0)
+        out["stock_expected"] = pd.to_numeric(out.get("stock_expected"), errors="coerce").fillna(0.0).astype(float)
     if "stock_processing" in out.columns:
-        out["stock_processing"] = pd.to_numeric(out.get("stock_processing"), errors="coerce").fillna(0.0)
+        out["stock_processing"] = pd.to_numeric(out.get("stock_processing"), errors="coerce").fillna(0.0).astype(float)
     if "pending_fc" in out.columns:
-        out["pending_fc"] = pd.to_numeric(out.get("pending_fc"), errors="coerce").fillna(0.0)
+        out["pending_fc"] = pd.to_numeric(out.get("pending_fc"), errors="coerce").fillna(0.0).astype(float)
     if "snap_time" in out.columns:
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
