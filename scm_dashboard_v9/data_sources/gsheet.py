@@ -49,7 +49,7 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # ========================================
     try:
         with st.spinner(show_spinner_message):
-            df_move, df_ref, df_incoming = load_from_gsheet_api()
+            df_move, df_ref, df_incoming, snapshot_raw_df = load_from_gsheet_api()
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
         st.error(f"Google Sheets 데이터를 불러오는 중 오류가 발생했습니다: {exc}")
@@ -61,6 +61,14 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     if df_move.empty or df_ref.empty:
         st.error("Google Sheets에서 데이터를 불러올 수 없습니다. 권한을 확인해주세요.")
         return None
+
+    # ========================================
+    # 2.5단계: snapshot_raw 캐싱 (있는 경우)
+    # ========================================
+    if snapshot_raw_df is not None and not snapshot_raw_df.empty:
+        st.session_state["_snapshot_raw_cache"] = snapshot_raw_df
+    else:
+        st.session_state["_snapshot_raw_cache"] = None
 
     # ========================================
     # 3단계: 데이터 정규화

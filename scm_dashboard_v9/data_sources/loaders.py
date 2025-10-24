@@ -17,11 +17,11 @@ from scm_dashboard_v9.core.config import GSHEET_ID
 
 
 @st.cache_data(ttl=300)
-def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
     """Google Sheets API를 통해 데이터를 로드합니다.
 
     Returns:
-        Tuple of (moves DataFrame, refined snapshot DataFrame, incoming DataFrame)
+        Tuple of (moves DataFrame, refined snapshot DataFrame, incoming DataFrame, snapshot_raw DataFrame)
     """
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -32,7 +32,7 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         gs = st.secrets["google_sheets"]
     except Exception:
         st.error("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
     creds_obj = gs.get("credentials", None)
     creds_json = gs.get("credentials_json", None)
@@ -46,7 +46,7 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         credentials_info = json.loads(str(creds_json))
     else:
         st.error("Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
     if "private_key" in credentials_info:
         credentials_info["private_key"] = credentials_info["private_key"].replace("\\n", "\n").strip()
@@ -58,7 +58,7 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     except Exception as exc:
         st.error(f"Google Sheets API 인증 실패: {exc}")
         st.error("secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
     def _read(name: str) -> pd.DataFrame:
         try:
@@ -71,6 +71,8 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     df_ref = _read("snap_정제")
     df_incoming = _read("입고예정내역")
 
+    # snapshot_raw 데이터 로드 (최신 날짜 데이터만 필터링)
+    df_snap_raw = None
     try:
         df_snap_raw = _read("snapshot_raw")
         if not df_snap_raw.empty:
@@ -81,13 +83,12 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 latest = df_snap_raw[col_date].max()
                 if pd.notna(latest):
                     df_snap_raw = df_snap_raw[df_snap_raw[col_date] == latest].copy()
-            st.session_state["_snapshot_raw_cache"] = df_snap_raw
         else:
-            st.session_state["_snapshot_raw_cache"] = None
+            df_snap_raw = None
     except Exception:
-        st.session_state["_snapshot_raw_cache"] = None
+        df_snap_raw = None
 
-    return df_move, df_ref, df_incoming
+    return df_move, df_ref, df_incoming, df_snap_raw
 
 
 @st.cache_data(ttl=300)
