@@ -266,9 +266,21 @@ def render_inbound_and_wip_tables(
         if undefined_mask.any():
             days_to_arrival.loc[undefined_mask] = "not_defined"
         confirmed_inbound["days_to_arrival"] = days_to_arrival
-        confirmed_inbound["days_to_inbound"] = (
-            confirmed_inbound["pred_inbound_date"].dt.normalize() - today
-        ).dt.days
+
+        # pred_inbound_date 기반 days_to_inbound 계산 (미확정은 "not_defined")
+        pred_inbound_normalized = confirmed_inbound["pred_inbound_date"].dt.normalize()
+        days_inbound = (pred_inbound_normalized - today).dt.days.astype("Int64")
+        days_to_inbound = days_inbound.astype(object)
+        undefined_inbound_mask = pred_inbound_normalized.isna()
+        if undefined_inbound_mask.any():
+            days_to_inbound.loc[undefined_inbound_mask] = "not_defined"
+        confirmed_inbound["days_to_inbound"] = days_to_inbound
+
+        # pred_inbound_date 표시용 포맷 (NaT → "not_defined")
+        pred_display = confirmed_inbound["pred_inbound_date"].apply(
+            lambda x: "not_defined" if pd.isna(x) else x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)
+        )
+        confirmed_inbound["pred_inbound_date"] = pred_display
 
         # 정렬
         confirmed_inbound = confirmed_inbound.sort_values(
