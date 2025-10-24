@@ -441,7 +441,7 @@ def render_amazon_snapshot_kpis(
         if show_delta and prev:
             delta_total = total - int(prev.get("stock_qty", 0))
             delta_available = available - int(prev.get("stock_available", 0))
-            # pending_fc는 표시만 하므로 delta는 별도 표기하지 않음
+            delta_pending_fc = pending_fc - int(prev.get("pending_fc", 0))
             delta_processing = processing - int(prev.get("stock_processing", 0))
             delta_expected = expected - int(prev.get("stock_expected", 0))
             delta_sales = sales_yday - int(prev.get("sales_yday", 0))
@@ -473,7 +473,17 @@ def render_amazon_snapshot_kpis(
 
         total_str = _fmt_with_delta(total, delta_total)
         # 판매가능: 가용재고 + FC 재배치 중 (예: 100 + 5,000)
+        # 전체 합계에 대한 delta 표시
+        salable_total = available + pending_fc
+        delta_salable = None
+        if delta_available is not None and delta_pending_fc is not None:
+            delta_salable = delta_available + delta_pending_fc
         available_str = f"{_format_int(available)} + {_format_int(pending_fc)}"
+        if delta_salable is not None and delta_salable != 0:
+            if delta_salable > 0:
+                available_str += f" <span class='delta-up'>(↑{delta_salable:+,})</span>"
+            else:
+                available_str += f" <span class='delta-down'>(↓{abs(delta_salable):,})</span>"
         processing_str = _fmt_with_delta(processing, delta_processing)
         expected_str = _fmt_with_delta(expected, delta_expected)
         sales_str = _fmt_with_delta(sales_yday, delta_sales)
