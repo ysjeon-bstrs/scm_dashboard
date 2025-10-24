@@ -86,8 +86,6 @@ def render_inbound_and_wip_tables(
     end: pd.Timestamp,
     lag_days: int,
     today: pd.Timestamp,
-    *,
-    wip_source: Optional[pd.DataFrame] = None,
 ) -> None:
     """
     입고 예정 테이블과 WIP 테이블을 렌더링합니다.
@@ -105,7 +103,6 @@ def render_inbound_and_wip_tables(
         end: 종료 날짜
         lag_days: 입고 반영 리드타임 (일)
         today: 오늘 날짜
-        wip_source: 입고 예정 시트 기반 WIP 원본 데이터 (디버깅용)
 
     Notes:
         - confirmed_inbound: arrival_date 또는 onboard_date 기준
@@ -348,147 +345,6 @@ def render_inbound_and_wip_tables(
         st.dataframe(arr_wip[wip_cols].head(1000), use_container_width=True, height=260)
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
-
-    debug_source_available = wip_source is not None and not getattr(wip_source, "empty", True)
-    if debug_source_available:
-        with st.expander("디버그: 생산중(WIP) 원본 비교", expanded=False):
-            st.caption(
-                "입고예정 시트의 WIP 수량과 대시보드 상의 생산중 수량을 비교합니다."
-            )
-
-            wip_source_view = wip_source.copy()
-            if "resource_code" in wip_source_view.columns:
-                wip_source_view["resource_code"] = wip_source_view["resource_code"].astype(str)
-                if selected_skus:
-                    wip_source_view = wip_source_view[
-                        wip_source_view["resource_code"].isin(selected_skus)
-                    ]
-
-            if "to_center" in wip_source_view.columns:
-                wip_source_view["__to_center_norm"] = wip_source_view["to_center"].apply(
-                    normalize_center_value
-                )
-                wip_source_view = wip_source_view[
-                    wip_source_view["__to_center_norm"] == "태광KR"
-                ]
-                wip_source_view = wip_source_view.drop(columns="__to_center_norm")
-
-            ready_col = "wip_ready" if "wip_ready" in wip_source_view.columns else None
-            if ready_col:
-                wip_source_view["display_date"] = pd.to_datetime(
-                    wip_source_view[ready_col], errors="coerce"
-                ).dt.normalize()
-            else:
-                wip_source_view["display_date"] = pd.NaT
-
-            wip_source_view = wip_source_view[
-                wip_source_view["display_date"].notna()
-            ]
-
-            wip_source_view = wip_source_view[
-                (wip_source_view["display_date"] >= window_start)
-                & (wip_source_view["display_date"] <= window_end)
-            ]
-
-            if "qty_ea" in wip_source_view.columns:
-                wip_source_view["qty_ea"] = pd.to_numeric(
-                    wip_source_view["qty_ea"], errors="coerce"
-                ).fillna(0)
-            else:
-                wip_source_view["qty_ea"] = 0
-
-            wip_moves_summary = pd.DataFrame(
-                columns=["display_date", "resource_code", "qty_ea_moves"]
-            )
-            if not arr_wip.empty:
-                moves_summary = arr_wip[["display_date", "resource_code", "qty_ea"]].copy()
-                moves_summary["display_date"] = pd.to_datetime(
-                    moves_summary["display_date"], errors="coerce"
-                ).dt.normalize()
-                wip_moves_summary = (
-                    moves_summary.groupby(["display_date", "resource_code"], as_index=False)[
-                        "qty_ea"
-                    ]
-                    .sum()
-                    .rename(columns={"qty_ea": "qty_ea_moves"})
-                )
-
-            wip_source_summary = pd.DataFrame(
-                columns=["display_date", "resource_code", "qty_ea_source"]
-            )
-            if not wip_source_view.empty:
-                wip_source_summary = (
-                    wip_source_view.groupby(["display_date", "resource_code"], as_index=False)[
-                        "qty_ea"
-                    ]
-                    .sum()
-                    .rename(columns={"qty_ea": "qty_ea_source"})
-                )
-
-            debug_summary = pd.merge(
-                wip_moves_summary,
-                wip_source_summary,
-                on=["display_date", "resource_code"],
-                how="outer",
-            )
-
-            if not debug_summary.empty:
-                for col in ["qty_ea_moves", "qty_ea_source"]:
-                    if col in debug_summary.columns:
-                        debug_summary[col] = pd.to_numeric(
-                            debug_summary[col], errors="coerce"
-                        ).fillna(0).astype(int)
-                if {"qty_ea_moves", "qty_ea_source"}.issubset(debug_summary.columns):
-                    debug_summary["diff"] = (
-                        debug_summary["qty_ea_moves"] - debug_summary["qty_ea_source"]
-                    )
-                total_moves = int(debug_summary.get("qty_ea_moves", pd.Series(dtype=int)).sum())
-                total_source = int(
-                    debug_summary.get("qty_ea_source", pd.Series(dtype=int)).sum()
-                )
-                total_diff = total_moves - total_source
-
-                col1, col2, col3 = st.columns(3)
-                col1.metric("대시보드 총합", f"{total_moves:,} EA")
-                col2.metric("시트 총합", f"{total_source:,} EA")
-                col3.metric("차이", f"{total_diff:,} EA")
-
-                debug_summary = debug_summary.sort_values(
-                    ["display_date", "resource_code"],
-                    ascending=[True, True],
-                    na_position="last",
-                )
-                st.dataframe(
-                    debug_summary,
-                    use_container_width=True,
-                    height=260,
-                )
-            else:
-                st.caption("비교할 WIP 데이터가 없습니다.")
-
-            source_cols = [
-                "display_date",
-                "resource_code",
-                "qty_ea",
-                "wip_start",
-                "wip_ready",
-                "lot",
-            ]
-            available_source_cols = [
-                col for col in source_cols if col in wip_source_view.columns
-            ]
-            if available_source_cols:
-                st.markdown("###### 원본 WIP 행 (필터 적용)")
-                st.dataframe(
-                    wip_source_view[available_source_cols]
-                    .sort_values(
-                        ["display_date", "resource_code", "qty_ea"],
-                        ascending=[True, True, False],
-                    )
-                    .head(1000),
-                    use_container_width=True,
-                    height=260,
-                )
 
 
 def render_inventory_table(

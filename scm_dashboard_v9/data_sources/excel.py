@@ -29,11 +29,9 @@ class LoadedData:
     Attributes:
         moves: 정규화된 이동 원장 데이터프레임 (WIP 포함)
         snapshot: 정규화된 스냅샷 데이터프레임
-        wip_source: 원본 입고 예정(WIP) 데이터프레임
     """
     moves: pd.DataFrame
     snapshot: pd.DataFrame
-    wip_source: Optional[pd.DataFrame] = None
 
 
 def load_from_excel_uploader() -> Optional[LoadedData]:
@@ -77,11 +75,8 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
     # ========================================
-    wip_source: Optional[pd.DataFrame] = None
     try:
         wip_df = load_wip_from_incoming(df_incoming)
-        if wip_df is not None and not wip_df.empty:
-            wip_source = wip_df.copy()
         moves = merge_wip_as_moves(moves, wip_df)
 
         if wip_df is not None and not wip_df.empty:
@@ -90,4 +85,4 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
     except Exception as exc:  # pragma: no cover - streamlit feedback
         st.warning(f"WIP 불러오기 실패: {exc}")
 
-    return LoadedData(moves=moves, snapshot=snapshot, wip_source=wip_source)
+    return LoadedData(moves=moves, snapshot=snapshot)
