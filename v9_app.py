@@ -18,12 +18,11 @@ import pandas as pd
 import streamlit as st
 
 from center_alias import normalize_center_value
-from scm_dashboard_v4.config import CENTER_COL
-from scm_dashboard_v4.inventory import pivot_inventory_cost_from_raw
 
 # v9 모듈 임포트
+from scm_dashboard_v9.analytics import pivot_inventory_cost_from_raw
 from scm_dashboard_v9.core import build_timeline as build_core_timeline
-from scm_dashboard_v9.core.config import CONFIG
+from scm_dashboard_v9.core.config import CENTER_COL, CONFIG
 from scm_dashboard_v9.data_sources import LoadedData, ensure_data
 from scm_dashboard_v9.domain import (
     calculate_date_bounds,
