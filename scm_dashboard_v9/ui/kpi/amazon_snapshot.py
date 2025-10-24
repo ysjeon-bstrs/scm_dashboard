@@ -62,7 +62,17 @@ def _coerce_snapshot_frame(
     sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
     stock_col = cols_lower.get("stock_qty") or cols_lower.get("qty")
     available_col = cols_lower.get("stock_available") or cols_lower.get("available_qty")
-    pending_col = cols_lower.get("pending_fc")
+    # pending_FC 컬럼은 다양한 표기로 들어올 수 있으므로 다중 별칭을 지원
+    pending_col = (
+        cols_lower.get("pending_fc")
+        or cols_lower.get("pending fc")
+        or cols_lower.get("fc_pending")
+        or cols_lower.get("pending_fc_qty")
+        or cols_lower.get("pending_fc_units")
+        or cols_lower.get("pending at fc")
+        or cols_lower.get("pending_at_fc")
+        or cols_lower.get("fc pending")
+    )
     processing_col = cols_lower.get("stock_processing") or cols_lower.get("processing_qty")
     expected_col = cols_lower.get("stock_expected") or cols_lower.get("expected_qty")
     sales_col = cols_lower.get("sales_qty") or cols_lower.get("sale_qty")
@@ -106,9 +116,13 @@ def _coerce_snapshot_frame(
     df["resource_code"] = df.get("resource_code", "").astype(str).str.strip()
 
     for column in _NUMERIC_COLUMNS:
-        values = pd.to_numeric(
-            df.get(column, pd.Series(dtype=float)), errors="coerce"
-        )
+        src = df.get(column, pd.Series(dtype=float))
+        # 문자열 숫자에 포함된 천단위 구분자(,) 제거 후 숫자 변환
+        if isinstance(src, pd.Series):
+            cleaned = src.astype(str).str.replace(",", "", regex=False)
+        else:
+            cleaned = src
+        values = pd.to_numeric(cleaned, errors="coerce")
         if not isinstance(values, pd.Series):
             values = pd.Series(values, index=df.index, dtype=float)
         values = values.reindex(df.index)
