@@ -88,10 +88,21 @@ def validate_and_prepare_snapshot(
     if pd.isna(selected_latest_snapshot):
         return pd.DataFrame(), pd.DataFrame(), [], [], [], pd.NaT, pd.NaT, {}
 
+    # 파라미터로 받은 latest_snapshot을 사용하되, filtered_snapshot에 해당 날짜 데이터가 없으면
+    # filtered_snapshot의 실제 최신 날짜를 사용 (센터별 스냅샷 생성 시간 차이 대응)
     if latest_snapshot is None or pd.isna(latest_snapshot):
         latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
     else:
-        latest_snapshot_dt = pd.to_datetime(latest_snapshot).normalize()
+        requested_dt = pd.to_datetime(latest_snapshot).normalize()
+        # 요청한 날짜에 filtered_snapshot 데이터가 있는지 확인
+        has_data_at_requested_date = not filtered_snapshot[
+            filtered_snapshot["date"] == requested_dt
+        ].empty
+        if has_data_at_requested_date:
+            latest_snapshot_dt = requested_dt
+        else:
+            # 요청한 날짜에 데이터가 없으면 filtered_snapshot의 실제 최신 날짜 사용
+            latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
 
     # Name map 생성
     name_map: Mapping[str, str] = {}
