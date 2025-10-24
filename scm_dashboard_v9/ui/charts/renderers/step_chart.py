@@ -125,22 +125,21 @@ def render_step_chart(
                 key = (today_norm, center, sku)
                 snapshot_today_map[key] = stock
 
-    # customdata 추가: 오늘 날짜는 base_stock + inbound_qty 분리 표시용
+    # customdata 추가: hover 표시용 문자열 생성
     if not plot_df.empty:
         today_norm = pd.to_datetime(today).normalize() if today is not None else None
-        plot_df["base_stock"] = 0.0
-        plot_df["inbound_qty"] = 0.0
-        plot_df["is_today"] = False
 
+        # 기본: 총 재고만 표시
+        plot_df["hover_stock"] = plot_df["stock_qty"].apply(lambda x: f"{x:,.0f} EA")
+
+        # 오늘 날짜: 스냅샷 + 입고 분리 표시
         if snapshot_today_map and today_norm is not None:
             for idx, row in plot_df.iterrows():
                 if row["date"] == today_norm:
                     key = (today_norm, row["center"], row["resource_code"])
                     base_stock = snapshot_today_map.get(key, 0)
                     inbound_qty = max(0, row["stock_qty"] - base_stock)
-                    plot_df.at[idx, "base_stock"] = base_stock
-                    plot_df.at[idx, "inbound_qty"] = inbound_qty
-                    plot_df.at[idx, "is_today"] = True
+                    plot_df.at[idx, "hover_stock"] = f"{base_stock:,.0f} EA + {inbound_qty:,.0f} EA"
 
     # 기본 step line
     if plot_df.empty:
@@ -148,7 +147,7 @@ def render_step_chart(
         fig.update_layout(title=title)
     else:
         # customdata 준비
-        customdata_cols = ["base_stock", "inbound_qty", "is_today"]
+        customdata_cols = ["hover_stock"]
         plot_sorted = plot_df.sort_values(["label", "date"])
 
         fig = px.line(
@@ -161,13 +160,12 @@ def render_step_chart(
             title=title,
             custom_data=customdata_cols,
         )
-        # hovertemplate: customdata를 통해 오늘 날짜 여부 판단하여 표시
-        # plotly는 조건부 표시 불가능하므로, 항상 표시하되 값이 0일 때는 의미 없음
+        # hovertemplate: customdata[0]에 포맷팅된 문자열 사용
         fig.update_traces(
             mode="lines",
             hovertemplate=(
                 "날짜: %{x|%Y-%m-%d}<br>"
-                "재고: %{customdata[0]:,.0f} EA + %{customdata[1]:,.0f} EA<br>"
+                "재고: %{customdata[0]}<br>"
                 "%{fullData.name}"
                 "<extra></extra>"
             ),
