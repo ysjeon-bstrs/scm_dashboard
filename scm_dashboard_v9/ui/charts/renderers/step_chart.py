@@ -44,11 +44,13 @@ def render_step_chart(
     show_in_transit: bool = True,
     show_wip: bool | None = None,
     title: str = "선택한 SKU × 센터(및 In‑Transit/WIP) 계단식 재고 흐름",
+    snapshot: pd.DataFrame | None = None,
     **kwargs,
 ) -> None:
     """
     v5_main에서 그대로 호출하는 공개 API.
     timeline: columns=[date, center, resource_code, stock_qty] (apply_consumption_with_events 반영 가능)
+    snapshot: 스냅샷 데이터 (오늘 날짜 호버 표시 개선용, 선택적)
     """
 
     if not ensure_plotly_available():
@@ -108,23 +110,67 @@ def render_step_chart(
     else:
         plot_df = pd.DataFrame(columns=["date", "stock_qty", "label"])
 
+    # 오늘 날짜에 대해 스냅샷 재고 조회 (호버 표시 개선용)
+    snapshot_today_map = {}
+    if snapshot is not None and not snapshot.empty and today is not None:
+        today_norm = pd.to_datetime(today).normalize()
+        snapshot_df = snapshot.copy()
+        snapshot_df["date"] = pd.to_datetime(snapshot_df.get("date", snapshot_df.get("snapshot_date", pd.NaT)), errors="coerce").dt.normalize()
+        snapshot_today = snapshot_df[snapshot_df["date"] == today_norm]
+        if not snapshot_today.empty and "center" in snapshot_today.columns and "resource_code" in snapshot_today.columns:
+            for _, row in snapshot_today.iterrows():
+                center = str(row.get("center", ""))
+                sku = str(row.get("resource_code", ""))
+                stock = float(row.get("stock_qty", 0))
+                key = (today_norm, center, sku)
+                snapshot_today_map[key] = stock
+
+    # customdata 추가: 오늘 날짜는 base_stock + inbound_qty 분리 표시용
+    if not plot_df.empty:
+        today_norm = pd.to_datetime(today).normalize() if today is not None else None
+        plot_df["base_stock"] = 0.0
+        plot_df["inbound_qty"] = 0.0
+        plot_df["is_today"] = False
+
+        if snapshot_today_map and today_norm is not None:
+            for idx, row in plot_df.iterrows():
+                if row["date"] == today_norm:
+                    key = (today_norm, row["center"], row["resource_code"])
+                    base_stock = snapshot_today_map.get(key, 0)
+                    inbound_qty = max(0, row["stock_qty"] - base_stock)
+                    plot_df.at[idx, "base_stock"] = base_stock
+                    plot_df.at[idx, "inbound_qty"] = inbound_qty
+                    plot_df.at[idx, "is_today"] = True
+
     # 기본 step line
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(title=title)
     else:
+        # customdata 준비
+        customdata_cols = ["base_stock", "inbound_qty", "is_today"]
+        plot_sorted = plot_df.sort_values(["label", "date"])
+
         fig = px.line(
-            plot_df.sort_values(["label", "date"]),
+            plot_sorted,
             x="date",
             y="stock_qty",
             color="label",
             line_shape="hv",
             render_mode="svg",
             title=title,
+            custom_data=customdata_cols,
         )
+        # hovertemplate: customdata를 통해 오늘 날짜 여부 판단하여 표시
+        # plotly는 조건부 표시 불가능하므로, 항상 표시하되 값이 0일 때는 의미 없음
         fig.update_traces(
             mode="lines",
-            hovertemplate="날짜: %{x|%Y-%m-%d}<br>재고: %{y:,} EA<br>%{fullData.name}<extra></extra>",
+            hovertemplate=(
+                "날짜: %{x|%Y-%m-%d}<br>"
+                "재고: %{customdata[0]:,.0f} EA + %{customdata[1]:,.0f} EA<br>"
+                "%{fullData.name}"
+                "<extra></extra>"
+            ),
         )
 
     # SKU별 고정 색, 상태(In‑Transit/WIP) 별 스타일

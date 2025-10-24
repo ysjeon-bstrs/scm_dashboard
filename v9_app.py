@@ -541,6 +541,7 @@ def main() -> None:
         show_production=show_prod,
         show_in_transit=show_transit,
         today=today_norm,
+        snapshot=snapshot_df,
     )
 
     # ========================================
