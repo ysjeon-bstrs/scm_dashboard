@@ -338,7 +338,8 @@ def build_amazon_snapshot_kpis(
         else:
             demand = float(max(1.0, demand_candidate)) if demand_candidate > 0 else None
 
-        base_qty = avail if cover_base == "available" else total
+        # 커버일수 계산 기준: 판매가능(= 가용재고 + pending_FC)
+        base_qty = avail + pending_fc
         if demand is None or demand <= 0:
             cover_days = np.inf if base_qty > 0 else None
         else:
@@ -356,7 +357,7 @@ def build_amazon_snapshot_kpis(
                 "sales_yday": int(round(sales_yday)),
                 "sales_ma7": float(ma7) if ma7 is not None else np.nan,
                 "cover_days": float(cover_days) if cover_days is not None else np.nan,
-                "cover_base": cover_base,
+                "cover_base": "salable",
             }
         )
 
@@ -527,5 +528,5 @@ def render_amazon_snapshot_kpis(
     st.caption(
         "총 재고=판매가능+FC 처리 중+고객주문 · 판매가능=가용재고+FC 재배치 중 · "
         "입고처리중=FC 도착 후 재고화 진행 중 · 입고예정=입고예약+FC 도착+재고화 진행중 · "
-        "커버일수=총 재고 or 사용가능 ÷ 7일 평균 일판매"
+        "커버일수=판매가능 ÷ 7일 평균 일판매"
     )
