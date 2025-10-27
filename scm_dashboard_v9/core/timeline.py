@@ -7,11 +7,13 @@ from typing import Sequence
 
 import pandas as pd
 
+from ..common.performance import measure_time
 from ..pipeline import BuildInputs, build_timeline_bundle
 
 logger = logging.getLogger(__name__)
 
 
+@measure_time
 def build_timeline(
     snapshot: pd.DataFrame,
     moves: pd.DataFrame,

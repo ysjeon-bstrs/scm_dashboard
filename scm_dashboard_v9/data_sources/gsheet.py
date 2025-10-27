@@ -12,6 +12,8 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
+from scm_dashboard_v9.common.performance import measure_time_context
+
 logger = logging.getLogger(__name__)
 
 from scm_dashboard_v9.data_sources.loaders import (
@@ -53,11 +55,12 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     logger.info("Loading data from Google Sheets")
     try:
         with st.spinner(show_spinner_message):
-            df_move, df_ref, df_incoming = load_from_gsheet_api()
-            logger.debug(
-                f"Raw data loaded: {len(df_move)} moves, {len(df_ref)} snapshots, "
-                f"{len(df_incoming)} incoming"
-            )
+            with measure_time_context("Google Sheets API fetch"):
+                df_move, df_ref, df_incoming = load_from_gsheet_api()
+                logger.debug(
+                    f"Raw data loaded: {len(df_move)} moves, {len(df_ref)} snapshots, "
+                    f"{len(df_incoming)} incoming"
+                )
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
         logger.error(f"Failed to load from Google Sheets: {exc}", exc_info=True)
@@ -76,9 +79,10 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # 3단계: 데이터 정규화
     # ========================================
     logger.info("Normalizing snapshot and moves data")
-    moves = normalize_moves(df_move)
-    snapshot = normalize_refined_snapshot(df_ref)
-    logger.debug(f"Normalized: {len(moves)} moves, {len(snapshot)} snapshots")
+    with measure_time_context("Data normalization"):
+        moves = normalize_moves(df_move)
+        snapshot = normalize_refined_snapshot(df_ref)
+        logger.debug(f"Normalized: {len(moves)} moves, {len(snapshot)} snapshots")
 
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
