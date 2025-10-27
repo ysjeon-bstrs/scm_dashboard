@@ -184,20 +184,18 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 4단계: WIP 필터링 (생산 중)
     # ========================================
-    # 태광KR만 WIP 표시 (센터명도 정규화 체크)
-    arr_wip = pd.DataFrame()
-    show_wip = any(
-        normalize_center_value(center) == "태광KR" for center in selected_centers
+    # 태광KR WIP는 센터 선택과 무관하게 항상 노출
+    to_center_normalized = moves_view["to_center"].map(normalize_center_value)
+    wip_mask = (
+        (moves_view["carrier_mode"] == "WIP")
+        & (to_center_normalized == "태광KR")
+        & (moves_view["resource_code"].isin(selected_skus))
+        & (moves_view["event_date"].notna())
+        & (moves_view["event_date"] >= window_start)
+        & (moves_view["event_date"] <= window_end)
     )
-    if show_wip:
-        arr_wip = moves_view[
-            (moves_view["carrier_mode"] == "WIP")
-            & (moves_view["to_center"] == "태광KR")
-            & (moves_view["resource_code"].isin(selected_skus))
-            & (moves_view["event_date"].notna())
-            & (moves_view["event_date"] >= window_start)
-            & (moves_view["event_date"] <= window_end)
-        ].copy()
+    arr_wip = moves_view[wip_mask].copy()
+    if not arr_wip.empty:
         arr_wip["display_date"] = arr_wip["event_date"]
 
     # ========================================
