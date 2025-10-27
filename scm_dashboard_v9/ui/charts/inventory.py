@@ -13,6 +13,7 @@ import pandas as pd
 from .data_utils import coerce_cols, ensure_naive_index, safe_dataframe
 
 
+
 def total_inventory_series(
     inv_actual: pd.DataFrame,
     inv_forecast: pd.DataFrame,

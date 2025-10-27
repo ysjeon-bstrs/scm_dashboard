@@ -62,5 +62,4 @@ def build_timeline(
         timeline["date"] = pd.to_datetime(
             timeline["date"], errors="coerce"
         ).dt.normalize()
-
     return timeline

@@ -22,10 +22,9 @@ from scm_dashboard_v9.data_sources.loaders import (
     load_wip_from_incoming,
     merge_wip_as_moves,
 )
+
 from scm_dashboard_v9.domain.normalization import (
     normalize_moves,
-)
-from scm_dashboard_v9.domain.normalization import (
     normalize_snapshot as normalize_refined_snapshot,
 )
 

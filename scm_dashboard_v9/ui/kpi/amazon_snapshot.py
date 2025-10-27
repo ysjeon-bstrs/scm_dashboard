@@ -50,12 +50,12 @@ def _coerce_snapshot_frame(
     df = snap_amz.copy()
     cols_lower = {str(c).strip().lower(): c for c in df.columns}
 
+    # snap_time 컬럼 매핑 (date는 fallback용으로 남겨두므로 여기서 제외)
     snap_time_col = (
         cols_lower.get("snap_time")
         or cols_lower.get("snapshot_time")
         or cols_lower.get("snapshot_datetime")
         or cols_lower.get("snapshot_date")
-        or cols_lower.get("date")
     )
     center_col = cols_lower.get("center")
     sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
@@ -100,16 +100,26 @@ def _coerce_snapshot_frame(
 
     df = df.rename(columns=rename_map)
 
+    # snap_time 컬럼이 없지만 date 컬럼이 있는 경우, date를 snap_time으로 사용
+    # cols_lower를 사용하여 case-insensitive 처리 (Date, DATE 등 대응)
+    if "snap_time" not in df.columns:
+        date_col = cols_lower.get("date")
+        if date_col and date_col in df.columns:
+            df["snap_time"] = df[date_col]
+
     required_cols = {"snap_time", "center", "resource_code", "stock_qty"}
     if not required_cols.issubset(df.columns):
         return pd.DataFrame(columns=list(required_cols | _NUMERIC_COLUMNS))
 
     df["snap_time"] = pd.to_datetime(df.get("snap_time"), errors="coerce")
 
-    # snap_time이 모두 null이면 date 컬럼을 폴백으로 사용
-    if df["snap_time"].isna().all():
-        if "date" in df.columns:
-            df["snap_time"] = pd.to_datetime(df.get("date"), errors="coerce")
+    # 개선: 행 단위 폴백 — snap_time 개별 NaT에 대해 date 값을 보완
+    # (기존: 전체가 NaT일 때만 date로 대체 → 일부 NaT가 있는 경우 정보 손실)
+    # cols_lower를 사용하여 case-insensitive 처리 (Date, DATE 등 대응)
+    date_col = cols_lower.get("date")
+    if date_col and date_col in df.columns:
+        date_parsed = pd.to_datetime(df.get(date_col), errors="coerce")
+        df["snap_time"] = df["snap_time"].fillna(date_parsed)
 
     df = df.dropna(subset=["snap_time"]).copy()
 
@@ -130,11 +140,16 @@ def _coerce_snapshot_frame(
         df[column] = values.fillna(0).astype(float)
         df[column] = df[column].clip(lower=0)
 
+    # 센터 필터링: centers가 있고 실제로 유효한 값이 있을 때만 필터링
     if centers:
         centers_norm = {
             str(center).strip() for center in centers if str(center).strip()
         }
-        df = df[df["center"].isin(centers_norm)]
+        # centers_norm이 비어있으면 필터링하지 않음 (모든 데이터 유지)
+        if centers_norm:
+            df = df[df["center"].isin(centers_norm)]
+
+    # SKU 필터링: skus가 있고 실제로 유효한 값이 있을 때만 필터링
     skus_norm = {str(sku).strip() for sku in skus if str(sku).strip()}
     if skus_norm:
         df = df[df["resource_code"].isin(skus_norm)]
@@ -274,8 +289,9 @@ def build_amazon_snapshot_kpis(
     else:
         centers = list(center)
 
-    normalized = _coerce_snapshot_frame(snap_amz, centers, skus)
-    if normalized.empty:
+    # 최신 스냅샷 시점을 구할 때는 SKU 필터를 적용하지 않고 센터 기준으로 계산
+    normalized_base = _coerce_snapshot_frame(snap_amz, centers, [])
+    if normalized_base.empty:
         return pd.DataFrame(
             columns=[
                 "resource_code",
@@ -292,7 +308,7 @@ def build_amazon_snapshot_kpis(
             ]
         )
 
-    latest_ts = normalized["snap_time"].max()
+    latest_ts = normalized_base["snap_time"].max()
     if pd.isna(latest_ts):
         return pd.DataFrame(
             columns=[
@@ -309,8 +325,8 @@ def build_amazon_snapshot_kpis(
                 "cover_base",
             ]
         )
-
-    current = normalized[normalized["snap_time"] == latest_ts]
+    # 해당 최신 시점의 스냅샷만 추출 (센터 기준), 이후 SKU별로 조회
+    current = normalized_base[normalized_base["snap_time"] == latest_ts]
 
     rows: list[dict[str, object]] = []
     sku_order = [str(s) for s in skus]
@@ -334,7 +350,7 @@ def build_amazon_snapshot_kpis(
         expected = max(0.0, expected)
         sales_yday = max(0.0, sales_yday)
 
-        ma7 = _ma7_for(normalized, sku, latest_ts) if use_ma7 else None
+        ma7 = _ma7_for(normalized_base, sku, latest_ts) if use_ma7 else None
         demand_candidate = ma7 if ma7 is not None else sales_yday
         if demand_candidate is None:
             demand = None
@@ -523,12 +539,12 @@ def render_amazon_snapshot_kpis(
         cover_str = _fmt_cover_with_delta(cover_days, delta_cover)
 
         metrics: list[_MetricValue] = [
-            _MetricValue("총 재고", total_str, "센터별 총재고 합계"),
+            _MetricValue("총 재고", total_str, "판매가능+고객 주문건+FC 처리중 합계"),
             _MetricValue("판매가능", available_str, "가용재고+FC 재배치 중"),
             _MetricValue("입고처리중", processing_str, "FC 도착 후 재고화 진행 중"),
-            _MetricValue("입고예정", expected_str, "입고예약+FC 도착+재고화 진행중"),
+            _MetricValue("입고예정", expected_str, "FC로 배송 중"),
             _MetricValue("어제 판매", sales_str, "전일 판매량"),
-            _MetricValue("커버일수", cover_str, "총 재고 or 사용가능 ÷ 일평균 수요"),
+            _MetricValue("커버일수", cover_str, "판매가능 ÷ 일평균 수요"),
         ]
 
         # SKU 헤더 (resource_name 포함)

@@ -31,6 +31,7 @@ from .models import AmazonForecastContext
 from .sales import load_amazon_daily_sales_from_snapshot_raw, make_forecast_sales_capped
 
 
+
 def build_amazon_forecast_context(
     *,
     snap_long: pd.DataFrame,

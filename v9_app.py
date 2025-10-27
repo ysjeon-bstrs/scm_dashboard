@@ -10,6 +10,7 @@ SCM Dashboard v9 메인 엔트리 포인트
 - 필터/검증: domain 모듈로 분리
 - 테이블 렌더링: 주요 로직 유지 (향후 ui.tables로 분리 예정)
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,8 +21,7 @@ import streamlit as st
 
 # 로깅 설정
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -67,38 +67,48 @@ def _validate_data_quality(
 ) -> Tuple[bool, Optional[str]]:
     """
     데이터 품질을 검증합니다.
-    
+
     Args:
         snapshot: 스냅샷 데이터프레임
         moves: 이동 원장 데이터프레임
-    
+
     Returns:
         (is_valid, error_message) 튜플
     """
     # 필수 컬럼 검증
     required_snapshot_cols = ["resource_code", "center"]
-    missing_snap_cols = [col for col in required_snapshot_cols if col not in snapshot.columns]
+    missing_snap_cols = [
+        col for col in required_snapshot_cols if col not in snapshot.columns
+    ]
     if missing_snap_cols:
-        return False, f"스냅샷 데이터에 필수 컬럼이 없습니다: {', '.join(missing_snap_cols)}"
-    
+        return (
+            False,
+            f"스냅샷 데이터에 필수 컬럼이 없습니다: {', '.join(missing_snap_cols)}",
+        )
+
     required_moves_cols = ["resource_code", "to_center", "qty_ea"]
     missing_move_cols = [col for col in required_moves_cols if col not in moves.columns]
     if missing_move_cols:
-        return False, f"이동 원장에 필수 컬럼이 없습니다: {', '.join(missing_move_cols)}"
-    
+        return (
+            False,
+            f"이동 원장에 필수 컬럼이 없습니다: {', '.join(missing_move_cols)}",
+        )
+
     # 데이터 크기 검증
     if len(snapshot) == 0:
         return False, "스냅샷 데이터가 비어있습니다"
-    
+
     if len(moves) == 0:
         logger.warning("이동 원장이 비어있음 (경고)")
-    
+
     # 중복 데이터 검증
     if "date" in snapshot.columns:
-        dup_count = snapshot.duplicated(subset=["date", "center", "resource_code"]).sum()
+        dup_count = snapshot.duplicated(
+            subset=["date", "center", "resource_code"]
+        ).sum()
         if dup_count > 0:
             logger.warning(f"스냅샷에 중복 데이터 {dup_count}건 발견")
-    
+
     return True, None
 
 
@@ -113,8 +123,7 @@ def get_consumption_params_from_ui() -> dict[str, object]:
     """
     lookback_days = int(
         st.session_state.get(
-            "trend_lookback_days",
-            CONFIG.consumption.default_lookback_days
+            "trend_lookback_days", CONFIG.consumption.default_lookback_days
         )
     )
     promo_on = bool(st.session_state.get("promo_enabled", False))
@@ -127,7 +136,7 @@ def get_consumption_params_from_ui() -> dict[str, object]:
         # uplift 값을 설정된 범위로 클램핑
         promo_uplift = max(
             CONFIG.consumption.min_promo_uplift,
-            min(promo_uplift, CONFIG.consumption.max_promo_uplift)
+            min(promo_uplift, CONFIG.consumption.max_promo_uplift),
         )
         events.append(
             {
@@ -155,8 +164,11 @@ def _render_sidebar_filters(
 
     6-7단계: 세션 상태 초기화 & 사이드바 필터 렌더링
     """
+
     # 날짜 범위 클램핑 함수
-    def _clamp_range(range_value: Tuple[pd.Timestamp, pd.Timestamp]) -> Tuple[pd.Timestamp, pd.Timestamp]:
+    def _clamp_range(
+        range_value: Tuple[pd.Timestamp, pd.Timestamp],
+    ) -> Tuple[pd.Timestamp, pd.Timestamp]:
         start_val, end_val = range_value
         start_val = pd.Timestamp(start_val).normalize()
         end_val = pd.Timestamp(end_val).normalize()
@@ -175,7 +187,9 @@ def _render_sidebar_filters(
                 default_start = default_end
             st.session_state.date_range = (default_start, default_end)
         else:
-            st.session_state.date_range = _clamp_range(tuple(st.session_state.date_range))
+            st.session_state.date_range = _clamp_range(
+                tuple(st.session_state.date_range)
+            )
 
     _init_range()
 
@@ -270,16 +284,15 @@ def _render_sidebar_filters(
 
 
 def _tidy_from_pivot(
-    pivot: Optional[pd.DataFrame], 
-    mask: Optional[Sequence[bool]]
+    pivot: Optional[pd.DataFrame], mask: Optional[Sequence[bool]]
 ) -> pd.DataFrame:
     """
     피벗 테이블을 tidy 형식으로 변환합니다.
-    
+
     Args:
         pivot: 피벗된 재고 데이터프레임
         mask: 필터링할 행 마스크 (선택적)
-    
+
     Returns:
         tidy 형식의 데이터프레임 (date, resource_code, stock_qty 컬럼)
     """
@@ -301,10 +314,10 @@ def _tidy_from_pivot(
 def _filter_amazon_centers(selected_centers: List[str]) -> List[str]:
     """
     선택된 센터에서 Amazon 계열 센터만 필터링합니다.
-    
+
     Args:
         selected_centers: 선택된 센터 목록
-    
+
     Returns:
         Amazon 계열 센터 목록
     """
@@ -327,13 +340,13 @@ def _build_amazon_kpi_data(
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Amazon KPI 데이터를 빌드합니다.
-    
+
     Args:
         snap_amz: Amazon 스냅샷 데이터
         selected_skus: 선택된 SKU 목록
         amazon_centers: Amazon 센터 목록
         show_delta: 전 스냅샷 대비 델타 표시 여부
-    
+
     Returns:
         (kpi_df, previous_df) 튜플
     """
@@ -388,7 +401,7 @@ def _render_amazon_section(
     amazon_centers = _filter_amazon_centers(selected_centers)
 
     st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고")
+    st.subheader("Amazon US 대시보드")
 
     if not amazon_centers:
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
@@ -465,7 +478,7 @@ def main() -> None:
     전체 대시보드 UI를 렌더링하고 데이터 파이프라인을 실행합니다.
     """
     logger.info("SCM Dashboard v9 시작")
-    
+
     # ========================================
     # 1단계: 페이지 설정
     # ========================================
@@ -482,8 +495,10 @@ def main() -> None:
         logger.warning("데이터가 로드되지 않음")
         st.info("데이터를 로드하면 차트와 테이블이 표시됩니다.")
         return
-    logger.info(f"데이터 로드 완료: 스냅샷 {len(data.snapshot)}행, 이동 {len(data.moves)}행")
-    
+    logger.info(
+        f"데이터 로드 완료: 스냅샷 {len(data.snapshot)}행, 이동 {len(data.moves)}행"
+    )
+
     # 데이터 품질 검증
     is_valid, error_msg = _validate_data_quality(data.snapshot, data.moves)
     if not is_valid:
@@ -570,9 +585,13 @@ def main() -> None:
         st.warning("최소 한 개의 SKU를 선택하세요.")
         return
 
-    selected_centers = [str(center) for center in selected_centers if str(center).strip()]
+    selected_centers = [
+        str(center) for center in selected_centers if str(center).strip()
+    ]
     selected_skus = [str(sku) for sku in selected_skus if str(sku).strip()]
-    logger.info(f"필터 적용: 센터 {selected_centers}, SKU {len(selected_skus)}개, 기간 {start_ts} ~ {end_ts}")
+    logger.info(
+        f"필터 적용: 센터 {selected_centers}, SKU {len(selected_skus)}개, 기간 {start_ts} ~ {end_ts}"
+    )
 
     cons_params = get_consumption_params_from_ui()
     lookback_days = int(cons_params.get("lookback_days", 28))
@@ -719,9 +738,7 @@ def main() -> None:
     # ========================================
     # center_latest_dates 계산 (재고 테이블 함수 내부에서 이미 계산됨)
     center_latest_series = (
-        filter_by_centers(snapshot_df, selected_centers)
-        .groupby("center")["date"]
-        .max()
+        filter_by_centers(snapshot_df, selected_centers).groupby("center")["date"].max()
     )
     center_latest_dates = {
         center: ts.normalize()
@@ -729,7 +746,13 @@ def main() -> None:
         if pd.notna(ts)
     }
 
-    visible_skus = display_df.get("SKU", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+    visible_skus = (
+        display_df.get("SKU", pd.Series(dtype=str))
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
 
     render_lot_details(
         visible_skus=visible_skus,

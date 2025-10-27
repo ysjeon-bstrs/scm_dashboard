@@ -96,8 +96,8 @@ def render_inbound_and_wip_tables(
     입고 예정 테이블과 WIP 테이블을 렌더링합니다.
 
     렌더링되는 테이블:
-    1. ✅ 확정 입고 (Upcoming Inbound): 운송 중인 재고
-    2. 🛠 생산중 (WIP): 생산 진행 현황
+    1. ✅ 입고 예정 현황 (Confirmed / In-transit Inbound): 운송 중인 재고
+    2. 🛠 생산 진행 현황 (Manufacturing WIP Status)
 
     Args:
         moves: 이동 원장 데이터프레임
@@ -150,7 +150,7 @@ def render_inbound_and_wip_tables(
     )
 
     # ========================================
-    # 3단계: 확정 입고 필터링 (운송 중)
+    # 3단계: 입고 예정 현황 필터링 (운송 중)
     # ========================================
     # selected_centers를 정규화 (normalize_moves에서 to_center가 정규화되므로)
     normalized_selected_centers = {
@@ -212,9 +212,9 @@ def render_inbound_and_wip_tables(
         )
 
     # ========================================
-    # 6단계: 확정 입고 테이블 렌더링
+    # 6단계: 입고 예정 현황 테이블 렌더링
     # ========================================
-    st.markdown("#### ✅ 확정 입고 (Upcoming Inbound)")
+    st.markdown("#### ✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
 
     if confirmed_inbound.empty:
         st.caption(
@@ -286,9 +286,9 @@ def render_inbound_and_wip_tables(
         )
 
     # ========================================
-    # 7단계: WIP 테이블 렌더링
+    # 7단계: 생산 진행 현황 (WIP) 테이블 렌더링
     # ========================================
-    st.markdown("#### 🛠 생산중 (WIP) 진행 현황")
+    st.markdown("#### 🛠 생산 진행 현황 (Manufacturing WIP Status)")
 
     if not arr_wip.empty:
         if resource_name_map:
@@ -315,6 +315,8 @@ def render_inbound_and_wip_tables(
             "qty_ea",
             "pred_inbound_date",
             "lot",
+            "global_b2c",
+            "global_b2b",
         ]
         wip_cols = [c for c in wip_cols if c in arr_wip.columns]
 
@@ -368,7 +370,7 @@ def render_inventory_table(
         return pd.DataFrame()
 
     latest_dt_str = latest_dt.strftime("%Y-%m-%d")
-    st.subheader(f"선택 센터 현재 재고 (스냅샷 {latest_dt_str} / 전체 SKU)")
+    st.subheader(f"센터별 전체 재고 현황 (스냅샷 {latest_dt_str} / 전체 SKU)")
 
     # ========================================
     # 2단계: 센터별 최신 스냅샷 날짜 계산
