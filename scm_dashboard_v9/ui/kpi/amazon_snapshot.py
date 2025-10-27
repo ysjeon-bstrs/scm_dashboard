@@ -51,12 +51,12 @@ def _coerce_snapshot_frame(
     df = snap_amz.copy()
     cols_lower = {str(c).strip().lower(): c for c in df.columns}
 
+    # snap_time 컬럼 매핑 (date는 fallback용으로 남겨두므로 여기서 제외)
     snap_time_col = (
         cols_lower.get("snap_time")
         or cols_lower.get("snapshot_time")
         or cols_lower.get("snapshot_datetime")
         or cols_lower.get("snapshot_date")
-        or cols_lower.get("date")
     )
     center_col = cols_lower.get("center")
     sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
@@ -98,6 +98,10 @@ def _coerce_snapshot_frame(
         rename_map[sales_col] = "sales_qty"
 
     df = df.rename(columns=rename_map)
+
+    # snap_time 컬럼이 없지만 date 컬럼이 있는 경우, date를 snap_time으로 사용
+    if "snap_time" not in df.columns and "date" in df.columns:
+        df["snap_time"] = df["date"]
 
     required_cols = {"snap_time", "center", "resource_code", "stock_qty"}
     if not required_cols.issubset(df.columns):
