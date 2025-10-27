@@ -388,7 +388,7 @@ def render_sku_summary_cards(
     st.markdown(cards_html, unsafe_allow_html=True)
     st.caption(
         f"※ {pd.to_datetime(latest_snapshot).normalize():%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다.\n"
-        "※ 전체 생산중 재고 합계(파이프라인)은 오늘 이후 완료 예정인 모든 생산분(센터 무관)입니다.\n"
-        "※ 센터별 생산중(30일 내 완료)은 해당 센터 기준, 오늘부터 30일 이내 완료 예정 WIP 합계입니다."
+        "※ 전체 생산 예정 재고 합계는 오늘 이후 완료 예정인 모든 생산분 반영\n"
+        "※ 센터별 생산중(30일 내 완료)은 해당 센터 기준, 오늘부터 30일 이내 완료 예정 생산량 합계"
     )
     return kpi_df

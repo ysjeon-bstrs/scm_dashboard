@@ -43,7 +43,7 @@ def render_step_chart(
     horizon_days: int = 0,
     show_in_transit: bool = True,
     show_wip: bool | None = None,
-    title: str = "선택한 SKU × 센터(및 In‑Transit/WIP) 계단식 재고 흐름",
+    title: str = "센터/SKU별 재고 대시보드",
     snapshot: pd.DataFrame | None = None,
     **kwargs,
 ) -> None:

@@ -506,12 +506,12 @@ def render_amazon_snapshot_kpis(
         cover_str = _fmt_cover_with_delta(cover_days, delta_cover)
 
         metrics: list[_MetricValue] = [
-            _MetricValue("총 재고", total_str, "센터별 총재고 합계"),
+            _MetricValue("총 재고", total_str, "판매가능+고객 주문건+FC 처리중 합계"),
             _MetricValue("판매가능", available_str, "가용재고+FC 재배치 중"),
             _MetricValue("입고처리중", processing_str, "FC 도착 후 재고화 진행 중"),
-            _MetricValue("입고예정", expected_str, "입고예약+FC 도착+재고화 진행중"),
+            _MetricValue("입고예정", expected_str, "FC로 배송 중"),
             _MetricValue("어제 판매", sales_str, "전일 판매량"),
-            _MetricValue("커버일수", cover_str, "총 재고 or 사용가능 ÷ 일평균 수요"),
+            _MetricValue("커버일수", cover_str, "판매가능 ÷ 일평균 수요"),
         ]
 
         # SKU 헤더 (resource_name 포함)
