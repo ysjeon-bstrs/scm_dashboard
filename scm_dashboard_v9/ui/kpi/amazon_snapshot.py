@@ -100,8 +100,11 @@ def _coerce_snapshot_frame(
     df = df.rename(columns=rename_map)
 
     # snap_time 컬럼이 없지만 date 컬럼이 있는 경우, date를 snap_time으로 사용
-    if "snap_time" not in df.columns and "date" in df.columns:
-        df["snap_time"] = df["date"]
+    # cols_lower를 사용하여 case-insensitive 처리 (Date, DATE 등 대응)
+    if "snap_time" not in df.columns:
+        date_col = cols_lower.get("date")
+        if date_col and date_col in df.columns:
+            df["snap_time"] = df[date_col]
 
     required_cols = {"snap_time", "center", "resource_code", "stock_qty"}
     if not required_cols.issubset(df.columns):
@@ -114,8 +117,10 @@ def _coerce_snapshot_frame(
 
     # 개선: 행 단위 폴백 — snap_time 개별 NaT에 대해 date 값을 보완
     # (기존: 전체가 NaT일 때만 date로 대체 → 일부 NaT가 있는 경우 정보 손실)
-    if "date" in df.columns:
-        date_parsed = pd.to_datetime(df.get("date"), errors="coerce")
+    # cols_lower를 사용하여 case-insensitive 처리 (Date, DATE 등 대응)
+    date_col = cols_lower.get("date")
+    if date_col and date_col in df.columns:
+        date_parsed = pd.to_datetime(df.get(date_col), errors="coerce")
         df["snap_time"] = df["snap_time"].fillna(date_parsed)
 
     # dropna 전 snap_time 유효 행수 기록
