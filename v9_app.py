@@ -331,6 +331,25 @@ def _filter_amazon_centers(selected_centers: List[str]) -> List[str]:
     return amazon_centers
 
 
+def _infer_amazon_centers_from_snapshot(snapshot_df: pd.DataFrame) -> List[str]:
+    """Return every Amazon-affiliated center detected in the snapshot."""
+
+    if "center" not in snapshot_df.columns:
+        return []
+
+    centers = snapshot_df["center"].dropna().astype(str).str.strip()
+    amazon_centers = [
+        center
+        for center in centers.unique()
+        if center
+        and (
+            center.upper().startswith("AMZ")
+            or "AMAZON" in center.upper()
+        )
+    ]
+    return sorted(amazon_centers)
+
+
 def _build_amazon_kpi_data(
     *,
     snap_amz: pd.DataFrame,
@@ -392,6 +411,9 @@ def _render_amazon_section(
     lookback_days: int,
     events: List[Dict[str, Any]],
     use_cons_forecast: bool,
+    lag_days: int,
+    horizon_days: int,
+    latest_snapshot_dt: Optional[pd.Timestamp],
 ) -> None:
     """
     Amazon US 판매 vs. 재고 차트 섹션을 렌더링합니다.
@@ -399,76 +421,135 @@ def _render_amazon_section(
     13단계: Amazon US 판매 vs 재고 차트
     """
     amazon_centers = _filter_amazon_centers(selected_centers)
+    fallback_centers: List[str] = []
+    if not amazon_centers:
+        fallback_centers = _infer_amazon_centers_from_snapshot(snapshot_df)
+        amazon_centers = fallback_centers
 
     st.divider()
     st.subheader("Amazon US 대시보드")
 
     if not amazon_centers:
-        st.info("Amazon 계열 센터가 선택되지 않았습니다.")
-    else:
-        sku_colors_map = _sku_color_map(selected_skus)
-        snap_amz = filter_by_centers(snapshot_df, amazon_centers)
+        st.info("Amazon 계열 센터 데이터를 찾을 수 없습니다.")
+        return
 
-        # Amazon KPI 설정 토글
-        # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
-        show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
+    if fallback_centers:
+        st.caption("선택된 센터와 무관하게 Amazon 데이터를 표시합니다.")
 
-        kpi_df, previous_df = _build_amazon_kpi_data(
-            snap_amz=snap_amz,
-            selected_skus=selected_skus,
-            amazon_centers=amazon_centers,
-            show_delta=show_delta,
-        )
+    sku_colors_map = _sku_color_map(selected_skus)
+    snap_amz = filter_by_centers(snapshot_df, amazon_centers)
 
-        # SKU → 품명 매핑
-        amz_resource_name_map = build_resource_name_map(snap_amz)
+    # Amazon KPI 설정 토글
+    # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
+    show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
 
-        render_amazon_snapshot_kpis(
-            kpi_df,
-            sku_colors=sku_colors_map,
-            show_delta=show_delta,
-            previous_df=previous_df,
-            max_cols=4,
-            resource_name_map=amz_resource_name_map,
-        )
+    kpi_df, previous_df = _build_amazon_kpi_data(
+        snap_amz=snap_amz,
+        selected_skus=selected_skus,
+        amazon_centers=amazon_centers,
+        show_delta=show_delta,
+    )
 
-        # 재고 피벗 생성 및 실제/예측 분리
-        amz_inv_pivot = _timeline_inventory_matrix(
-            timeline_for_chart,
-            centers=amazon_centers,
-            skus=selected_skus,
-            start=start_ts,
-            end=end_ts,
-        )
-        mask_actual = None
-        mask_forecast = None
-        if amz_inv_pivot is not None:
-            mask_actual = amz_inv_pivot.index <= today_norm
-            mask_forecast = amz_inv_pivot.index > today_norm
-        inv_actual_from_step = _tidy_from_pivot(amz_inv_pivot, mask_actual)
-        inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
-        # snap_정제 시트의 sales_qty 컬럼을 사용하여 판매 데이터 로드
-        # (snapshot_raw의 fba_output_stock 대신 snap_정제의 sales_qty 사용)
-        amz_ctx = build_amazon_forecast_context(
-            snap_long=snapshot_df,
-            moves=moves_df,
-            snapshot_raw=snapshot_df,  # snap_정제 데이터 전달 (sales_qty 컬럼 포함)
+    # SKU → 품명 매핑
+    amz_resource_name_map = build_resource_name_map(snap_amz)
+
+    render_amazon_snapshot_kpis(
+        kpi_df,
+        sku_colors=sku_colors_map,
+        show_delta=show_delta,
+        previous_df=previous_df,
+        max_cols=4,
+        resource_name_map=amz_resource_name_map,
+    )
+
+    # 재고 피벗 생성 및 실제/예측 분리
+    amz_inv_pivot = _timeline_inventory_matrix(
+        timeline_for_chart,
+        centers=amazon_centers,
+        skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+    )
+
+    amazon_timeline_for_chart: Optional[pd.DataFrame] = timeline_for_chart
+    if amz_inv_pivot is None:
+        amazon_timeline_actual = build_core_timeline(
+            snapshot_df,
+            moves_df,
             centers=amazon_centers,
             skus=selected_skus,
             start=start_ts,
             end=end_ts,
             today=today_norm,
-            lookback_days=int(lookback_days),
-            promotion_events=events,
-            use_consumption_forecast=use_cons_forecast,
+            lag_days=int(lag_days),
+            horizon_days=int(max(0, horizon_days)),
         )
-        render_amazon_sales_vs_inventory(
-            amz_ctx,
-            inv_actual=inv_actual_from_step,
-            inv_forecast=inv_forecast_from_step,
-            sku_colors=sku_colors_map,
-            use_inventory_for_sales=True,
+
+        amazon_timeline_for_chart = amazon_timeline_actual
+        if (
+            use_cons_forecast
+            and amazon_timeline_actual is not None
+            and not amazon_timeline_actual.empty
+        ):
+            cons_start = None
+            if latest_snapshot_dt is not None:
+                cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
+
+            amazon_timeline_forecast = apply_consumption_with_events(
+                amazon_timeline_actual,
+                snapshot_df,
+                centers=amazon_centers,
+                skus=selected_skus,
+                start=start_ts,
+                end=end_ts,
+                lookback_days=lookback_days,
+                events=events,
+                cons_start=cons_start,
+            )
+            if (
+                amazon_timeline_forecast is not None
+                and not amazon_timeline_forecast.empty
+            ):
+                amazon_timeline_for_chart = amazon_timeline_forecast
+
+        amz_inv_pivot = _timeline_inventory_matrix(
+            amazon_timeline_for_chart,
+            centers=amazon_centers,
+            skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
         )
+
+    mask_actual = None
+    mask_forecast = None
+    if amz_inv_pivot is not None:
+        mask_actual = amz_inv_pivot.index <= today_norm
+        mask_forecast = amz_inv_pivot.index > today_norm
+    inv_actual_from_step = _tidy_from_pivot(amz_inv_pivot, mask_actual)
+    inv_forecast_from_step = _tidy_from_pivot(amz_inv_pivot, mask_forecast)
+
+    # snap_정제 시트의 sales_qty 컬럼을 사용하여 판매 데이터 로드
+    # (snapshot_raw의 fba_output_stock 대신 snap_정제의 sales_qty 사용)
+    amz_ctx = build_amazon_forecast_context(
+        snap_long=snapshot_df,
+        moves=moves_df,
+        snapshot_raw=snapshot_df,  # snap_정제 데이터 전달 (sales_qty 컬럼 포함)
+        centers=amazon_centers,
+        skus=selected_skus,
+        start=start_ts,
+        end=end_ts,
+        today=today_norm,
+        lookback_days=int(lookback_days),
+        promotion_events=events,
+        use_consumption_forecast=use_cons_forecast,
+    )
+    render_amazon_sales_vs_inventory(
+        amz_ctx,
+        inv_actual=inv_actual_from_step,
+        inv_forecast=inv_forecast_from_step,
+        sku_colors=sku_colors_map,
+        use_inventory_for_sales=True,
+    )
 
 
 def main() -> None:
@@ -705,6 +786,9 @@ def main() -> None:
         lookback_days=lookback_days,
         events=events,
         use_cons_forecast=use_cons_forecast,
+        lag_days=int(lag_days),
+        horizon_days=int(proj_days_for_build),
+        latest_snapshot_dt=latest_snapshot_dt,
     )
 
     # ========================================
