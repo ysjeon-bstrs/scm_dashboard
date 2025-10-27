@@ -388,7 +388,7 @@ def _render_amazon_section(
     amazon_centers = _filter_amazon_centers(selected_centers)
 
     st.divider()
-    st.subheader("Amazon US 일별 판매 vs. 재고")
+    st.subheader("Amazon US 대시보드")
 
     if not amazon_centers:
         st.info("Amazon 계열 센터가 선택되지 않았습니다.")
