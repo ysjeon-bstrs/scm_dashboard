@@ -420,6 +420,28 @@ def _render_amazon_section(
                 st.write(
                     f"행수: {len(snap_amz):,} · 컬럼: {list(snap_amz.columns)}"
                 )
+                # 원본 스냅샷의 날짜 관련 컬럼 상태 (dtype / non-null / 샘플)
+                raw_date_cols = [c for c in ["snap_time", "date"] if c in snap_amz.columns]
+                if raw_date_cols:
+                    stats_rows = []
+                    for col in raw_date_cols:
+                        non_null = int(snap_amz[col].notna().sum())
+                        sample_vals = (
+                            snap_amz[col]
+                            .dropna()
+                            .astype(str)
+                            .head(10)
+                            .tolist()
+                        )
+                        stats_rows.append(
+                            {
+                                "column": col,
+                                "dtype": str(snap_amz[col].dtype),
+                                "non_null": non_null,
+                                "sample": sample_vals,
+                            }
+                        )
+                    st.write("원본 날짜 컬럼 상태:", pd.DataFrame(stats_rows))
                 st.dataframe(snap_amz.head(200))
 
                 st.caption(
@@ -429,6 +451,19 @@ def _render_amazon_section(
                     f"행수: {len(normalized_debug):,} · 필수컬럼 존재여부: "
                     f"{all(c in normalized_debug.columns for c in ['snap_time','center','resource_code','stock_qty'])}"
                 )
+                # 정규화 후 snap_time 상태 확인
+                if "snap_time" in normalized_debug.columns:
+                    norm_non_null = int(normalized_debug["snap_time"].notna().sum())
+                    norm_sample = (
+                        normalized_debug["snap_time"].dropna().astype(str).head(10).tolist()
+                    )
+                    st.write(
+                        {
+                            "normalized.snap_time.dtype": str(normalized_debug["snap_time"].dtype),
+                            "normalized.snap_time.non_null": norm_non_null,
+                            "normalized.snap_time.sample": norm_sample,
+                        }
+                    )
                 st.dataframe(
                     normalized_debug[
                         [
