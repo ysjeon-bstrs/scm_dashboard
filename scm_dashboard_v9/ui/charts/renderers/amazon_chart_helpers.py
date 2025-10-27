@@ -5,7 +5,7 @@ render_amazon_sales_vs_inventory 함수를 작은 함수들로 분해한 헬퍼�
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pandas as pd

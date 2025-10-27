@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
 import numpy as np
 import pandas as pd

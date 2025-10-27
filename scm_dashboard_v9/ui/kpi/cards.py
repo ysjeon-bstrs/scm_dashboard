@@ -5,7 +5,7 @@ SKU 요약 카드, 센터별 메트릭 카드 등을 렌더링합니다.
 
 from __future__ import annotations
 
-from typing import List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import streamlit as st

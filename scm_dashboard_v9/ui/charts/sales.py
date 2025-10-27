@@ -207,7 +207,7 @@ def sales_from_snapshot_raw(
                     "snapshot_centers": [],
                 }
             )
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     df = snap_raw.copy()
 
@@ -253,7 +253,7 @@ def sales_from_snapshot_raw(
                     "warning": "missing fba_output_stock column",
                 }
             )
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     if "date" not in df.columns:
         centers_for_debug = []
@@ -269,7 +269,7 @@ def sales_from_snapshot_raw(
                     "warning": "missing date column",
                 }
             )
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
     df = df.dropna(subset=["date"])
@@ -325,7 +325,7 @@ def sales_from_snapshot_raw(
         )
 
     if "resource_code" not in df.columns:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     if skus:
         sku_set = {str(s) for s in skus if str(s).strip()}
@@ -333,14 +333,14 @@ def sales_from_snapshot_raw(
             df = df[df["resource_code"].astype(str).isin(sku_set)]
 
     if df.empty:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
 
     df = df[(df["date"] >= start_norm) & (df["date"] <= end_norm)]
     if df.empty:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     grouped = (
         df.groupby(["date", "resource_code"], as_index=False)["fba_output_stock"].sum()
@@ -493,12 +493,12 @@ def sales_from_snapshot_decays(
     end: pd.Timestamp,
 ) -> pd.DataFrame:
     if snap_like is None or snap_like.empty:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     centers_list = [str(c) for c in centers if str(c).strip()]
     skus_list = [str(s) for s in skus if str(s).strip()]
     if not centers_list or not skus_list:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     matrix = sales_from_snapshot(
         snap_like,
@@ -509,7 +509,7 @@ def sales_from_snapshot_decays(
     )
 
     if matrix is None or matrix.empty:
-        return _empty_sales_frame()
+        return empty_sales_frame()
 
     tidy = (
         matrix.reset_index()
