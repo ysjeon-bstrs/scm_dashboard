@@ -30,6 +30,7 @@ from .context_helpers import (
     apply_stock_depletion,
 )
 
+
 def build_amazon_forecast_context(
     *,
     snap_long: pd.DataFrame,
@@ -48,7 +49,9 @@ def build_amazon_forecast_context(
 
     empty_inv = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
     empty_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
-    snapshot_raw_df = snapshot_raw.copy() if snapshot_raw is not None else pd.DataFrame()
+    snapshot_raw_df = (
+        snapshot_raw.copy() if snapshot_raw is not None else pd.DataFrame()
+    )
     snapshot_long_df = snap_long.copy()
     moves_df = moves.copy() if moves is not None else pd.DataFrame()
 
@@ -138,7 +141,9 @@ def build_amazon_forecast_context(
             inv_projected = projected.copy()
 
     inv_projected = inv_projected[inv_projected["center"].isin(center_list)].copy()
-    inv_projected["date"] = pd.to_datetime(inv_projected["date"], errors="coerce").dt.normalize()
+    inv_projected["date"] = pd.to_datetime(
+        inv_projected["date"], errors="coerce"
+    ).dt.normalize()
     inv_projected["stock_qty"] = pd.to_numeric(
         inv_projected.get("stock_qty"), errors="coerce"
     ).fillna(0)
@@ -146,7 +151,9 @@ def build_amazon_forecast_context(
     inv_forecast = inv_projected[inv_projected["date"] >= today_norm].copy()
 
     inv_actual["stock_qty"] = inv_actual["stock_qty"].round().clip(lower=0).astype(int)
-    inv_forecast["stock_qty"] = inv_forecast["stock_qty"].round().clip(lower=0).astype(int)
+    inv_forecast["stock_qty"] = (
+        inv_forecast["stock_qty"].round().clip(lower=0).astype(int)
+    )
 
     sales_source = snapshot_raw_df.copy()
     sales_hist = load_amazon_daily_sales_from_snapshot_raw(
@@ -155,7 +162,9 @@ def build_amazon_forecast_context(
         skus=sku_list,
     )
     if not sales_hist.empty:
-        sales_hist = sales_hist[(sales_hist["date"] >= start_norm) & (sales_hist["date"] <= today_norm)]
+        sales_hist = sales_hist[
+            (sales_hist["date"] >= start_norm) & (sales_hist["date"] <= today_norm)
+        ]
     sales_hist = process_sales_history(sales_hist, center_list, sku_list)
 
     future_index = (
@@ -194,7 +203,9 @@ def build_amazon_forecast_context(
         .astype(int)
     )
 
-    sales_ma7["sales_ea"] = pd.to_numeric(sales_ma7.get("sales_ea"), errors="coerce").fillna(0.0)
+    sales_ma7["sales_ea"] = pd.to_numeric(
+        sales_ma7.get("sales_ea"), errors="coerce"
+    ).fillna(0.0)
 
     return AmazonForecastContext(
         start=start_norm,
@@ -204,14 +215,18 @@ def build_amazon_forecast_context(
         skus=sku_list,
         inv_actual=inv_actual.reset_index(drop=True),
         inv_forecast=inv_forecast.reset_index(drop=True),
-        sales_hist=sales_hist.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
-        sales_ma7=sales_ma7.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
-        sales_forecast=sales_forecast.sort_values(["center", "resource_code", "date"]).reset_index(drop=True),
+        sales_hist=sales_hist.sort_values(
+            ["center", "resource_code", "date"]
+        ).reset_index(drop=True),
+        sales_ma7=sales_ma7.sort_values(
+            ["center", "resource_code", "date"]
+        ).reset_index(drop=True),
+        sales_forecast=sales_forecast.sort_values(
+            ["center", "resource_code", "date"]
+        ).reset_index(drop=True),
         snapshot_raw=snapshot_raw_df.reset_index(drop=True),
         snapshot_long=snapshot_long_df.reset_index(drop=True),
         moves=moves_df.reset_index(drop=True),
         lookback_days=int(lookback_days),
         promotion_multiplier=float(promo_multiplier),
     )
-
-

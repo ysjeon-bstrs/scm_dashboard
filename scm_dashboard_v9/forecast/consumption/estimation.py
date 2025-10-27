@@ -57,9 +57,7 @@ def estimate_daily_consumption(
         if series.empty:
             continue
 
-        ts = (
-            series.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
-        )
+        ts = series.set_index("date")["stock_qty"].astype(float).asfreq("D").ffill()
         if ts.dropna().shape[0] < max(7, lookback_days // 2):
             continue
         x = np.arange(len(ts), dtype=float)
@@ -71,8 +69,6 @@ def estimate_daily_consumption(
         if rate > 0:
             rates[(ct, sku)] = float(rate)
     return rates
-
-
 
 
 def apply_consumption_with_events(
@@ -167,7 +163,9 @@ def apply_consumption_with_events(
             t = pd.to_datetime(event.get("end"), errors="coerce")
             u = min(
                 CONFIG.consumption.max_promo_uplift,
-                max(CONFIG.consumption.min_promo_uplift, float(event.get("uplift", 0.0)))
+                max(
+                    CONFIG.consumption.min_promo_uplift, float(event.get("uplift", 0.0))
+                ),
             )
             if pd.notna(s) and pd.notna(t):
                 s = s.normalize()
@@ -225,9 +223,6 @@ def apply_consumption_with_events(
     )
     combined["stock_qty"] = combined["stock_qty"].fillna(0)
     combined["stock_qty"] = combined["stock_qty"].replace([np.inf, -np.inf], 0)
-    combined["stock_qty"] = (
-        combined["stock_qty"].round().clip(lower=0).astype(int)
-    )
+    combined["stock_qty"] = combined["stock_qty"].round().clip(lower=0).astype(int)
 
     return combined
-

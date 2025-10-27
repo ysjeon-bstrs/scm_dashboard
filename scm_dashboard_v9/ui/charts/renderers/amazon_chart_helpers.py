@@ -175,10 +175,7 @@ def normalize_snapshot_data(
     df["stock_qty"] = pd.to_numeric(df.get("stock_qty"), errors="coerce").fillna(0)
     df["sales_qty"] = pd.to_numeric(df.get("sales_qty"), errors="coerce").fillna(0)
 
-    df = df[
-        df["center"].isin(target_centers)
-        & df["resource_code"].isin(skus)
-    ].copy()
+    df = df[df["center"].isin(target_centers) & df["resource_code"].isin(skus)].copy()
 
     return df
 
@@ -207,7 +204,13 @@ def process_moves_data(
     if not moves_df.empty:
         mv_cols = {str(c).lower(): c for c in moves_df.columns}
         rename_moves = {mv_cols.get("event_date", "event_date"): "event_date"}
-        for name in ["to_center", "resource_code", "qty_ea", "arrival_date", "eta_date"]:
+        for name in [
+            "to_center",
+            "resource_code",
+            "qty_ea",
+            "arrival_date",
+            "eta_date",
+        ]:
             if name in mv_cols:
                 rename_moves[mv_cols[name]] = name
         moves_df = moves_df.rename(columns=rename_moves)
@@ -232,7 +235,9 @@ def process_moves_data(
         moves_df = moves_df.dropna(subset=["event_date"])
         moves_df["to_center"] = moves_df.get("to_center", "").astype(str)
         moves_df["resource_code"] = moves_df.get("resource_code", "").astype(str)
-        moves_df["qty_ea"] = pd.to_numeric(moves_df.get("qty_ea"), errors="coerce").fillna(0)
+        moves_df["qty_ea"] = pd.to_numeric(
+            moves_df.get("qty_ea"), errors="coerce"
+        ).fillna(0)
         moves_df = moves_df[
             moves_df["to_center"].isin(target_centers)
             & moves_df["resource_code"].isin(skus)
@@ -243,7 +248,9 @@ def process_moves_data(
         moves_df = pd.DataFrame(columns=["event_date", "resource_code", "qty_ea"])
 
     inbound = (
-        moves_df.groupby(["resource_code", "event_date"], as_index=False)["qty_ea"].sum()
+        moves_df.groupby(["resource_code", "event_date"], as_index=False)[
+            "qty_ea"
+        ].sum()
         if not moves_df.empty
         else pd.DataFrame(columns=["resource_code", "event_date", "qty_ea"])
     )
@@ -280,7 +287,9 @@ def process_inventory_forecast(
             inv_forecast_ctx.get("date"), errors="coerce"
         ).dt.normalize()
         inv_forecast_ctx["center"] = inv_forecast_ctx.get("center", "").astype(str)
-        inv_forecast_ctx["resource_code"] = inv_forecast_ctx.get("resource_code", "").astype(str)
+        inv_forecast_ctx["resource_code"] = inv_forecast_ctx.get(
+            "resource_code", ""
+        ).astype(str)
         inv_forecast_ctx["stock_qty"] = pd.to_numeric(
             inv_forecast_ctx.get("stock_qty"), errors="coerce"
         ).fillna(0.0)
@@ -291,11 +300,9 @@ def process_inventory_forecast(
             & (inv_forecast_ctx["date"] <= end)
         ]
         if not inv_forecast_ctx.empty:
-            grouped = (
-                inv_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
-                    "stock_qty"
-                ].sum()
-            )
+            grouped = inv_forecast_ctx.groupby(
+                ["date", "resource_code"], as_index=False
+            )["stock_qty"].sum()
             fallback_inv_rows.append(grouped)
             missing_inv_skus = missing_inv_skus - set(grouped["resource_code"].unique())
 
@@ -331,9 +338,9 @@ def process_sales_forecast(
             sales_forecast_ctx.get("date"), errors="coerce"
         ).dt.normalize()
         sales_forecast_ctx["center"] = sales_forecast_ctx.get("center", "").astype(str)
-        sales_forecast_ctx["resource_code"] = (
-            sales_forecast_ctx.get("resource_code", "").astype(str)
-        )
+        sales_forecast_ctx["resource_code"] = sales_forecast_ctx.get(
+            "resource_code", ""
+        ).astype(str)
         value_col: str | None = None
         if "sales_ea" in sales_forecast_ctx.columns:
             value_col = "sales_ea"
@@ -352,9 +359,9 @@ def process_sales_forecast(
             ]
             if not sales_forecast_ctx.empty:
                 grouped_sales = (
-                    sales_forecast_ctx.groupby(["date", "resource_code"], as_index=False)[
-                        value_col
-                    ].sum()
+                    sales_forecast_ctx.groupby(
+                        ["date", "resource_code"], as_index=False
+                    )[value_col].sum()
                 ).rename(columns={value_col: "sales_qty"})
                 fallback_sales_rows.append(grouped_sales)
                 missing_sales_skus = missing_sales_skus - set(
@@ -400,8 +407,9 @@ def generate_fallback_forecasts(
         base_stock = float(last_stock_by_sku.get(sku, 0.0))
         inbound_map = {
             pd.to_datetime(day): float(qty)
-            for day, qty in inbound[inbound["resource_code"] == sku][["event_date", "qty_ea"]]
-            .itertuples(index=False, name=None)
+            for day, qty in inbound[inbound["resource_code"] == sku][
+                ["event_date", "qty_ea"]
+            ].itertuples(index=False, name=None)
         }
 
         daily_demand = avg_demand_by_sku.get(sku, 0.0) * promo_multiplier
@@ -485,22 +493,36 @@ def finalize_forecast_dataframes(
         else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
     )
 
-    inv_actual_df = normalize_inventory_frame(inv_actual_snapshot, default_center=default_center)
-    inv_forecast_df = normalize_inventory_frame(inv_forecast_df, default_center=default_center)
+    inv_actual_df = normalize_inventory_frame(
+        inv_actual_snapshot, default_center=default_center
+    )
+    inv_forecast_df = normalize_inventory_frame(
+        inv_forecast_df, default_center=default_center
+    )
 
     override_inventory = False
     if inv_actual is not None:
         override_inventory = True
-        inv_actual_df = normalize_inventory_frame(inv_actual, default_center=default_center)
+        inv_actual_df = normalize_inventory_frame(
+            inv_actual, default_center=default_center
+        )
     if inv_forecast is not None:
         override_inventory = True
-        inv_forecast_df = normalize_inventory_frame(inv_forecast, default_center=default_center)
+        inv_forecast_df = normalize_inventory_frame(
+            inv_forecast, default_center=default_center
+        )
 
     if override_inventory and inv_forecast is None:
         # When only actuals are injected we should not keep stale fallback forecasts.
-        inv_forecast_df = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        inv_forecast_df = pd.DataFrame(
+            columns=["date", "center", "resource_code", "stock_qty"]
+        )
 
-    if use_inventory_for_sales and not inv_actual_df.empty and not inv_forecast_df.empty:
+    if (
+        use_inventory_for_sales
+        and not inv_actual_df.empty
+        and not inv_forecast_df.empty
+    ):
         derived_sales = sales_forecast_from_inventory_projection(
             inv_actual_df,
             inv_forecast_df,
@@ -556,10 +578,9 @@ def add_anchor_to_forecast(
                 [anchor[["date", "resource_code", "stock_qty"]], inv_forecast_df],
                 ignore_index=True,
             )
-            inv_forecast_df = (
-                inv_forecast_df.sort_values(["resource_code", "date"])
-                .drop_duplicates(subset=["resource_code", "date"], keep="last")
-            )
+            inv_forecast_df = inv_forecast_df.sort_values(
+                ["resource_code", "date"]
+            ).drop_duplicates(subset=["resource_code", "date"], keep="last")
 
     return inv_forecast_df
 
@@ -572,7 +593,9 @@ def trim_data_to_display_range(
     ma: Optional[pd.DataFrame],
     display_start: pd.Timestamp,
     display_end: pd.Timestamp,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+) -> tuple[
+    pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]
+]:
     """모든 데이터를 표시 범위로 슬라이스합니다.
 
     Args:
@@ -587,6 +610,7 @@ def trim_data_to_display_range(
     Returns:
         tuple: (inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma) - trimmed
     """
+
     def _trim_range(df_in: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
         if df_in is None or df_in.empty:
             return df_in

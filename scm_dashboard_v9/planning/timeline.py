@@ -10,7 +10,12 @@ import pandas as pd
 from ..domain.models import MoveTable, SnapshotTable, TimelineBundle
 from ..domain.normalization import normalize_moves, normalize_snapshot
 from .schedule import annotate_move_schedule
-from .series import SeriesIndex, build_center_series, build_in_transit_series, build_wip_series
+from .series import (
+    SeriesIndex,
+    build_center_series,
+    build_in_transit_series,
+    build_wip_series,
+)
 
 
 @dataclass(frozen=True)
@@ -81,7 +86,9 @@ class TimelineBuilder:
             index=index,
         )
 
-        return TimelineBundle(center_lines=center_lines, in_transit_lines=in_transit, wip_lines=wip)
+        return TimelineBundle(
+            center_lines=center_lines, in_transit_lines=in_transit, wip_lines=wip
+        )
 
 
 def prepare_moves(

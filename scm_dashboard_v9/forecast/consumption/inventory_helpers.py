@@ -16,7 +16,15 @@ def validate_and_prepare_forecast_inputs(
     timeline_center: pd.DataFrame,
     start: pd.Timestamp,
     end: pd.Timestamp,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str], list[str], pd.DatetimeIndex, pd.Timestamp, pd.Timestamp]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    list[str],
+    list[str],
+    pd.DatetimeIndex,
+    pd.Timestamp,
+    pd.Timestamp,
+]:
     """예측 입력 데이터를 검증하고 준비합니다.
 
     Returns:
@@ -31,17 +39,30 @@ def validate_and_prepare_forecast_inputs(
 
     # Sales history 준비
     if daily_sales is None or daily_sales.empty:
-        sales_history = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+        sales_history = pd.DataFrame(
+            columns=["date", "center", "resource_code", "sales_ea"]
+        )
     else:
         sales_history = daily_sales.copy()
         rename_map = {col.lower(): col for col in sales_history.columns}
         if "date" not in sales_history.columns and "snapshot_date" in rename_map:
-            sales_history = sales_history.rename(columns={rename_map["snapshot_date"]: "date"})
+            sales_history = sales_history.rename(
+                columns={rename_map["snapshot_date"]: "date"}
+            )
         if "center" not in sales_history.columns and "center" in rename_map:
-            sales_history = sales_history.rename(columns={rename_map["center"]: "center"})
-        if "resource_code" not in sales_history.columns and "resource_code" in rename_map:
-            sales_history = sales_history.rename(columns={rename_map["resource_code"]: "resource_code"})
-        sales_history["date"] = pd.to_datetime(sales_history["date"], errors="coerce").dt.normalize()
+            sales_history = sales_history.rename(
+                columns={rename_map["center"]: "center"}
+            )
+        if (
+            "resource_code" not in sales_history.columns
+            and "resource_code" in rename_map
+        ):
+            sales_history = sales_history.rename(
+                columns={rename_map["resource_code"]: "resource_code"}
+            )
+        sales_history["date"] = pd.to_datetime(
+            sales_history["date"], errors="coerce"
+        ).dt.normalize()
         if "sales_ea" not in sales_history.columns:
             value_col = None
             for candidate in sales_history.columns:
@@ -62,7 +83,9 @@ def validate_and_prepare_forecast_inputs(
     timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce").dt.normalize()
     timeline["center"] = timeline.get("center", "").astype(str)
     timeline["resource_code"] = timeline.get("resource_code", "").astype(str)
-    timeline["stock_qty"] = pd.to_numeric(timeline.get("stock_qty"), errors="coerce").fillna(0)
+    timeline["stock_qty"] = pd.to_numeric(
+        timeline.get("stock_qty"), errors="coerce"
+    ).fillna(0)
 
     center_set = timeline["center"].dropna().astype(str).unique().tolist()
     sku_set = timeline["resource_code"].dropna().astype(str).unique().tolist()
@@ -95,7 +118,9 @@ def calculate_baseline_rates(
     # Filtered sales 준비
     sku_mask = sales_history.get("resource_code")
     if sku_mask is None:
-        filtered_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+        filtered_sales = pd.DataFrame(
+            columns=["date", "center", "resource_code", "sales_ea"]
+        )
     else:
         sku_mask = sales_history["resource_code"].astype(str).isin(sku_set)
         if "center" in sales_history.columns:
@@ -125,15 +150,12 @@ def calculate_baseline_rates(
             .sum()
             .sort_values("date")
         )
-        pivot = (
-            grouped_sales.pivot_table(
-                index="date",
-                columns=["center", "resource_code"],
-                values="sales_ea",
-                aggfunc="sum",
-            )
-            .sort_index()
-        )
+        pivot = grouped_sales.pivot_table(
+            index="date",
+            columns=["center", "resource_code"],
+            values="sales_ea",
+            aggfunc="sum",
+        ).sort_index()
         pivot.index = pd.DatetimeIndex(pivot.index)
         pivot = pivot.asfreq("D", fill_value=0)
 
@@ -249,19 +271,27 @@ def combine_forecast_results(
         else pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
     )
 
-    forecast_sales["date"] = pd.to_datetime(forecast_sales["date"], errors="coerce").dt.normalize()
-    forecast_inv["date"] = pd.to_datetime(forecast_inv["date"], errors="coerce").dt.normalize()
+    forecast_sales["date"] = pd.to_datetime(
+        forecast_sales["date"], errors="coerce"
+    ).dt.normalize()
+    forecast_inv["date"] = pd.to_datetime(
+        forecast_inv["date"], errors="coerce"
+    ).dt.normalize()
 
-    forecast_sales["sales_ea"] = forecast_sales["sales_ea"].fillna(0).round().clip(lower=0).astype(int)
-    forecast_inv["stock_qty"] = forecast_inv["stock_qty"].fillna(0).round().clip(lower=0).astype(int)
+    forecast_sales["sales_ea"] = (
+        forecast_sales["sales_ea"].fillna(0).round().clip(lower=0).astype(int)
+    )
+    forecast_inv["stock_qty"] = (
+        forecast_inv["stock_qty"].fillna(0).round().clip(lower=0).astype(int)
+    )
 
     history = filtered_sales[["date", "center", "resource_code", "sales_ea"]].copy()
     history["sales_ea"] = pd.to_numeric(history["sales_ea"], errors="coerce").fillna(0)
     history["sales_ea"] = history["sales_ea"].round().clip(lower=0).astype(int)
 
     combined_sales = pd.concat([history, forecast_sales], ignore_index=True)
-    combined_sales = combined_sales.sort_values(["resource_code", "date"]).drop_duplicates(
-        subset=["date", "center", "resource_code"], keep="last"
-    )
+    combined_sales = combined_sales.sort_values(
+        ["resource_code", "date"]
+    ).drop_duplicates(subset=["date", "center", "resource_code"], keep="last")
 
     return combined_sales.reset_index(drop=True), forecast_inv.reset_index(drop=True)

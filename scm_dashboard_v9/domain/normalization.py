@@ -5,6 +5,7 @@
 표준화하는 함수들을 제공합니다. 모든 날짜는 자정(00:00:00)으로
 정규화되며, 문자열/숫자 컬럼은 일관된 타입으로 변환됩니다.
 """
+
 from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence
@@ -14,7 +15,13 @@ import pandas as pd
 from center_alias import normalize_center_value
 
 # 기본적으로 정규화할 날짜 컬럼 목록
-DATE_COLUMNS = ("onboard_date", "arrival_date", "eta_date", "inbound_date", "event_date")
+DATE_COLUMNS = (
+    "onboard_date",
+    "arrival_date",
+    "eta_date",
+    "inbound_date",
+    "event_date",
+)
 
 
 # Common column aliases observed in upstream move ledgers. The lists should
@@ -86,9 +93,7 @@ MOVE_COLUMN_ALIASES: dict[str, Sequence[str]] = {
 
 
 def normalize_dates(
-    frame: pd.DataFrame,
-    *,
-    columns: Iterable[str] = DATE_COLUMNS
+    frame: pd.DataFrame, *, columns: Iterable[str] = DATE_COLUMNS
 ) -> pd.DataFrame:
     """
     지정된 날짜 컬럼들을 datetime64 타입으로 변환하고 자정으로 정규화합니다.
@@ -227,32 +232,50 @@ def normalize_moves(frame: pd.DataFrame) -> pd.DataFrame:
     # 2단계: carrier_mode (운송 방식) 정규화
     # ========================================
     # 컬럼이 없으면 빈 문자열로 채운 시리즈 생성
-    carrier_src = out["carrier_mode"] if "carrier_mode" in out.columns else pd.Series("", index=out.index)
+    carrier_src = (
+        out["carrier_mode"]
+        if "carrier_mode" in out.columns
+        else pd.Series("", index=out.index)
+    )
     # 문자열로 변환하고 대문자/공백 정리 (예: "sea" -> "SEA")
     out["carrier_mode"] = carrier_src.astype(str).str.strip().str.upper()
 
     # ========================================
     # 3단계: resource_code (SKU) 정규화
     # ========================================
-    resource_src = out["resource_code"] if "resource_code" in out.columns else pd.Series("", index=out.index)
+    resource_src = (
+        out["resource_code"]
+        if "resource_code" in out.columns
+        else pd.Series("", index=out.index)
+    )
     out["resource_code"] = resource_src.astype(str).str.strip()
 
     # ========================================
     # 4단계: from_center (출발 센터) 정규화
     # ========================================
-    from_src = out["from_center"] if "from_center" in out.columns else pd.Series("", index=out.index)
+    from_src = (
+        out["from_center"]
+        if "from_center" in out.columns
+        else pd.Series("", index=out.index)
+    )
     out["from_center"] = _normalise_center_series(from_src)
 
     # ========================================
     # 5단계: to_center (목적지 센터) 정규화
     # ========================================
-    to_src = out["to_center"] if "to_center" in out.columns else pd.Series("", index=out.index)
+    to_src = (
+        out["to_center"]
+        if "to_center" in out.columns
+        else pd.Series("", index=out.index)
+    )
     out["to_center"] = _normalise_center_series(to_src)
 
     # ========================================
     # 6단계: qty_ea (수량) 정규화
     # ========================================
-    qty_src = out["qty_ea"] if "qty_ea" in out.columns else pd.Series(0, index=out.index)
+    qty_src = (
+        out["qty_ea"] if "qty_ea" in out.columns else pd.Series(0, index=out.index)
+    )
     # 숫자로 변환 (변환 실패 시 NaN -> 0으로 대체)
     out["qty_ea"] = (
         pd.to_numeric(qty_src.astype(str).str.replace(",", ""), errors="coerce")
@@ -309,9 +332,13 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
 
     date_col = _pick_column(["date", "snapshot_date"])
     center_col = _pick_column(["center", "센터", "창고", "warehouse"])
-    resource_col = _pick_column(["resource_code", "resource_cc", "sku", "상품코드", "product_code"])
+    resource_col = _pick_column(
+        ["resource_code", "resource_cc", "sku", "상품코드", "product_code"]
+    )
     stock_col = _pick_column(["stock_qty", "qty", "수량", "재고", "quantity"])
-    sales_col = _pick_column(["sales_qty", "sale_qty", "판매량", "출고수량", "출고", "출고 수량", "sales_ea"])
+    sales_col = _pick_column(
+        ["sales_qty", "sale_qty", "판매량", "출고수량", "출고", "출고 수량", "sales_ea"]
+    )
     name_col = _pick_column(["resource_name", "품명", "상품명", "product_name"])
 
     # Amazon FBA 스냅샷 전용 컬럼 (선택적)
@@ -319,10 +346,14 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     expected_col = _pick_column(["stock_expected", "expected_qty", "입고예정"])
     processing_col = _pick_column(["stock_processing", "processing_qty", "입고처리중"])
     snap_time_col = _pick_column(["snap_time", "snapshot_time", "snapshot_datetime"])
-    pending_fc_col = _pick_column(["pending_fc", "pending_fc_qty", "fc_pending", "pending at fc"])  # 신규 컬럼
+    pending_fc_col = _pick_column(
+        ["pending_fc", "pending_fc_qty", "fc_pending", "pending at fc"]
+    )  # 신규 컬럼
 
     if not date_col or not center_col or not resource_col or not stock_col:
-        raise KeyError("snapshot frame must include date/center/resource_code/stock_qty columns")
+        raise KeyError(
+            "snapshot frame must include date/center/resource_code/stock_qty columns"
+        )
 
     rename_map = {
         date_col: "date",
@@ -350,12 +381,20 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     out = out.rename(columns=rename_map)
 
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
-    out["center"] = _normalise_center_series(out.get("center", pd.Series("", index=out.index)))
-    out["resource_code"] = out.get("resource_code", pd.Series("", index=out.index)).astype(str).str.strip()
-    out["stock_qty"] = pd.to_numeric(out.get("stock_qty"), errors="coerce").fillna(0.0).astype(float)
+    out["center"] = _normalise_center_series(
+        out.get("center", pd.Series("", index=out.index))
+    )
+    out["resource_code"] = (
+        out.get("resource_code", pd.Series("", index=out.index)).astype(str).str.strip()
+    )
+    out["stock_qty"] = (
+        pd.to_numeric(out.get("stock_qty"), errors="coerce").fillna(0.0).astype(float)
+    )
 
     if "sales_qty" in out.columns:
-        out["sales_qty"] = pd.to_numeric(out.get("sales_qty"), errors="coerce").fillna(0).astype(int)
+        out["sales_qty"] = (
+            pd.to_numeric(out.get("sales_qty"), errors="coerce").fillna(0).astype(int)
+        )
     else:
         out["sales_qty"] = 0
 
@@ -369,13 +408,29 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
 
     # Amazon FBA 컬럼 타입 변환 (선택적) - 모두 float 보장
     if "stock_available" in out.columns:
-        out["stock_available"] = pd.to_numeric(out.get("stock_available"), errors="coerce").fillna(0.0).astype(float)
+        out["stock_available"] = (
+            pd.to_numeric(out.get("stock_available"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
     if "stock_expected" in out.columns:
-        out["stock_expected"] = pd.to_numeric(out.get("stock_expected"), errors="coerce").fillna(0.0).astype(float)
+        out["stock_expected"] = (
+            pd.to_numeric(out.get("stock_expected"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
     if "stock_processing" in out.columns:
-        out["stock_processing"] = pd.to_numeric(out.get("stock_processing"), errors="coerce").fillna(0.0).astype(float)
+        out["stock_processing"] = (
+            pd.to_numeric(out.get("stock_processing"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
     if "pending_fc" in out.columns:
-        out["pending_fc"] = pd.to_numeric(out.get("pending_fc"), errors="coerce").fillna(0.0).astype(float)
+        out["pending_fc"] = (
+            pd.to_numeric(out.get("pending_fc"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
     if "snap_time" in out.columns:
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
@@ -385,7 +440,15 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     # 기본 컬럼
     columns = ["date", "center", "resource_code", "stock_qty"]
     # 선택적 컬럼 추가
-    for optional_col in ["sales_qty", "resource_name", "stock_available", "stock_expected", "stock_processing", "pending_fc", "snap_time"]:
+    for optional_col in [
+        "sales_qty",
+        "resource_name",
+        "stock_available",
+        "stock_expected",
+        "stock_processing",
+        "pending_fc",
+        "snap_time",
+    ]:
         if optional_col in out.columns:
             columns.append(optional_col)
 

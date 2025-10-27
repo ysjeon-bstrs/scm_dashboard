@@ -64,7 +64,9 @@ def normalize_inputs(
     return center_list, sku_list, start_norm, end_norm, today_norm
 
 
-def calculate_latest_snapshot(snap_long: pd.DataFrame, today_norm: pd.Timestamp) -> pd.Timestamp:
+def calculate_latest_snapshot(
+    snap_long: pd.DataFrame, today_norm: pd.Timestamp
+) -> pd.Timestamp:
     """스냅샷에서 최신 날짜를 계산합니다.
 
     Args:
@@ -108,12 +110,16 @@ def process_inventory_data(
     """
     timeline = timeline[timeline["center"].isin(center_list)].copy()
     timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce").dt.normalize()
-    timeline["stock_qty"] = pd.to_numeric(timeline.get("stock_qty"), errors="coerce").fillna(0)
+    timeline["stock_qty"] = pd.to_numeric(
+        timeline.get("stock_qty"), errors="coerce"
+    ).fillna(0)
 
     inv_actual = timeline[timeline["date"] <= today_norm].copy()
 
     if not inv_actual.empty:
-        last_actual_dates = inv_actual.groupby(["center", "resource_code"])["date"].max()
+        last_actual_dates = inv_actual.groupby(["center", "resource_code"])[
+            "date"
+        ].max()
         mask = inv_actual.set_index(["center", "resource_code", "date"]).index.isin(
             [(c, r, d) for (c, r), d in last_actual_dates.items()]
         )
@@ -140,11 +146,16 @@ def process_sales_history(
         pd.DataFrame: 정규화된 판매 이력
     """
     sales_hist = sales_hist.copy()
-    sales_hist["date"] = pd.to_datetime(sales_hist.get("date"), errors="coerce").dt.normalize()
-    sales_hist["sales_ea"] = pd.to_numeric(sales_hist.get("sales_ea"), errors="coerce").fillna(0).astype(int)
+    sales_hist["date"] = pd.to_datetime(
+        sales_hist.get("date"), errors="coerce"
+    ).dt.normalize()
+    sales_hist["sales_ea"] = (
+        pd.to_numeric(sales_hist.get("sales_ea"), errors="coerce").fillna(0).astype(int)
+    )
     sales_hist = sales_hist.dropna(subset=["date"])
     sales_hist = sales_hist[
-        (sales_hist["center"].isin(center_list)) & (sales_hist["resource_code"].isin(sku_list))
+        (sales_hist["center"].isin(center_list))
+        & (sales_hist["resource_code"].isin(sku_list))
     ]
 
     return sales_hist
@@ -245,19 +256,16 @@ def build_inbound_lookup(
         ]
 
         if not inbound_norm.empty:
-            inbound_grouped = (
-                inbound_norm.groupby(
-                    ["to_center", "resource_code", "event_date"],
-                    as_index=False,
-                )["qty_ea"].sum()
-            )
+            inbound_grouped = inbound_norm.groupby(
+                ["to_center", "resource_code", "event_date"],
+                as_index=False,
+            )["qty_ea"].sum()
 
             for (ct, sku), chunk in inbound_grouped.groupby(
                 ["to_center", "resource_code"], dropna=True
             ):
-                series = (
-                    chunk.set_index("event_date")["qty_ea"]
-                    .reindex(future_index, fill_value=0.0)
+                series = chunk.set_index("event_date")["qty_ea"].reindex(
+                    future_index, fill_value=0.0
                 )
                 inbound_lookup[(ct, sku)] = series
 
@@ -291,7 +299,9 @@ def calculate_promotion_uplift(
             s_norm = max(start_evt.normalize(), future_index[0])
             e_norm = min(end_evt.normalize(), future_index[-1])
             if s_norm <= e_norm:
-                uplift.loc[s_norm:e_norm] = uplift.loc[s_norm:e_norm] * (1.0 + uplift_val)
+                uplift.loc[s_norm:e_norm] = uplift.loc[s_norm:e_norm] * (
+                    1.0 + uplift_val
+                )
 
     return uplift
 
@@ -328,18 +338,16 @@ def generate_sales_forecasts(
 
     hist_index = pd.date_range(start_norm, today_norm, freq="D")
 
-    for (center, sku), group in sales_hist.groupby(["center", "resource_code"], dropna=True):
+    for (center, sku), group in sales_hist.groupby(
+        ["center", "resource_code"], dropna=True
+    ):
         series = (
             group.sort_values("date")
             .set_index("date")["sales_ea"]
             .reindex(hist_index, fill_value=0.0)
         )
         ma7 = series.rolling(7, min_periods=1).mean()
-        ma_df = (
-            ma7.to_frame("sales_ea")
-            .reset_index()
-            .rename(columns={"index": "date"})
-        )
+        ma_df = ma7.to_frame("sales_ea").reset_index().rename(columns={"index": "date"})
         ma_df["center"] = center
         ma_df["resource_code"] = sku
         sales_ma7_frames.append(ma_df)
@@ -370,14 +378,18 @@ def generate_sales_forecasts(
         if sales_ma7_frames
         else empty_sales.copy()
     )
-    sales_ma7["date"] = pd.to_datetime(sales_ma7.get("date"), errors="coerce").dt.normalize()
+    sales_ma7["date"] = pd.to_datetime(
+        sales_ma7.get("date"), errors="coerce"
+    ).dt.normalize()
 
     sales_forecast = (
         pd.concat(sales_fc_frames, ignore_index=True)
         if sales_fc_frames
         else empty_sales.copy()
     )
-    sales_forecast["date"] = pd.to_datetime(sales_forecast.get("date"), errors="coerce").dt.normalize()
+    sales_forecast["date"] = pd.to_datetime(
+        sales_forecast.get("date"), errors="coerce"
+    ).dt.normalize()
 
     return sales_ma7, sales_forecast
 
@@ -403,15 +415,14 @@ def apply_stock_depletion(
     depletion_dates: dict[tuple[str, str], pd.Timestamp] = {}
     tol = 1e-6
 
-    for (center, sku), grp in sales_forecast.groupby([
-        "center",
-        "resource_code",
-    ], dropna=True):
-        fc_series = (
-            grp.sort_values("date")
-            .set_index("date")["sales_ea"]
-            .astype(float)
-        )
+    for (center, sku), grp in sales_forecast.groupby(
+        [
+            "center",
+            "resource_code",
+        ],
+        dropna=True,
+    ):
+        fc_series = grp.sort_values("date").set_index("date")["sales_ea"].astype(float)
         if fc_series.empty:
             continue
 
@@ -420,7 +431,9 @@ def apply_stock_depletion(
         if inbound_series is None:
             inbound_series = pd.Series(0.0, index=fc_series.index, dtype=float)
         else:
-            inbound_series = inbound_series.reindex(fc_series.index, fill_value=0.0).astype(float)
+            inbound_series = inbound_series.reindex(
+                fc_series.index, fill_value=0.0
+            ).astype(float)
 
         remain = max(latest_stock, 0.0)
         remain_before: list[float] = []
@@ -447,7 +460,9 @@ def apply_stock_depletion(
                     & (suffix_sale <= tol)
                 )
                 if final_mask.any():
-                    depletion_dates[(center, sku)] = fc_series.index[int(np.argmax(final_mask))]
+                    depletion_dates[(center, sku)] = fc_series.index[
+                        int(np.argmax(final_mask))
+                    ]
 
     if depletion_dates:
         mask_center = sales_forecast[["center", "resource_code"]].apply(tuple, axis=1)

@@ -6,7 +6,9 @@
 
 # Public API (외부에서 직접 사용하는 함수)
 from .renderers import render_amazon_sales_vs_inventory, render_step_chart
-from scm_dashboard_v9.ui.kpi import render_sku_summary_cards as _render_sku_summary_cards
+from scm_dashboard_v9.ui.kpi import (
+    render_sku_summary_cards as _render_sku_summary_cards,
+)
 
 # Color utilities
 from .colors import (

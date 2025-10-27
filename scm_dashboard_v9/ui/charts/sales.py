@@ -14,6 +14,7 @@ from center_alias import normalize_center_value
 from scm_dashboard_v9.domain.filters import filter_by_centers, safe_to_datetime
 from .data_utils import coerce_cols, empty_sales_frame
 
+
 def sales_from_snapshot(
     snap_long: pd.DataFrame,
     centers: List[str],
@@ -29,21 +30,32 @@ def sales_from_snapshot(
     """
     c = coerce_cols(snap_long)
     s = snap_long.rename(
-        columns={c["date"]: "date", c["center"]: "center", c["sku"]: "resource_code", c["qty"]: "stock_qty"}
+        columns={
+            c["date"]: "date",
+            c["center"]: "center",
+            c["sku"]: "resource_code",
+            c["qty"]: "stock_qty",
+        }
     )[["date", "center", "resource_code", "stock_qty"]].copy()
 
     s["date"] = safe_to_datetime(s["date"])
-    s = s[s["center"].astype(str).isin(centers) & s["resource_code"].astype(str).isin(skus)]
+    s = s[
+        s["center"].astype(str).isin(centers)
+        & s["resource_code"].astype(str).isin(skus)
+    ]
     if s.empty:
         idx = pd.date_range(start, end, freq="D")
         return pd.DataFrame(0, index=idx, columns=skus)
 
-    pv = (s.groupby(["date", "resource_code"])["stock_qty"].sum()
-            .unstack("resource_code")
-            .reindex(columns=skus, fill_value=0)
-            .sort_index())
+    pv = (
+        s.groupby(["date", "resource_code"])["stock_qty"]
+        .sum()
+        .unstack("resource_code")
+        .reindex(columns=skus, fill_value=0)
+        .sort_index()
+    )
     pv = pv.asfreq("D").ffill()  # D 간격 보정
-    d  = pv.diff().fillna(0)
+    d = pv.diff().fillna(0)
     sales = (-d).clip(lower=0)  # 감소분만 판매
     sales = sales.loc[(sales.index >= start) & (sales.index <= end)]
     return sales
@@ -101,11 +113,7 @@ def sales_forecast_ma(
     if history.empty:
         return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
 
-    series = (
-        history.set_index("date")[value_column]
-        .asfreq("D")
-        .fillna(0.0)
-    )
+    series = history.set_index("date")[value_column].asfreq("D").fillna(0.0)
     if series.empty:
         return pd.DataFrame(columns=["date", "resource_code", "qty_pred"])
 
@@ -241,9 +249,7 @@ def sales_from_snapshot_raw(
         if debug is not None:
             centers_for_debug: list[str] = []
             if "center" in df.columns:
-                centers_for_debug = (
-                    df["center"].dropna().astype(str).unique().tolist()
-                )
+                centers_for_debug = df["center"].dropna().astype(str).unique().tolist()
             debug.clear()
             debug.update(
                 {
@@ -284,9 +290,7 @@ def sales_from_snapshot_raw(
         df["center"] = df["center"].apply(normalize_center_value)
         df = df[df["center"].notna()]
         available_centers = (
-            df["center"].dropna().astype(str).unique().tolist()
-            if not df.empty
-            else []
+            df["center"].dropna().astype(str).unique().tolist() if not df.empty else []
         )
     else:
         # If center is absent in snapshot_raw, infer a single Amazon centre to keep
@@ -343,7 +347,8 @@ def sales_from_snapshot_raw(
         return _empty_sales_frame()
 
     grouped = (
-        df.groupby(["date", "resource_code"], as_index=False)["fba_output_stock"].sum()
+        df.groupby(["date", "resource_code"], as_index=False)["fba_output_stock"]
+        .sum()
         .rename(columns={"fba_output_stock": "sales_ea"})
     )
 
@@ -355,7 +360,6 @@ def sales_from_snapshot_raw(
         .astype(int)
     )
     return grouped
-
 
 
 def sales_forecast_from_inventory_projection(
@@ -386,7 +390,9 @@ def sales_forecast_from_inventory_projection(
         if not {"date", "center", "resource_code", "stock_qty"}.issubset(frame.columns):
             continue
         chunk = frame.copy()
-        chunk["date"] = pd.to_datetime(chunk.get("date"), errors="coerce").dt.normalize()
+        chunk["date"] = pd.to_datetime(
+            chunk.get("date"), errors="coerce"
+        ).dt.normalize()
         chunk = chunk.dropna(subset=["date"])
         if label == "actual":
             chunk = chunk[chunk["date"] <= today_norm]
@@ -397,7 +403,9 @@ def sales_forecast_from_inventory_projection(
         chunk["center"] = chunk.get("center", "").apply(normalize_center_value)
         chunk = chunk[chunk["center"].notna()]
         chunk["resource_code"] = chunk.get("resource_code", "").astype(str).str.strip()
-        chunk["stock_qty"] = pd.to_numeric(chunk.get("stock_qty"), errors="coerce").fillna(0.0)
+        chunk["stock_qty"] = pd.to_numeric(
+            chunk.get("stock_qty"), errors="coerce"
+        ).fillna(0.0)
         chunk["__source"] = label
         frames.append(chunk)
 
@@ -407,7 +415,9 @@ def sales_forecast_from_inventory_projection(
     combined = pd.concat(frames, ignore_index=True)
 
     if "__source" in combined.columns:
-        combined["__priority"] = combined["__source"].map({"actual": 0, "forecast": 1}).fillna(1)
+        combined["__priority"] = (
+            combined["__source"].map({"actual": 0, "forecast": 1}).fillna(1)
+        )
         combined = (
             combined.sort_values(["date", "resource_code", "center", "__priority"])
             .drop_duplicates(subset=["date", "resource_code", "center"], keep="first")
@@ -428,12 +438,16 @@ def sales_forecast_from_inventory_projection(
 
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
-    combined = combined[(combined["date"] >= start_norm) & (combined["date"] <= end_norm)]
+    combined = combined[
+        (combined["date"] >= start_norm) & (combined["date"] <= end_norm)
+    ]
     if combined.empty:
         return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
 
     pivot = (
-        combined.groupby(["date", "resource_code"])["stock_qty"].sum().unstack("resource_code")
+        combined.groupby(["date", "resource_code"])["stock_qty"]
+        .sum()
+        .unstack("resource_code")
     )
     if pivot.empty:
         return pd.DataFrame(columns=["date", "resource_code", "sales_ea"])
@@ -484,7 +498,6 @@ def sales_forecast_from_inventory_projection(
     return tidy.sort_values(["resource_code", "date"]).reset_index(drop=True)
 
 
-
 def sales_from_snapshot_decays(
     snap_like: Optional[pd.DataFrame],
     centers: Sequence[str],
@@ -511,9 +524,8 @@ def sales_from_snapshot_decays(
     if matrix is None or matrix.empty:
         return _empty_sales_frame()
 
-    tidy = (
-        matrix.reset_index()
-        .melt(id_vars="date", var_name="resource_code", value_name="sales_ea")
+    tidy = matrix.reset_index().melt(
+        id_vars="date", var_name="resource_code", value_name="sales_ea"
     )
 
     tidy["date"] = pd.to_datetime(tidy.get("date"), errors="coerce").dt.normalize()
@@ -536,6 +548,3 @@ def sales_from_snapshot_decays(
     tidy = tidy[tidy["sales_ea"] >= 0]
     tidy = tidy.sort_values(["date", "resource_code"]).reset_index(drop=True)
     return tidy
-
-
-

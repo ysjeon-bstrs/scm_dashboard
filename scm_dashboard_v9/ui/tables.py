@@ -4,6 +4,7 @@
 이 모듈은 SCM 대시보드의 테이블 렌더링 로직을 담당합니다.
 입고 예정, WIP, 재고 현황, 로트 상세 등의 테이블을 렌더링합니다.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -48,10 +49,13 @@ def build_resource_name_map(snapshot: pd.DataFrame) -> dict[str, str]:
     # ========================================
     # 2단계: 유효한 품명 데이터만 추출
     # ========================================
-    name_rows = snapshot.loc[snapshot["resource_name"].notna(), [
-        "resource_code",
-        "resource_name",
-    ]].copy()
+    name_rows = snapshot.loc[
+        snapshot["resource_name"].notna(),
+        [
+            "resource_code",
+            "resource_name",
+        ],
+    ].copy()
 
     # ========================================
     # 3단계: 타입 정규화 및 공백 제거
@@ -131,7 +135,9 @@ def render_inbound_and_wip_tables(
     ]:
         if col not in moves_view.columns:
             if "date" in col:
-                moves_view[col] = pd.Series(pd.NaT, index=moves_view.index, dtype="datetime64[ns]")
+                moves_view[col] = pd.Series(
+                    pd.NaT, index=moves_view.index, dtype="datetime64[ns]"
+                )
             else:
                 moves_view[col] = pd.Series("", index=moves_view.index, dtype="object")
 
@@ -140,9 +146,7 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 공통 함수 사용 (중복 코드 제거)
     moves_view = calculate_predicted_inbound_date(
-        moves_view,
-        today=today,
-        lag_days=lag_days
+        moves_view, today=today, lag_days=lag_days
     )
 
     # ========================================
@@ -150,7 +154,8 @@ def render_inbound_and_wip_tables(
     # ========================================
     # selected_centers를 정규화 (normalize_moves에서 to_center가 정규화되므로)
     normalized_selected_centers = {
-        norm for center in selected_centers
+        norm
+        for center in selected_centers
         for norm in [normalize_center_value(center)]
         if norm
     }
@@ -167,7 +172,9 @@ def render_inbound_and_wip_tables(
     effective_display = arr_transport["arrival_date"].copy()
     if "eta_date" in arr_transport.columns:
         effective_display = effective_display.fillna(arr_transport["eta_date"])
-    arr_transport["display_date"] = effective_display.fillna(arr_transport["onboard_date"])
+    arr_transport["display_date"] = effective_display.fillna(
+        arr_transport["onboard_date"]
+    )
     arr_transport = arr_transport[arr_transport["display_date"].notna()]
     arr_transport = arr_transport[
         (arr_transport["display_date"] >= window_start)
@@ -180,8 +187,7 @@ def render_inbound_and_wip_tables(
     # 태광KR만 WIP 표시 (센터명도 정규화 체크)
     arr_wip = pd.DataFrame()
     show_wip = any(
-        normalize_center_value(center) == "태광KR"
-        for center in selected_centers
+        normalize_center_value(center) == "태광KR" for center in selected_centers
     )
     if show_wip:
         arr_wip = moves_view[
@@ -201,7 +207,9 @@ def render_inbound_and_wip_tables(
 
     confirmed_inbound = arr_transport.copy()
     if resource_name_map and not confirmed_inbound.empty:
-        confirmed_inbound["resource_name"] = confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
+        confirmed_inbound["resource_name"] = (
+            confirmed_inbound["resource_code"].map(resource_name_map).fillna("")
+        )
 
     # ========================================
     # 6단계: 입고 예정 현황 테이블 렌더링
@@ -209,7 +217,9 @@ def render_inbound_and_wip_tables(
     st.markdown("#### ✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
 
     if confirmed_inbound.empty:
-        st.caption("선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)")
+        st.caption(
+            "선택한 조건에서 예정된 운송 입고가 없습니다. (오늘 이후 / 선택 기간)"
+        )
     else:
         # 남은 일수 계산
         arrival_basis = confirmed_inbound.get("arrival_date")
@@ -236,7 +246,11 @@ def render_inbound_and_wip_tables(
 
         # pred_inbound_date 표시용 포맷 (NaT → "not_defined")
         pred_display = confirmed_inbound["pred_inbound_date"].apply(
-            lambda x: "not_defined" if pd.isna(x) else x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)
+            lambda x: (
+                "not_defined"
+                if pd.isna(x)
+                else x.strftime("%Y-%m-%d") if hasattr(x, "strftime") else str(x)
+            )
         )
         confirmed_inbound["pred_inbound_date"] = pred_display
 
@@ -267,7 +281,9 @@ def render_inbound_and_wip_tables(
             use_container_width=True,
             height=CONFIG.ui.table_height_inbound,
         )
-        st.caption("※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수")
+        st.caption(
+            "※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수"
+        )
 
     # ========================================
     # 7단계: 생산 진행 현황 (WIP) 테이블 렌더링
@@ -276,7 +292,9 @@ def render_inbound_and_wip_tables(
 
     if not arr_wip.empty:
         if resource_name_map:
-            arr_wip["resource_name"] = arr_wip["resource_code"].map(resource_name_map).fillna("")
+            arr_wip["resource_name"] = (
+                arr_wip["resource_code"].map(resource_name_map).fillna("")
+            )
 
         # 정렬
         arr_wip = arr_wip.sort_values(
@@ -300,7 +318,11 @@ def render_inbound_and_wip_tables(
         ]
         wip_cols = [c for c in wip_cols if c in arr_wip.columns]
 
-        st.dataframe(arr_wip[wip_cols].head(CONFIG.ui.max_table_rows), use_container_width=True, height=CONFIG.ui.table_height_wip)
+        st.dataframe(
+            arr_wip[wip_cols].head(CONFIG.ui.max_table_rows),
+            use_container_width=True,
+            height=CONFIG.ui.table_height_wip,
+        )
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
 
@@ -393,7 +415,8 @@ def render_inventory_table(
     # 4단계: Pivot 테이블 생성
     # ========================================
     pivot = (
-        sub.groupby(["resource_code", "center"], as_index=False)["stock_qty"].sum()
+        sub.groupby(["resource_code", "center"], as_index=False)["stock_qty"]
+        .sum()
         .pivot(index="resource_code", columns="center", values="stock_qty")
         .reindex(columns=selected_centers)
         .fillna(0)
@@ -427,7 +450,11 @@ def render_inventory_table(
     # ========================================
     view = pivot.copy()
     if sku_query.strip():
-        view = view[view.index.astype(str).str.contains(sku_query.strip(), case=False, regex=False)]
+        view = view[
+            view.index.astype(str).str.contains(
+                sku_query.strip(), case=False, regex=False
+            )
+        ]
     if hide_zero and "총합" in view.columns:
         view = view[view["총합"] > 0]
     if sort_by in view.columns:
@@ -435,7 +462,9 @@ def render_inventory_table(
 
     display_df = view.reset_index().rename(columns={"resource_code": "SKU"})
     if resource_name_map:
-        display_df.insert(1, "품명", display_df["SKU"].map(resource_name_map).fillna(""))
+        display_df.insert(
+            1, "품명", display_df["SKU"].map(resource_name_map).fillna("")
+        )
 
     # ========================================
     # 7단계: 재고자산 표시 (선택적)
@@ -475,7 +504,9 @@ def render_inventory_table(
         ordered_columns = ["SKU"]
         if "품명" in merged_df.columns:
             ordered_columns.append("품명")
-        ordered_columns.extend([c for c in quantity_columns if not c.endswith("_재고자산")])
+        ordered_columns.extend(
+            [c for c in quantity_columns if not c.endswith("_재고자산")]
+        )
         if "총합" in merged_df.columns:
             ordered_columns.append("총합")
         ordered_columns.extend(cost_columns)
@@ -496,13 +527,17 @@ def render_inventory_table(
     ]
     for column in qty_columns:
         show_df[column] = show_df[column].apply(
-            lambda x: f"{int(x):,}" if pd.notna(x) and isinstance(x, (int, float)) else x
+            lambda x: (
+                f"{int(x):,}" if pd.notna(x) and isinstance(x, (int, float)) else x
+            )
         )
 
     # ========================================
     # 9단계: 테이블 렌더링 + CSV 다운로드
     # ========================================
-    st.dataframe(show_df, use_container_width=True, height=CONFIG.ui.table_height_inventory)
+    st.dataframe(
+        show_df, use_container_width=True, height=CONFIG.ui.table_height_inventory
+    )
 
     csv_bytes = show_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
@@ -570,14 +605,14 @@ def render_lot_details(
 
     col_date = cols_map.get("snapshot_date") or cols_map.get("date")
     col_sku = (
-        cols_map.get("resource_code")
-        or cols_map.get("sku")
-        or cols_map.get("상품코드")
+        cols_map.get("resource_code") or cols_map.get("sku") or cols_map.get("상품코드")
     )
     col_lot = cols_map.get("lot")
 
     # 사용 가능한 센터 필터링 (CENTER_COL에 매핑된 센터만)
-    used_centers = [ct for ct in selected_centers if CENTER_COL.get(ct) in raw_df.columns]
+    used_centers = [
+        ct for ct in selected_centers if CENTER_COL.get(ct) in raw_df.columns
+    ]
 
     if not all([col_date, col_sku, col_lot]) or not used_centers:
         st.markdown(
@@ -643,7 +678,9 @@ def render_lot_details(
 
         # 수량 컬럼 정규화
         center_subset[src_col] = (
-            pd.to_numeric(center_subset[src_col], errors="coerce").fillna(0).clip(lower=0)
+            pd.to_numeric(center_subset[src_col], errors="coerce")
+            .fillna(0)
+            .clip(lower=0)
         )
 
         # 로트별 집계
@@ -670,7 +707,8 @@ def render_lot_details(
     # 8단계: 로트명 정규화 및 빈 값 처리
     # ========================================
     lot_table["lot"] = (
-        lot_table["lot"].fillna("(no lot)")
+        lot_table["lot"]
+        .fillna("(no lot)")
         .astype(str)
         .str.strip()
         .replace({"": "(no lot)", "nan": "(no lot)"})
@@ -688,7 +726,9 @@ def render_lot_details(
     lot_table[value_cols] = lot_table[value_cols].fillna(0)
     lot_table[value_cols] = lot_table[value_cols].applymap(lambda x: int(round(x)))
 
-    lot_table["합계"] = lot_table[[c for c in used_centers if c in lot_table.columns]].sum(axis=1)
+    lot_table["합계"] = lot_table[
+        [c for c in used_centers if c in lot_table.columns]
+    ].sum(axis=1)
     lot_table = lot_table[lot_table["합계"] > 0]
 
     # ========================================

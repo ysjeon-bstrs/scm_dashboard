@@ -136,19 +136,23 @@ def build_center_series(
                     & mv_sku[ship_start_col].notna()
                     & (mv_sku[ship_start_col] > last_dt)
                 ]
-                .groupby(ship_start_col, as_index=False)["qty_ea"].sum()
+                .groupby(ship_start_col, as_index=False)["qty_ea"]
+                .sum()
                 .rename(columns={ship_start_col: "date", "qty_ea": "delta"})
             )
             eff_minus["delta"] *= -1
 
-            mv_center = mv_sku[(mv_sku["to_center"] == ct) & (mv_sku["carrier_mode"] != "WIP")]
+            mv_center = mv_sku[
+                (mv_sku["to_center"] == ct) & (mv_sku["carrier_mode"] != "WIP")
+            ]
             if not mv_center.empty:
                 eff_plus = (
                     mv_center[
                         mv_center["pred_inbound_date"].notna()
                         & (mv_center["pred_inbound_date"] > last_dt)
                     ]
-                    .groupby("pred_inbound_date", as_index=False)["qty_ea"].sum()
+                    .groupby("pred_inbound_date", as_index=False)["qty_ea"]
+                    .sum()
                     .rename(columns={"pred_inbound_date": "date", "qty_ea": "delta"})
                 )
             else:
@@ -160,7 +164,9 @@ def build_center_series(
                 delta_series = (
                     eff_all.groupby("date")["delta"].sum().reindex(idx, fill_value=0.0)
                 )
-                ts["stock_qty"] = ts["stock_qty"].add(delta_series.cumsum(), fill_value=0.0)
+                ts["stock_qty"] = ts["stock_qty"].add(
+                    delta_series.cumsum(), fill_value=0.0
+                )
 
         if "event_date" in mv_sku.columns:
             wip_mask = (
@@ -173,7 +179,8 @@ def build_center_series(
             wip_complete = pd.DataFrame(columns=mv_sku.columns)
         if not wip_complete.empty:
             wip_add = (
-                wip_complete.groupby("event_date", as_index=False)["qty_ea"].sum()
+                wip_complete.groupby("event_date", as_index=False)["qty_ea"]
+                .sum()
                 .rename(columns={"event_date": "date", "qty_ea": "delta"})
             )
             delta_series = (
@@ -269,11 +276,17 @@ def build_in_transit_series(
     lines = []
     for sku, grp in filtered.groupby("resource_code"):
         starts = grp.dropna(subset=[start_col]).groupby(start_col)["qty_ea"].sum()
-        ends = grp.dropna(subset=["in_transit_end_date"]).groupby("in_transit_end_date")["qty_ea"].sum() * -1
+        ends = (
+            grp.dropna(subset=["in_transit_end_date"])
+            .groupby("in_transit_end_date")["qty_ea"]
+            .sum()
+            * -1
+        )
         delta = (
-            starts.rename_axis("date").to_frame("delta")
-            .add(ends.rename_axis("date").to_frame("delta"), fill_value=0)
-            ["delta"].sort_index()
+            starts.rename_axis("date")
+            .to_frame("delta")
+            .add(ends.rename_axis("date").to_frame("delta"), fill_value=0)["delta"]
+            .sort_index()
         )
         delta = delta.reindex(idx, fill_value=0.0)
         series = delta.cumsum().clip(lower=0)
@@ -281,7 +294,10 @@ def build_in_transit_series(
         carry_mask = (
             grp[start_col].notna()
             & (grp[start_col] < idx[0])
-            & (grp["in_transit_end_date"].fillna(horizon_end + pd.Timedelta(days=1)) > idx[0])
+            & (
+                grp["in_transit_end_date"].fillna(horizon_end + pd.Timedelta(days=1))
+                > idx[0]
+            )
         )
         carry = int(grp.loc[carry_mask, "qty_ea"].sum())
         if carry:
@@ -363,7 +379,9 @@ def build_wip_series(
     idx = index.range
     start_col = _resolve_onboard_column(moves)
 
-    wip = moves[(moves["carrier_mode"] == "WIP") & moves["resource_code"].isin(skus_set)]
+    wip = moves[
+        (moves["carrier_mode"] == "WIP") & moves["resource_code"].isin(skus_set)
+    ]
     if wip.empty:
         return _empty_timeline()
 
@@ -372,7 +390,8 @@ def build_wip_series(
         deltas = []
         onboard = (
             grp[grp[start_col].notna()]
-            .groupby(start_col, as_index=False)["qty_ea"].sum()
+            .groupby(start_col, as_index=False)["qty_ea"]
+            .sum()
             .rename(columns={start_col: "date", "qty_ea": "delta"})
         )
         if not onboard.empty:
@@ -381,7 +400,8 @@ def build_wip_series(
         if "event_date" in grp.columns:
             events = (
                 grp[grp["event_date"].notna()]
-                .groupby("event_date", as_index=False)["qty_ea"].sum()
+                .groupby("event_date", as_index=False)["qty_ea"]
+                .sum()
                 .rename(columns={"event_date": "date", "qty_ea": "delta"})
             )
             if not events.empty:

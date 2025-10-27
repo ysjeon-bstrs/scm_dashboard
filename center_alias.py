@@ -48,7 +48,9 @@ def _alias_key(value: str) -> str:
     return "".join(ch for ch in value.casefold() if ch.isalnum())
 
 
-_CENTER_ALIAS_LOOKUP = {_alias_key(key): canonical for key, canonical in CENTER_ALIAS.items()}
+_CENTER_ALIAS_LOOKUP = {
+    _alias_key(key): canonical for key, canonical in CENTER_ALIAS.items()
+}
 
 
 def _apply_alias(text: str) -> str:
