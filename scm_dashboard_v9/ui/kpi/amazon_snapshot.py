@@ -130,9 +130,14 @@ def _coerce_snapshot_frame(
         df[column] = values.fillna(0).astype(float)
         df[column] = df[column].clip(lower=0)
 
+    # 센터 필터링: centers가 있고 실제로 유효한 값이 있을 때만 필터링
     if centers:
         centers_norm = {str(center).strip() for center in centers if str(center).strip()}
-        df = df[df["center"].isin(centers_norm)]
+        # centers_norm이 비어있으면 필터링하지 않음 (모든 데이터 유지)
+        if centers_norm:
+            df = df[df["center"].isin(centers_norm)]
+
+    # SKU 필터링: skus가 있고 실제로 유효한 값이 있을 때만 필터링
     skus_norm = {str(sku).strip() for sku in skus if str(sku).strip()}
     if skus_norm:
         df = df[df["resource_code"].isin(skus_norm)]

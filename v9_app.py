@@ -420,6 +420,23 @@ def _render_amazon_section(
                 st.write(
                     f"행수: {len(snap_amz):,} · 컬럼: {list(snap_amz.columns)}"
                 )
+
+                # 필터링 전 원본 데이터 상태 확인
+                if not snap_amz.empty:
+                    # 센터와 SKU 정보 출력
+                    center_col = next((c for c in snap_amz.columns if c.lower() in ['center', 'fc', 'warehouse']), None)
+                    sku_col = next((c for c in snap_amz.columns if c.lower() in ['resource_code', 'sku', 'product_code']), None)
+
+                    st.write(f"**필터 조건**: Amazon Centers={amazon_centers}, Selected SKUs={selected_skus}")
+
+                    if center_col:
+                        unique_centers = snap_amz[center_col].dropna().unique().tolist()
+                        st.write(f"**원본 데이터의 센터 목록 ({center_col})**: {unique_centers}")
+
+                    if sku_col:
+                        unique_skus = snap_amz[sku_col].dropna().unique().tolist()
+                        st.write(f"**원본 데이터의 SKU 목록 ({sku_col})**: {unique_skus}")
+
                 # 원본 스냅샷의 날짜 관련 컬럼 상태 (dtype / non-null / 샘플)
                 raw_date_cols = [c for c in ["snap_time", "date"] if c in snap_amz.columns]
                 if raw_date_cols:
@@ -451,6 +468,27 @@ def _render_amazon_section(
                     f"행수: {len(normalized_debug):,} · 필수컬럼 존재여부: "
                     f"{all(c in normalized_debug.columns for c in ['snap_time','center','resource_code','stock_qty'])}"
                 )
+
+                # 정규화 후 데이터 상태 확인
+                if not normalized_debug.empty:
+                    if "center" in normalized_debug.columns:
+                        norm_centers = normalized_debug["center"].dropna().unique().tolist()
+                        st.write(f"**정규화 후 센터 목록**: {norm_centers}")
+
+                    if "resource_code" in normalized_debug.columns:
+                        norm_skus = normalized_debug["resource_code"].dropna().unique().tolist()
+                        st.write(f"**정규화 후 SKU 목록**: {norm_skus}")
+
+                    # latest_ts로 필터링 후 남은 데이터 확인
+                    if not pd.isna(latest_ts_dbg):
+                        latest_data = normalized_debug[normalized_debug["snap_time"] == latest_ts_dbg]
+                        st.write(f"**latest_ts ({latest_ts_dbg}) 기준 데이터 행수**: {len(latest_data)}")
+                        if not latest_data.empty and "resource_code" in latest_data.columns:
+                            latest_skus = latest_data["resource_code"].unique().tolist()
+                            st.write(f"**latest_ts 기준 SKU 목록**: {latest_skus}")
+                else:
+                    st.warning("⚠️ 정규화 후 데이터가 비어있습니다! 필터링 조건을 확인하세요.")
+
                 # 정규화 후 snap_time 상태 확인
                 if "snap_time" in normalized_debug.columns:
                     norm_non_null = int(normalized_debug["snap_time"].notna().sum())
@@ -504,7 +542,16 @@ def _render_amazon_section(
                         "kpi latest_ts:",
                         pd.to_datetime(kpi_df["snap_time"].max()),
                     )
+                    if "resource_code" in kpi_df.columns:
+                        kpi_skus = kpi_df["resource_code"].unique().tolist()
+                        st.write(f"**KPI DataFrame의 SKU 목록**: {kpi_skus}")
                     st.dataframe(kpi_df.head(50))
+                else:
+                    st.error("❌ KPI DataFrame이 비어있습니다!")
+                    st.write("**가능한 원인**:")
+                    st.write("1. 선택된 센터/SKU가 스냅샷 데이터에 없음")
+                    st.write("2. snap_time과 date 컬럼이 모두 파싱 실패")
+                    st.write("3. 필터링 후 latest_ts 기준 데이터가 없음")
             except Exception as e:
                 st.warning(f"KPI 디버그 표시 중 오류: {e}")
 
