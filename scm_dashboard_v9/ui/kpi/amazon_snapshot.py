@@ -56,8 +56,9 @@ def _coerce_snapshot_frame(
         or cols_lower.get("snapshot_time")
         or cols_lower.get("snapshot_datetime")
         or cols_lower.get("snapshot_date")
-        or cols_lower.get("date")
     )
+    # 'date'는 별도 보존하여 후속 coalesce에 사용
+    date_col = cols_lower.get("date") or cols_lower.get("snapshot_date")
     center_col = cols_lower.get("center")
     sku_col = cols_lower.get("resource_code") or cols_lower.get("sku")
     stock_col = cols_lower.get("stock_qty") or cols_lower.get("qty")
@@ -96,20 +97,27 @@ def _coerce_snapshot_frame(
         rename_map[expected_col] = "stock_expected"
     if sales_col:
         rename_map[sales_col] = "sales_qty"
+    # date 컬럼은 유지 (rename하지 않음) → 후속 coalesce 용
 
     df = df.rename(columns=rename_map)
 
-    required_cols = {"snap_time", "center", "resource_code", "stock_qty"}
+    # snap_time은 후속 coalesce로 구성할 수 있으므로 필수에서 제외
+    required_cols = {"center", "resource_code", "stock_qty"}
     if not required_cols.issubset(df.columns):
         return pd.DataFrame(columns=list(required_cols | _NUMERIC_COLUMNS))
 
-    df["snap_time"] = pd.to_datetime(df.get("snap_time"), errors="coerce")
-
-    # 개선: 행 단위 폴백 — snap_time 개별 NaT에 대해 date 값을 보완
-    # (기존: 전체가 NaT일 때만 date로 대체 → 일부 NaT가 있는 경우 정보 손실)
-    if "date" in df.columns:
-        date_parsed = pd.to_datetime(df.get("date"), errors="coerce")
-        df["snap_time"] = df["snap_time"].fillna(date_parsed)
+    # snap_time/date 파싱 및 coalesce
+    snap_series = pd.to_datetime(df.get("snap_time"), errors="coerce") if "snap_time" in df.columns else None
+    date_series = pd.to_datetime(df.get("date"), errors="coerce") if "date" in df.columns else None
+    if snap_series is not None and date_series is not None:
+        df["snap_time"] = snap_series.fillna(date_series)
+    elif snap_series is not None:
+        df["snap_time"] = snap_series
+    elif date_series is not None:
+        df["snap_time"] = date_series
+    else:
+        # 둘 다 없으면 빈 프레임 반환 (시간 축 부재)
+        return pd.DataFrame(columns=list(required_cols | _NUMERIC_COLUMNS | {"snap_time"}))
 
     df = df.dropna(subset=["snap_time"]).copy()
 
