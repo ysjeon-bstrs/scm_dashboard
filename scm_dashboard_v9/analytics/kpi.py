@@ -68,8 +68,11 @@ def kpi_breakdown_per_sku(
         is_wip = carrier_mode.astype(str).str.upper() == "WIP"
 
         # inbound_date가 있으면 우선 사용
-        mask_inb = mv_kpi["inbound_date"].notna() if "inbound_date" in mv_kpi.columns else pd.Series(False, index=mv_kpi.index)
-        pred_end.loc[mask_inb] = mv_kpi.loc[mask_inb, "inbound_date"]
+        if "inbound_date" in mv_kpi.columns:
+            mask_inb = mv_kpi["inbound_date"].notna()
+            pred_end.loc[mask_inb] = mv_kpi.loc[mask_inb, "inbound_date"]
+        else:
+            mask_inb = pd.Series(False, index=mv_kpi.index)
 
         # WIP: event_date 그대로 사용
         wip_mask = is_wip & (~mask_inb)
@@ -81,15 +84,16 @@ def kpi_breakdown_per_sku(
 
         # In-Transit: arrival + 리드타임
         intransit_mask = (~is_wip) & (~mask_inb)
-        mask_arr = intransit_mask & mv_kpi["arrival_date"].notna() if "arrival_date" in mv_kpi.columns else pd.Series(False, index=mv_kpi.index)
-        if mask_arr.any():
-            # 과거 arrival: today + 3일
-            past_arr = mask_arr & (mv_kpi["arrival_date"] <= today)
-            pred_end.loc[past_arr] = today + pd.Timedelta(days=3)
+        if "arrival_date" in mv_kpi.columns:
+            mask_arr = intransit_mask & mv_kpi["arrival_date"].notna()
+            if mask_arr.any():
+                # 과거 arrival: today + 3일
+                past_arr = mask_arr & (mv_kpi["arrival_date"] <= today)
+                pred_end.loc[past_arr] = today + pd.Timedelta(days=3)
 
-            # 미래 arrival: arrival + lag_days
-            fut_arr = mask_arr & (mv_kpi["arrival_date"] > today)
-            pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+                # 미래 arrival: arrival + lag_days
+                fut_arr = mask_arr & (mv_kpi["arrival_date"] > today)
+                pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
 
         pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
         mv_kpi["pred_end_date"] = pred_end
