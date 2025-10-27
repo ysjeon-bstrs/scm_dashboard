@@ -5,7 +5,7 @@ render_sku_summary_cards 함수를 작은 함수들로 분해한 헬퍼들입니
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Sequence, Tuple, NamedTuple
+from typing import Dict, Mapping, NamedTuple, Sequence, Tuple
 
 import pandas as pd
 

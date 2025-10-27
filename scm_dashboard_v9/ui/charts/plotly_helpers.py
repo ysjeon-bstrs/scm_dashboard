@@ -50,8 +50,8 @@ def to_plot_list(values: Optional[Iterable]) -> List:
     Returns:
         정제된 리스트
     """
-    import pandas as pd
     import numpy as np
+    import pandas as pd
 
     if values is None:
         return []

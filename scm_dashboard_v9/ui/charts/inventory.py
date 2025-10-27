@@ -10,7 +10,7 @@ from typing import List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from .data_utils import coerce_cols, safe_dataframe, ensure_naive_index
+from .data_utils import coerce_cols, ensure_naive_index, safe_dataframe
 
 
 def total_inventory_series(

@@ -5,7 +5,7 @@ forecast_sales_and_inventory 함수를 작은 함수들로 분해한 헬퍼들�
 
 from __future__ import annotations
 
-from typing import Optional, Iterable
+from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd

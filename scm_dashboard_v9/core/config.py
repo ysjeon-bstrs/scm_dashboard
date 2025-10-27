@@ -4,14 +4,29 @@
 """
 
 from __future__ import annotations
+
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+
+    # Load from .env file in the project root
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    # python-dotenv not installed, will use system environment variables only
+    pass
 
 # ============================================================
 # Google Sheets 설정
 # ============================================================
 
-# Google Sheets 문서 ID
-GSHEET_ID = "1RYjKW2UDJ2kWJLAqQH26eqx2-r9Xb0_qE_hfwu9WIj8"
+# Google Sheets 문서 ID (환경변수 우선, 없으면 기본값)
+GSHEET_ID = os.getenv("GSHEET_ID", "1RYjKW2UDJ2kWJLAqQH26eqx2-r9Xb0_qE_hfwu9WIj8")
 
 
 # ============================================================

@@ -5,21 +5,28 @@ SKU 요약 카드, 센터별 메트릭 카드 등을 렌더링합니다.
 
 from __future__ import annotations
 
-from typing import List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import streamlit as st
 
+from ...analytics.kpi import kpi_breakdown_per_sku
 from ...core.config import CONFIG
+from .cards_helpers import (
+    aggregate_metrics,
+    calculate_wip_pipeline,
+    prepare_moves_data,
+    validate_and_prepare_snapshot,
+)
 from .formatters import (
-    escape,
-    format_number,
-    format_days,
-    format_date,
-    value_font_size,
     calculate_coverage_days,
     calculate_sellout_date,
+    escape,
+    format_date,
+    format_days,
+    format_number,
     should_show_in_transit,
+    value_font_size,
 )
 from .metrics import (
     compute_depletion_metrics,
@@ -27,13 +34,6 @@ from .metrics import (
     movement_breakdown_per_center,
 )
 from .styles import inject_responsive_styles
-from .cards_helpers import (
-    validate_and_prepare_snapshot,
-    prepare_moves_data,
-    calculate_wip_pipeline,
-    aggregate_metrics,
-)
-from ...analytics.kpi import kpi_breakdown_per_sku
 
 
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:

@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
-import numpy as np
+import logging
+from typing import Iterable, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from ...core.config import CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 def estimate_daily_consumption(
@@ -45,7 +48,12 @@ def estimate_daily_consumption(
 
     rates: dict[tuple[str, str], float] = {}
     if hist.empty:
+        logger.debug("No historical data for consumption estimation")
         return rates
+
+    logger.debug(
+        f"Estimating consumption for {len(centers_sel)} centers, {len(skus_sel)} SKUs"
+    )
 
     for (ct, sku), g in hist.groupby(["center", "resource_code"]):
         series = (
@@ -68,6 +76,8 @@ def estimate_daily_consumption(
         rate = max(rate_reg, rate_dec)
         if rate > 0:
             rates[(ct, sku)] = float(rate)
+
+    logger.info(f"Consumption rates estimated for {len(rates)} center-SKU pairs")
     return rates
 
 
