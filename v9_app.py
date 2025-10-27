@@ -407,6 +407,10 @@ def _render_amazon_section(
                 # 내부 정규화 로직과 동일하게 변환하여 원인 파악
                 from scm_dashboard_v9.ui.kpi.amazon_snapshot import _coerce_snapshot_frame
 
+                # 환경변수 설정으로 디버그 메시지 활성화
+                import os
+                os.environ["DEBUG_AMAZON_KPI"] = "1"
+
                 # 정규화 (현재 필터 적용)
                 normalized_debug = _coerce_snapshot_frame(
                     snap_amz, amazon_centers, selected_skus
@@ -449,6 +453,18 @@ def _render_amazon_section(
                     if sku_col:
                         unique_skus = snap_amz[sku_col].dropna().unique().tolist()
                         st.write(f"**원본 데이터의 SKU 목록 ({sku_col})**: {unique_skus}")
+
+                    # 선택된 SKU의 날짜 데이터 상태 확인
+                    if selected_skus and sku_col:
+                        st.write("**선택된 SKU의 날짜 데이터 상태:**")
+                        for sku in selected_skus:
+                            sku_data = snap_amz[snap_amz[sku_col] == sku]
+                            if not sku_data.empty:
+                                snap_time_samples = sku_data['snap_time'].head(5).tolist() if 'snap_time' in sku_data.columns else []
+                                date_samples = sku_data['date'].head(5).tolist() if 'date' in sku_data.columns else []
+                                st.write(f"  - {sku}: {len(sku_data)}행, snap_time 샘플={snap_time_samples}, date 샘플={date_samples}")
+                            else:
+                                st.write(f"  - {sku}: 데이터 없음")
 
                 # 원본 스냅샷의 날짜 관련 컬럼 상태 (dtype / non-null / 샘플)
                 raw_date_cols = [c for c in ["snap_time", "date"] if c in snap_amz.columns]

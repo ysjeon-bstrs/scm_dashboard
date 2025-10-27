@@ -103,6 +103,9 @@ def _coerce_snapshot_frame(
     if not required_cols.issubset(df.columns):
         return pd.DataFrame(columns=list(required_cols | _NUMERIC_COLUMNS))
 
+    # snap_time 파싱 전 행수 기록
+    rows_before_datetime = len(df)
+
     df["snap_time"] = pd.to_datetime(df.get("snap_time"), errors="coerce")
 
     # 개선: 행 단위 폴백 — snap_time 개별 NaT에 대해 date 값을 보완
@@ -111,7 +114,19 @@ def _coerce_snapshot_frame(
         date_parsed = pd.to_datetime(df.get("date"), errors="coerce")
         df["snap_time"] = df["snap_time"].fillna(date_parsed)
 
+    # dropna 전 snap_time 유효 행수 기록
+    rows_with_valid_snap_time = int(df["snap_time"].notna().sum())
+
     df = df.dropna(subset=["snap_time"]).copy()
+
+    # 디버그: snap_time으로 인한 행 손실이 크면 경고 (환경변수로 활성화 가능)
+    import os
+    if os.environ.get("DEBUG_AMAZON_KPI") == "1":
+        if rows_before_datetime > 0 and len(df) == 0:
+            import sys
+            print(f"[DEBUG] _coerce_snapshot_frame: 모든 행이 dropna(snap_time)에서 제거됨! "
+                  f"before={rows_before_datetime}, valid_snap_time={rows_with_valid_snap_time}",
+                  file=sys.stderr)
 
     df["center"] = df.get("center", "").astype(str).str.strip()
     df["resource_code"] = df.get("resource_code", "").astype(str).str.strip()
