@@ -197,7 +197,7 @@ def _render_sidebar_filters(
     with st.sidebar:
         st.header("필터")
         st.caption(
-            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022 / 기간 오늘−20일 ~ +30일."
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022·BA00047 / 기간 오늘−20일 ~ +30일."
         )
 
         preset_centers = ["태광KR", "AMZUS"]
@@ -206,7 +206,7 @@ def _render_sidebar_filters(
             default_centers = centers
         selected_centers = st.multiselect("센터", centers, default=default_centers)
 
-        preset_skus = ["BA00021", "BA00022"]
+        preset_skus = ["BA00021", "BA00022", "BA00047"]
         default_skus = [s for s in preset_skus if s in skus]
         if not default_skus:
             default_skus = skus if len(skus) <= 10 else skus[:10]
