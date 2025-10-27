@@ -273,25 +273,35 @@ def build_amazon_snapshot_kpis(
         centers = list(center)
 
     # 최신 스냅샷 시점을 구할 때는 SKU 필터를 적용하지 않고 센터 기준으로 계산
-    normalized_base = _coerce_snapshot_frame(snap_amz, centers, [])
-    if normalized_base.empty:
-        return pd.DataFrame(
-            columns=[
-                "resource_code",
-                "snap_time",
-                "stock_qty",
-                "stock_available",
-                "pending_fc",
-                "stock_processing",
-                "stock_expected",
-                "sales_yday",
-                "sales_ma7",
-                "cover_days",
-                "cover_base",
-            ]
+    # 최신 시점은 RAW에서 snap_time/date를 병합(coalesce)하여 센터 기준으로 계산
+    try:
+        raw = snap_amz.copy()
+        # 센터 필터 우선 적용
+        if centers:
+            centers_norm = {str(c).strip() for c in centers if str(c).strip()}
+            raw_center = raw.get("center")
+            if raw_center is not None:
+                raw = raw[raw_center.astype(str).str.strip().isin(centers_norm)]
+        cols_lower = {str(c).strip().lower(): c for c in raw.columns}
+        snap_col = (
+            cols_lower.get("snap_time")
+            or cols_lower.get("snapshot_time")
+            or cols_lower.get("snapshot_datetime")
         )
+        date_col = cols_lower.get("snapshot_date") or cols_lower.get("date")
+        snap_series = pd.to_datetime(raw.get(snap_col), errors="coerce") if snap_col else None
+        date_series = pd.to_datetime(raw.get(date_col), errors="coerce") if date_col else None
+        if snap_series is not None and date_series is not None:
+            latest_ts = snap_series.fillna(date_series).max()
+        elif snap_series is not None:
+            latest_ts = snap_series.max()
+        elif date_series is not None:
+            latest_ts = date_series.max()
+        else:
+            latest_ts = pd.NaT
+    except Exception:
+        latest_ts = pd.NaT
 
-    latest_ts = normalized_base["snap_time"].max()
     if pd.isna(latest_ts):
         return pd.DataFrame(
             columns=[
@@ -308,8 +318,21 @@ def build_amazon_snapshot_kpis(
                 "cover_base",
             ]
         )
-    # 해당 최신 시점의 스냅샷만 추출 (센터 기준), 이후 SKU별로 조회
-    current = normalized_base[normalized_base["snap_time"] == latest_ts]
+    # 정규화 프레임 (센터 기준). 비어있어도 진행해 SKU별 0값을 생성
+    normalized_base = _coerce_snapshot_frame(snap_amz, centers, [])
+    if normalized_base is not None and not normalized_base.empty:
+        current = normalized_base[normalized_base["snap_time"] == latest_ts]
+    else:
+        current = pd.DataFrame(columns=[
+            "resource_code",
+            "snap_time",
+            "stock_qty",
+            "stock_available",
+            "pending_fc",
+            "stock_processing",
+            "stock_expected",
+            "sales_qty",
+        ])
 
     rows: list[dict[str, object]] = []
     sku_order = [str(s) for s in skus]
