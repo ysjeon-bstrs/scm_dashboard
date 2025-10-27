@@ -6,10 +6,13 @@ Google Sheets 데이터 로더
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 from scm_dashboard_v9.data_sources.loaders import (
     load_from_gsheet_api,
@@ -47,11 +50,17 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # ========================================
     # 1단계: Google Sheets API 호출 (스피너 표시)
     # ========================================
+    logger.info("Loading data from Google Sheets")
     try:
         with st.spinner(show_spinner_message):
             df_move, df_ref, df_incoming = load_from_gsheet_api()
+            logger.debug(
+                f"Raw data loaded: {len(df_move)} moves, {len(df_ref)} snapshots, "
+                f"{len(df_incoming)} incoming"
+            )
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
+        logger.error(f"Failed to load from Google Sheets: {exc}", exc_info=True)
         st.error(f"Google Sheets 데이터를 불러오는 중 오류가 발생했습니다: {exc}")
         return None
 
@@ -59,14 +68,17 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # 2단계: 데이터 유효성 검증
     # ========================================
     if df_move.empty or df_ref.empty:
+        logger.error("Google Sheets data is empty")
         st.error("Google Sheets에서 데이터를 불러올 수 없습니다. 권한을 확인해주세요.")
         return None
 
     # ========================================
     # 3단계: 데이터 정규화
     # ========================================
+    logger.info("Normalizing snapshot and moves data")
     moves = normalize_moves(df_move)
     snapshot = normalize_refined_snapshot(df_ref)
+    logger.debug(f"Normalized: {len(moves)} moves, {len(snapshot)} snapshots")
 
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
@@ -76,14 +88,17 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
         moves = merge_wip_as_moves(moves, wip_df)
 
         if wip_df is not None and not wip_df.empty:
+            logger.info(f"WIP data merged: {len(wip_df)} rows")
             st.success(f"WIP {len(wip_df)}건 반영 완료")
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
+        logger.warning(f"Failed to load WIP data: {exc}", exc_info=True)
         st.warning(f"WIP 불러오기 실패: {exc}")
 
     # ========================================
     # 5단계: 성공 메시지 표시
     # ========================================
+    logger.info("Google Sheets data loaded successfully")
     st.success("Google Sheets 데이터가 업데이트되었습니다.")
 
     return LoadedData(moves=moves, snapshot=snapshot)

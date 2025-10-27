@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable
 
 import pandas as pd
 
 from .planning.timeline import TimelineBuilder, TimelineContext, prepare_moves, prepare_snapshot
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,8 @@ def build_timeline_bundle(
     horizon_days: int = 0,
     move_fallback_days: int = 1,
 ):
+    logger.debug("Building timeline bundle with TimelineBuilder")
+
     context = TimelineContext(
         centers=list(centers),
         skus=list(skus),
@@ -37,7 +42,10 @@ def build_timeline_bundle(
         lag_days=lag_days,
         horizon_days=int(max(0, horizon_days)),
     )
+
     builder = TimelineBuilder(context)
+
+    logger.debug("Preparing snapshot and move tables")
     snapshot_table = prepare_snapshot(inputs.snapshot)
     fallback_days = int(max(0, move_fallback_days))
     move_table = prepare_moves(
@@ -45,4 +53,12 @@ def build_timeline_bundle(
         context=context,
         fallback_days=fallback_days,
     )
-    return builder.build(snapshot_table, move_table)
+
+    logger.debug("Building timeline bundle")
+    bundle = builder.build(snapshot_table, move_table)
+    logger.debug(
+        f"Bundle created: {len(bundle.center_lines)} center, "
+        f"{len(bundle.in_transit_lines)} transit, {len(bundle.wip_lines)} WIP rows"
+    )
+
+    return bundle
