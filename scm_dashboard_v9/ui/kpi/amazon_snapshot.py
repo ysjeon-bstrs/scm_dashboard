@@ -277,8 +277,9 @@ def build_amazon_snapshot_kpis(
     else:
         centers = list(center)
 
-    normalized = _coerce_snapshot_frame(snap_amz, centers, skus)
-    if normalized.empty:
+    # 최신 스냅샷 시점을 구할 때는 SKU 필터를 적용하지 않고 센터 기준으로 계산
+    normalized_base = _coerce_snapshot_frame(snap_amz, centers, [])
+    if normalized_base.empty:
         return pd.DataFrame(
             columns=[
                 "resource_code",
@@ -295,7 +296,7 @@ def build_amazon_snapshot_kpis(
             ]
         )
 
-    latest_ts = normalized["snap_time"].max()
+    latest_ts = normalized_base["snap_time"].max()
     if pd.isna(latest_ts):
         return pd.DataFrame(
             columns=[
@@ -312,8 +313,8 @@ def build_amazon_snapshot_kpis(
                 "cover_base",
             ]
         )
-
-    current = normalized[normalized["snap_time"] == latest_ts]
+    # 해당 최신 시점의 스냅샷만 추출 (센터 기준), 이후 SKU별로 조회
+    current = normalized_base[normalized_base["snap_time"] == latest_ts]
 
     rows: list[dict[str, object]] = []
     sku_order = [str(s) for s in skus]
