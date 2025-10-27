@@ -407,8 +407,21 @@ def _render_amazon_section(
                 # 내부 정규화 로직과 동일하게 변환하여 원인 파악
                 from scm_dashboard_v9.ui.kpi.amazon_snapshot import _coerce_snapshot_frame
 
+                # 정규화 (현재 필터 적용)
                 normalized_debug = _coerce_snapshot_frame(
                     snap_amz, amazon_centers, selected_skus
+                )
+                # 정규화 (필터 미적용: 센터/SKU 모두 해제)
+                normalized_all = _coerce_snapshot_frame(
+                    snap_amz, None, []
+                )
+                # 정규화 (센터만 해제, SKU 필터 유지)
+                normalized_no_center = _coerce_snapshot_frame(
+                    snap_amz, None, selected_skus
+                )
+                # 정규화 (SKU만 해제, 센터 필터 유지)
+                normalized_no_sku = _coerce_snapshot_frame(
+                    snap_amz, amazon_centers, []
                 )
                 latest_ts_dbg = (
                     pd.to_datetime(normalized_debug["snap_time"].max())
@@ -448,9 +461,25 @@ def _render_amazon_section(
                     f"Amazon KPI 디버그 · 정규화 결과 (latest_ts={latest_ts_dbg})"
                 )
                 st.write(
-                    f"행수: {len(normalized_debug):,} · 필수컬럼 존재여부: "
-                    f"{all(c in normalized_debug.columns for c in ['snap_time','center','resource_code','stock_qty'])}"
+                    {
+                        "with_filters.rows": len(normalized_debug),
+                        "no_filters.rows": len(normalized_all),
+                        "no_center.rows": len(normalized_no_center),
+                        "no_sku.rows": len(normalized_no_sku),
+                        "with_filters.required_cols": all(
+                            c in normalized_debug.columns
+                            for c in ["snap_time", "center", "resource_code", "stock_qty"]
+                        ),
+                    }
                 )
+                # 각 케이스에서 snap_time 유효 개수 비교
+                snap_counts = {
+                    "with_filters.snap_time_non_null": int(normalized_debug["snap_time"].notna().sum()) if not normalized_debug.empty else 0,
+                    "no_filters.snap_time_non_null": int(normalized_all["snap_time"].notna().sum()) if not normalized_all.empty else 0,
+                    "no_center.snap_time_non_null": int(normalized_no_center["snap_time"].notna().sum()) if not normalized_no_center.empty else 0,
+                    "no_sku.snap_time_non_null": int(normalized_no_sku["snap_time"].notna().sum()) if not normalized_no_sku.empty else 0,
+                }
+                st.write(snap_counts)
                 # 정규화 후 snap_time 상태 확인
                 if "snap_time" in normalized_debug.columns:
                     norm_non_null = int(normalized_debug["snap_time"].notna().sum())
@@ -464,6 +493,13 @@ def _render_amazon_section(
                             "normalized.snap_time.sample": norm_sample,
                         }
                     )
+                # 필터 영향 확인용 소계
+                st.write(
+                    {
+                        "distinct_centers_in_raw": sorted(snap_amz["center"].dropna().astype(str).str.strip().unique().tolist()),
+                        "distinct_skus_in_raw_sample": sorted(snap_amz["resource_code"].dropna().astype(str).str.strip().unique().tolist())[:20],
+                    }
+                )
                 st.dataframe(
                     normalized_debug[
                         [
