@@ -400,12 +400,78 @@ def _render_amazon_section(
         # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
         show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
 
+        # 디버그: Amazon KPI 원천/정규화 데이터 확인용
+        debug_amz = st.checkbox("디버그: Amazon KPI 데이터 표시", value=False)
+        if debug_amz:
+            try:
+                # 내부 정규화 로직과 동일하게 변환하여 원인 파악
+                from scm_dashboard_v9.ui.kpi.amazon_snapshot import _coerce_snapshot_frame
+
+                normalized_debug = _coerce_snapshot_frame(
+                    snap_amz, amazon_centers, selected_skus
+                )
+                latest_ts_dbg = (
+                    pd.to_datetime(normalized_debug["snap_time"].max())
+                    if not normalized_debug.empty
+                    else pd.NaT
+                )
+
+                st.caption("Amazon KPI 디버그 · 필터링된 스냅샷")
+                st.write(
+                    f"행수: {len(snap_amz):,} · 컬럼: {list(snap_amz.columns)}"
+                )
+                st.dataframe(snap_amz.head(200))
+
+                st.caption(
+                    f"Amazon KPI 디버그 · 정규화 결과 (latest_ts={latest_ts_dbg})"
+                )
+                st.write(
+                    f"행수: {len(normalized_debug):,} · 필수컬럼 존재여부: "
+                    f"{all(c in normalized_debug.columns for c in ['snap_time','center','resource_code','stock_qty'])}"
+                )
+                st.dataframe(
+                    normalized_debug[
+                        [
+                            c
+                            for c in [
+                                "snap_time",
+                                "center",
+                                "resource_code",
+                                "stock_qty",
+                                "stock_available",
+                                "pending_fc",
+                                "stock_processing",
+                                "stock_expected",
+                                "sales_qty",
+                            ]
+                            if c in normalized_debug.columns
+                        ]
+                    ].head(200)
+                )
+            except Exception as e:
+                st.warning(f"디버그 뷰 생성 중 오류: {e}")
+
         kpi_df, previous_df = _build_amazon_kpi_data(
             snap_amz=snap_amz,
             selected_skus=selected_skus,
             amazon_centers=amazon_centers,
             show_delta=show_delta,
         )
+
+        if 'debug_amz' in locals() and debug_amz:
+            try:
+                st.caption("Amazon KPI 디버그 · KPI 입력 데이터")
+                st.write(
+                    f"kpi_df.empty={kpi_df is None or kpi_df.empty} · columns={list(kpi_df.columns) if kpi_df is not None else []}"
+                )
+                if kpi_df is not None and not kpi_df.empty:
+                    st.write(
+                        "kpi latest_ts:",
+                        pd.to_datetime(kpi_df["snap_time"].max()),
+                    )
+                    st.dataframe(kpi_df.head(50))
+            except Exception as e:
+                st.warning(f"KPI 디버그 표시 중 오류: {e}")
 
         # SKU → 품명 매핑
         amz_resource_name_map = build_resource_name_map(snap_amz)
