@@ -13,7 +13,7 @@ import pandas as pd
 @dataclass
 class AmazonForecastContext:
     """Amazon 패널에 필요한 실측/예측 시계열 데이터를 묶는 컨테이너.
-    
+
     Attributes:
         start: 시작 날짜
         end: 종료 날짜
@@ -31,7 +31,7 @@ class AmazonForecastContext:
         lookback_days: 과거 조회 일수
         promotion_multiplier: 프로모션 가중치
     """
-    
+
     start: pd.Timestamp
     end: pd.Timestamp
     today: pd.Timestamp

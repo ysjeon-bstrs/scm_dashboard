@@ -3,6 +3,7 @@
 
 함수 실행 시간 측정 및 성능 메트릭 수집을 위한 데코레이터와 유틸리티를 제공합니다.
 """
+
 from __future__ import annotations
 
 import functools
@@ -13,7 +14,7 @@ from typing import Any, Callable, TypeVar
 logger = logging.getLogger(__name__)
 
 # Type variable for generic decorator
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 def measure_time(func: F) -> F:
@@ -36,6 +37,7 @@ def measure_time(func: F) -> F:
         >>> result = slow_function()
         WARNING - slow_function took 2.00s
     """
+
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         start_time = time.perf_counter()
@@ -49,13 +51,11 @@ def measure_time(func: F) -> F:
             # 실행 시간에 따라 로그 레벨 조정
             if elapsed >= 10.0:
                 logger.error(
-                    f"⚠️  SLOW: {func.__name__} took {elapsed:.2f}s "
-                    f"(threshold: 10s)"
+                    f"⚠️  SLOW: {func.__name__} took {elapsed:.2f}s " f"(threshold: 10s)"
                 )
             elif elapsed >= 1.0:
                 logger.warning(
-                    f"⏱️  {func.__name__} took {elapsed:.2f}s "
-                    f"(threshold: 1s)"
+                    f"⏱️  {func.__name__} took {elapsed:.2f}s " f"(threshold: 1s)"
                 )
             else:
                 logger.info(f"✓ {func.__name__} completed in {elapsed:.2f}s")
@@ -105,9 +105,7 @@ class PerformanceContext:
         self.elapsed = time.perf_counter() - self.start_time
 
         if exc_type is not None:
-            logger.error(
-                f"❌ {self.operation_name} failed after {self.elapsed:.2f}s"
-            )
+            logger.error(f"❌ {self.operation_name} failed after {self.elapsed:.2f}s")
         elif self.elapsed >= 10.0:
             logger.error(
                 f"⚠️  SLOW: {self.operation_name} took {self.elapsed:.2f}s "
@@ -115,13 +113,10 @@ class PerformanceContext:
             )
         elif self.elapsed >= 1.0:
             logger.warning(
-                f"⏱️  {self.operation_name} took {self.elapsed:.2f}s "
-                f"(threshold: 1s)"
+                f"⏱️  {self.operation_name} took {self.elapsed:.2f}s " f"(threshold: 1s)"
             )
         else:
-            logger.info(
-                f"✓ {self.operation_name} completed in {self.elapsed:.2f}s"
-            )
+            logger.info(f"✓ {self.operation_name} completed in {self.elapsed:.2f}s")
 
 
 class PerformanceMetrics:

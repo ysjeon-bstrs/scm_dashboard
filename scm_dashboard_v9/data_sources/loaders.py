@@ -31,7 +31,9 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     try:
         gs = st.secrets["google_sheets"]
     except Exception:
-        st.error("Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다.")
+        st.error(
+            "Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다."
+        )
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     creds_obj = gs.get("credentials", None)
@@ -45,19 +47,27 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     elif creds_json:
         credentials_info = json.loads(str(creds_json))
     else:
-        st.error("Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다.")
+        st.error(
+            "Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다."
+        )
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     if "private_key" in credentials_info:
-        credentials_info["private_key"] = credentials_info["private_key"].replace("\\n", "\n").strip()
+        credentials_info["private_key"] = (
+            credentials_info["private_key"].replace("\\n", "\n").strip()
+        )
 
     try:
-        credentials = Credentials.from_service_account_info(credentials_info, scopes=scopes)
+        credentials = Credentials.from_service_account_info(
+            credentials_info, scopes=scopes
+        )
         gc = gspread.authorize(credentials)
         ss = gc.open_by_key(GSHEET_ID)
     except Exception as exc:
         st.error(f"Google Sheets API 인증 실패: {exc}")
-        st.error("secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json")
+        st.error(
+            "secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json"
+        )
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     def _read(name: str) -> pd.DataFrame:
@@ -77,7 +87,9 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             cols = {c.strip().lower(): c for c in df_snap_raw.columns}
             col_date = cols.get("snapshot_date") or cols.get("date")
             if col_date:
-                df_snap_raw[col_date] = pd.to_datetime(df_snap_raw[col_date], errors="coerce").dt.normalize()
+                df_snap_raw[col_date] = pd.to_datetime(
+                    df_snap_raw[col_date], errors="coerce"
+                ).dt.normalize()
                 latest = df_snap_raw[col_date].max()
                 if pd.notna(latest):
                     df_snap_raw = df_snap_raw[df_snap_raw[col_date] == latest].copy()
@@ -91,7 +103,9 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 @st.cache_data(ttl=300)
-def load_from_excel(file: Any) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+def load_from_excel(
+    file: Any,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Excel 파일에서 데이터를 로드합니다.
 
     Args:
@@ -113,11 +127,17 @@ def load_from_excel(file: Any) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.
     bio.seek(0)
 
     refined_name = next(
-        (s for s in xl.sheet_names if s in ["snap_정제", "snap_refined", "snap_refine", "snap_ref"]),
+        (
+            s
+            for s in xl.sheet_names
+            if s in ["snap_정제", "snap_refined", "snap_refine", "snap_ref"]
+        ),
         None,
     )
     if refined_name is None:
-        st.error("엑셀에 정제 스냅샷 시트가 필요합니다. (시트명: 'snap_정제' 또는 'snap_refined')")
+        st.error(
+            "엑셀에 정제 스냅샷 시트가 필요합니다. (시트명: 'snap_정제' 또는 'snap_refined')"
+        )
         st.stop()
     df_ref = pd.read_excel(bio, sheet_name=refined_name, engine="openpyxl")
     bio.seek(0)
@@ -129,7 +149,9 @@ def load_from_excel(file: Any) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.
 
     snapshot_raw_df = None
     if "snapshot_raw" in xl.sheet_names:
-        snapshot_raw_df = pd.read_excel(bio, sheet_name="snapshot_raw", engine="openpyxl")
+        snapshot_raw_df = pd.read_excel(
+            bio, sheet_name="snapshot_raw", engine="openpyxl"
+        )
         bio.seek(0)
 
     return df_move, df_ref, df_incoming, snapshot_raw_df
@@ -192,7 +214,9 @@ def normalize_center_series(series: pd.Series) -> pd.Series:
     return out
 
 
-def load_wip_from_incoming(df_incoming: Optional[pd.DataFrame], default_center: str = "태광KR") -> pd.DataFrame:
+def load_wip_from_incoming(
+    df_incoming: Optional[pd.DataFrame], default_center: str = "태광KR"
+) -> pd.DataFrame:
     """입고예정내역에서 WIP 데이터를 로드합니다.
 
     Args:
@@ -206,11 +230,37 @@ def load_wip_from_incoming(df_incoming: Optional[pd.DataFrame], default_center: 
         return pd.DataFrame()
 
     df_incoming.columns = [str(c).strip().lower() for c in df_incoming.columns]
-    po_col = next((c for c in df_incoming.columns if c in ["po_no", "ponumber", "po"]), None)
-    date_col = next((c for c in df_incoming.columns if "intended_push_date" in c or "입고" in c), None)
-    sku_col = next((c for c in df_incoming.columns if c in ["product_code", "resource_code", "상품코드"]), None)
-    qty_col = next((c for c in df_incoming.columns if c in ["quantity", "qty", "수량", "total_quantity"]), None)
-    lot_col = next((c for c in df_incoming.columns if c in ["lot", "제조번호", "lot_no", "lotnumber"]), None)
+    po_col = next(
+        (c for c in df_incoming.columns if c in ["po_no", "ponumber", "po"]), None
+    )
+    date_col = next(
+        (c for c in df_incoming.columns if "intended_push_date" in c or "입고" in c),
+        None,
+    )
+    sku_col = next(
+        (
+            c
+            for c in df_incoming.columns
+            if c in ["product_code", "resource_code", "상품코드"]
+        ),
+        None,
+    )
+    qty_col = next(
+        (
+            c
+            for c in df_incoming.columns
+            if c in ["quantity", "qty", "수량", "total_quantity"]
+        ),
+        None,
+    )
+    lot_col = next(
+        (
+            c
+            for c in df_incoming.columns
+            if c in ["lot", "제조번호", "lot_no", "lotnumber"]
+        ),
+        None,
+    )
 
     if not date_col or not sku_col or not qty_col:
         return pd.DataFrame()
@@ -220,19 +270,31 @@ def load_wip_from_incoming(df_incoming: Optional[pd.DataFrame], default_center: 
             "resource_code": df_incoming[sku_col].astype(str).str.strip(),
             "to_center": default_center,
             "wip_ready": pd.to_datetime(df_incoming[date_col], errors="coerce"),
-            "qty_ea": pd.to_numeric(df_incoming[qty_col].astype(str).str.replace(",", ""), errors="coerce").fillna(0).astype(int),
+            "qty_ea": pd.to_numeric(
+                df_incoming[qty_col].astype(str).str.replace(",", ""), errors="coerce"
+            )
+            .fillna(0)
+            .astype(int),
             "lot": df_incoming[lot_col].astype(str).str.strip() if lot_col else "",
         }
     )
     out["wip_start"] = df_incoming[po_col].map(_parse_po_date) if po_col else pd.NaT
     mask_na = out["wip_start"].isna() & out["wip_ready"].notna()
-    out.loc[mask_na, "wip_start"] = out.loc[mask_na, "wip_ready"] - pd.to_timedelta(30, unit="D")
+    out.loc[mask_na, "wip_start"] = out.loc[mask_na, "wip_ready"] - pd.to_timedelta(
+        30, unit="D"
+    )
 
-    out = out.dropna(subset=["resource_code", "wip_ready", "wip_start"]).reset_index(drop=True)
-    return out[["resource_code", "to_center", "wip_start", "wip_ready", "qty_ea", "lot"]]
+    out = out.dropna(subset=["resource_code", "wip_ready", "wip_start"]).reset_index(
+        drop=True
+    )
+    return out[
+        ["resource_code", "to_center", "wip_start", "wip_ready", "qty_ea", "lot"]
+    ]
 
 
-def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+def merge_wip_as_moves(
+    moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]
+) -> pd.DataFrame:
     """WIP 데이터를 moves DataFrame과 병합합니다.
 
     Args:
@@ -246,8 +308,12 @@ def merge_wip_as_moves(moves_df: pd.DataFrame, wip_df: Optional[pd.DataFrame]) -
         return moves_df
     wip_df_norm = wip_df.copy()
     wip_df_norm["to_center"] = normalize_center_series(wip_df_norm["to_center"])
-    wip_df_norm["wip_start"] = pd.to_datetime(wip_df_norm["wip_start"], errors="coerce").dt.normalize()
-    wip_df_norm["wip_ready"] = pd.to_datetime(wip_df_norm["wip_ready"], errors="coerce").dt.normalize()
+    wip_df_norm["wip_start"] = pd.to_datetime(
+        wip_df_norm["wip_start"], errors="coerce"
+    ).dt.normalize()
+    wip_df_norm["wip_ready"] = pd.to_datetime(
+        wip_df_norm["wip_ready"], errors="coerce"
+    ).dt.normalize()
 
     def _first_valid_center(series: Optional[pd.Series]) -> Optional[str]:
         if series is None:

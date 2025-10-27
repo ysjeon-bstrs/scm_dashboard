@@ -12,6 +12,7 @@ import pandas as pd
 
 from center_alias import normalize_center_value
 
+
 def make_forecast_sales_capped(
     base_daily_pred: pd.Series,
     latest_stock: float,
@@ -33,10 +34,7 @@ def make_forecast_sales_capped(
     if inbound_by_day is None:
         inbound = pd.Series(0.0, index=base.index, dtype=float)
     else:
-        inbound = (
-            inbound_by_day.astype(float)
-            .reindex(base.index, fill_value=0.0)
-        )
+        inbound = inbound_by_day.astype(float).reindex(base.index, fill_value=0.0)
 
     # ========================================
     # 벡터화된 구현 (NumPy) - 성능 최적화
@@ -64,7 +62,6 @@ def make_forecast_sales_capped(
         remain -= capped[i]
 
     return pd.Series(capped, index=base.index, dtype=float)
-
 
 
 def load_amazon_daily_sales_from_snapshot_raw(
@@ -162,6 +159,3 @@ def load_amazon_daily_sales_from_snapshot_raw(
     )
     grouped["sales_ea"] = grouped["sales_ea"].fillna(0).astype(float)
     return grouped
-
-
-

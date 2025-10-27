@@ -14,6 +14,7 @@ from scm_dashboard_v9.analytics import kpi_breakdown_per_sku
 from scm_dashboard_v9.core import build_timeline as build_core_timeline
 from scm_dashboard_v9.forecast import apply_consumption_with_events
 
+
 def compute_depletion_from_timeline(
     base_timeline: pd.DataFrame,
     snap_long: pd.DataFrame,
@@ -88,7 +89,9 @@ def compute_depletion_from_timeline(
             out[("__TOTAL__", str(sku))] = {"days": None, "date": None}
             continue
         agg = (
-            segment.groupby("date", as_index=False)["stock_qty"].sum().sort_values("date")
+            segment.groupby("date", as_index=False)["stock_qty"]
+            .sum()
+            .sort_values("date")
         )
         zero_idx = np.where(agg["stock_qty"].values <= 0)[0]
         if zero_idx.size == 0:
@@ -99,8 +102,6 @@ def compute_depletion_from_timeline(
         out[("__TOTAL__", str(sku))] = {"days": days, "date": zero_date}
 
     return out
-
-
 
 
 def compute_depletion_metrics(
@@ -198,8 +199,6 @@ def compute_depletion_metrics(
     return result
 
 
-
-
 def extract_daily_demand(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
     if frame.empty:
         empty = pd.Series(dtype=float)
@@ -232,8 +231,6 @@ def extract_daily_demand(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
 
     empty = pd.Series(dtype=float)
     return empty, empty
-
-
 
 
 def movement_breakdown_per_center(
@@ -315,7 +312,11 @@ def movement_breakdown_per_center(
     pred_end = pd.Series(pd.NaT, index=mv.index, dtype="datetime64[ns]")
 
     # carrier_mode 확인
-    carrier_mode = mv["carrier_mode"].str.upper() if "carrier_mode" in mv.columns else pd.Series("", index=mv.index)
+    carrier_mode = (
+        mv["carrier_mode"].str.upper()
+        if "carrier_mode" in mv.columns
+        else pd.Series("", index=mv.index)
+    )
     is_wip = carrier_mode == "WIP"
 
     # inbound_date가 있으면 우선 사용
@@ -359,9 +360,9 @@ def movement_breakdown_per_center(
         # 미래 도착: effective_arrival + lag_days
         future_arrival = arrival_mask & (effective_arrival > today_norm)
         if future_arrival.any():
-            pred_end.loc[future_arrival] = effective_arrival.loc[future_arrival] + pd.Timedelta(
-                days=lag_days
-            )
+            pred_end.loc[future_arrival] = effective_arrival.loc[
+                future_arrival
+            ] + pd.Timedelta(days=lag_days)
 
     has_signal = inbound_mask | (wip_mask & pred_end.notna()) | arrival_mask
     pred_end = pred_end.where(has_signal, pd.NaT)
@@ -394,15 +395,15 @@ def movement_breakdown_per_center(
     if "carrier_mode" in mv.columns and (carrier_mode == "WIP").any():
         wip_frame = mv[carrier_mode == "WIP"].copy()
         if not wip_frame.empty and "onboard_date" in wip_frame.columns:
-            add = (
-                wip_frame.dropna(subset=["onboard_date"])
-                .set_index(["resource_code", "to_center", "onboard_date"])["qty_ea"]
-            )
+            add = wip_frame.dropna(subset=["onboard_date"]).set_index(
+                ["resource_code", "to_center", "onboard_date"]
+            )["qty_ea"]
             rem = pd.Series(dtype=float)
             if "event_date" in wip_frame.columns:
                 rem = (
-                    wip_frame.dropna(subset=["event_date"])
-                    .set_index(["resource_code", "to_center", "event_date"])["qty_ea"]
+                    wip_frame.dropna(subset=["event_date"]).set_index(
+                        ["resource_code", "to_center", "event_date"]
+                    )["qty_ea"]
                     * -1
                 )
             flow = pd.concat([add, rem]) if not rem.empty else add
@@ -423,6 +424,3 @@ def movement_breakdown_per_center(
         wip_series = wip_series.clip(lower=0).round().astype(int)
 
     return in_transit_series, wip_series
-
-
-

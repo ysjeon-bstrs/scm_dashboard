@@ -18,6 +18,7 @@ from .inventory_helpers import (
     combine_forecast_results,
 )
 
+
 def forecast_sales_and_inventory(
     daily_sales: pd.DataFrame,
     timeline_center: pd.DataFrame,
@@ -46,8 +47,12 @@ def forecast_sales_and_inventory(
     ) = validate_and_prepare_forecast_inputs(daily_sales, timeline_center, start, end)
 
     if not center_set or not sku_set or index.empty:
-        empty_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
-        empty_inv = pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+        empty_sales = pd.DataFrame(
+            columns=["date", "center", "resource_code", "sales_ea"]
+        )
+        empty_inv = pd.DataFrame(
+            columns=["date", "center", "resource_code", "stock_qty"]
+        )
         return empty_sales, empty_inv
 
     # Baseline rate 및 uplift 계산
@@ -70,7 +75,9 @@ def forecast_sales_and_inventory(
     # Filtered sales 재계산 (combine_forecast_results에서 사용)
     sku_mask = sales_history.get("resource_code")
     if sku_mask is None:
-        filtered_sales = pd.DataFrame(columns=["date", "center", "resource_code", "sales_ea"])
+        filtered_sales = pd.DataFrame(
+            columns=["date", "center", "resource_code", "sales_ea"]
+        )
     else:
         sku_mask = sales_history["resource_code"].astype(str).isin(sku_set)
         if "center" in sales_history.columns:
@@ -84,6 +91,3 @@ def forecast_sales_and_inventory(
 
     # 결과 결합
     return combine_forecast_results(sales_rows, timeline_rows, filtered_sales)
-
-
-

@@ -35,6 +35,7 @@ from .cards_helpers import (
 )
 from ...analytics.kpi import kpi_breakdown_per_sku
 
+
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
     classes = ["kpi-metric-card"]
     if compact:
@@ -49,8 +50,6 @@ def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
         f'<div class="kpi-metric-value" style="font-size:{font_size}; white-space:nowrap;">{escape(value_text)}</div>'
         "</div>"
     )
-
-
 
 
 def build_grid(
@@ -86,12 +85,8 @@ def build_grid(
     attrs = (" " + " ".join(attr_parts)) if attr_parts else ""
 
     return (
-        f'<div class="{" ".join(classes)}"{attrs}{style}>'
-        + "".join(items)
-        + "</div>"
+        f'<div class="{" ".join(classes)}"{attrs}{style}>' + "".join(items) + "</div>"
     )
-
-
 
 
 def center_grid_layout(count: int) -> tuple[int | None, int, str]:
@@ -106,21 +101,27 @@ def center_grid_layout(count: int) -> tuple[int | None, int, str]:
     return None, 220, "kpi-grid--centers-dense"
 
 
-
-
 def build_center_card(center_info: Mapping[str, object]) -> str:
     metric_cards = [
         build_metric_card("재고", format_number(center_info["current"]), compact=True),
         build_metric_card(
             "이동중",
-            format_number(center_info["in_transit"]) if center_info["show_in_transit"] else "-",
+            (
+                format_number(center_info["in_transit"])
+                if center_info["show_in_transit"]
+                else "-"
+            ),
             compact=True,
         ),
         build_metric_card(
             "생산중(30일 내 완료)", format_number(center_info["wip"]), compact=True
         ),
-        build_metric_card("예상 소진일수", format_days(center_info["coverage"]), compact=True),
-        build_metric_card("소진 예상일", format_date(center_info["sellout_date"]), compact=True),
+        build_metric_card(
+            "예상 소진일수", format_days(center_info["coverage"]), compact=True
+        ),
+        build_metric_card(
+            "소진 예상일", format_date(center_info["sellout_date"]), compact=True
+        ),
     ]
     metrics_html = build_grid(
         metric_cards,
@@ -133,8 +134,6 @@ def build_center_card(center_info: Mapping[str, object]) -> str:
         f"{metrics_html}"
         "</div>"
     )
-
-
 
 
 def render_sku_summary_cards(
@@ -169,7 +168,9 @@ def render_sku_summary_cards(
         latest_snapshot_dt,
         global_latest_snapshot_dt,
         name_map,
-    ) = validate_and_prepare_snapshot(snapshot, centers, skus, date_column, latest_snapshot)
+    ) = validate_and_prepare_snapshot(
+        snapshot, centers, skus, date_column, latest_snapshot
+    )
 
     if snapshot_view.empty:
         st.caption("스냅샷 데이터 검증 실패: 유효한 데이터가 없습니다.")
@@ -306,7 +307,9 @@ def render_sku_summary_cards(
         summary_cards = [
             build_metric_card("전체 센터 재고 합계", format_number(total_current_all)),
             build_metric_card("선택 센터 재고 합계", format_number(total_current)),
-            build_metric_card("전체 이동중 재고 합계", format_number(total_transit_all)),
+            build_metric_card(
+                "전체 이동중 재고 합계", format_number(total_transit_all)
+            ),
             build_metric_card(
                 "전체 생산 예정 재고 합계",
                 format_number(wip_pipeline_value),
@@ -321,10 +324,14 @@ def render_sku_summary_cards(
         center_cards: list[str] = []
         for center in centers_list:
             center_current = (
-                int(current_by_center.get((sku, center), 0)) if not current_by_center.empty else 0
+                int(current_by_center.get((sku, center), 0))
+                if not current_by_center.empty
+                else 0
             )
             center_transit = (
-                int(in_transit_series.get((sku, center), 0)) if not in_transit_series.empty else 0
+                int(in_transit_series.get((sku, center), 0))
+                if not in_transit_series.empty
+                else 0
             )
             center_wip_30d = int(wip_30d_by_center.get((sku, center), 0))
             center_demand = float(daily_demand_series.get((sku, center), float("nan")))
@@ -344,12 +351,16 @@ def render_sku_summary_cards(
                         "wip": center_wip_30d,
                         "coverage": center_coverage,
                         "sellout_date": center_sellout_date,
-                        "show_in_transit": should_show_in_transit(center, center_transit),
+                        "show_in_transit": should_show_in_transit(
+                            center, center_transit
+                        ),
                     }
                 )
             )
 
-        center_cols, center_min_width, center_modifier = center_grid_layout(len(center_cards))
+        center_cols, center_min_width, center_modifier = center_grid_layout(
+            len(center_cards)
+        )
         centers_html = build_grid(
             center_cards,
             extra_class=f"kpi-grid--centers {center_modifier}".strip(),
@@ -373,7 +384,9 @@ def render_sku_summary_cards(
             )
 
         centers_section = (
-            '<div class="kpi-section-title">센터별 상세</div>' + centers_html if centers_html else ""
+            '<div class="kpi-section-title">센터별 상세</div>' + centers_html
+            if centers_html
+            else ""
         )
 
         sku_cards_html.append(
@@ -384,7 +397,9 @@ def render_sku_summary_cards(
             + "</div>"
         )
 
-    cards_html = build_grid(sku_cards_html, min_width=sku_min_width, extra_class="kpi-grid--sku")
+    cards_html = build_grid(
+        sku_cards_html, min_width=sku_min_width, extra_class="kpi-grid--sku"
+    )
     st.markdown(cards_html, unsafe_allow_html=True)
     st.caption(
         f"※ {pd.to_datetime(latest_snapshot).normalize():%Y-%m-%d} 스냅샷 기준 KPI이며, 현재 대표 시나리오 필터(센터/기간/SKU)가 반영되었습니다.\n"

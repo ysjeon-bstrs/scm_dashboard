@@ -48,12 +48,16 @@ def kpi_breakdown_per_sku(
             center_latest_date = center_data[snap_date_col].max()
             if pd.isna(center_latest_date):
                 continue
-            center_latest_data = center_data[center_data[snap_date_col] == center_latest_date]
+            center_latest_data = center_data[
+                center_data[snap_date_col] == center_latest_date
+            ]
             snapshot_parts.append(center_latest_data)
 
         if snapshot_parts:
             latest_snapshot_data = pd.concat(snapshot_parts, ignore_index=True)
-            cur = latest_snapshot_data.groupby("resource_code", as_index=True)["stock_qty"].sum()
+            cur = latest_snapshot_data.groupby("resource_code", as_index=True)[
+                "stock_qty"
+            ].sum()
         else:
             cur = pd.Series(dtype=float, name="resource_code")
 
@@ -93,7 +97,9 @@ def kpi_breakdown_per_sku(
 
                 # 미래 arrival: arrival + lag_days
                 fut_arr = mask_arr & (mv_kpi["arrival_date"] > today)
-                pred_end.loc[fut_arr] = mv_kpi.loc[fut_arr, "arrival_date"] + pd.Timedelta(days=int(lag_days))
+                pred_end.loc[fut_arr] = mv_kpi.loc[
+                    fut_arr, "arrival_date"
+                ] + pd.Timedelta(days=int(lag_days))
 
         pred_end = pred_end.fillna(today + pd.Timedelta(days=1))
         mv_kpi["pred_end_date"] = pred_end
@@ -107,7 +113,9 @@ def kpi_breakdown_per_sku(
             & (mv_kpi["onboard_date"].notna())
             & (mv_kpi["onboard_date"] <= today)
             & (today < mv_kpi["pred_end_date"])
-        ].groupby("resource_code", as_index=True)["qty_ea"].sum()
+        ]
+        .groupby("resource_code", as_index=True)["qty_ea"]
+        .sum()
     )
 
     # WIP 계산
@@ -119,11 +127,23 @@ def kpi_breakdown_per_sku(
     if w.empty:
         wip = pd.Series(0, index=pd.Index(skus_sel, name="resource_code"))
     else:
-        add = w.dropna(subset=["onboard_date"]).set_index(["resource_code", "onboard_date"])["qty_ea"]
-        rem = w.dropna(subset=["event_date"]).set_index(["resource_code", "event_date"])["qty_ea"] * -1
+        add = w.dropna(subset=["onboard_date"]).set_index(
+            ["resource_code", "onboard_date"]
+        )["qty_ea"]
+        rem = (
+            w.dropna(subset=["event_date"]).set_index(["resource_code", "event_date"])[
+                "qty_ea"
+            ]
+            * -1
+        )
         flow = pd.concat([add, rem]).groupby(level=[0, 1]).sum()
         flow = flow[flow.index.get_level_values(1) <= today]
         wip = flow.groupby(level=0).cumsum().groupby(level=0).last().clip(lower=0)
 
-    out = pd.DataFrame({"current": cur, "in_transit": it, "wip": wip}).reindex(skus_sel).fillna(0).astype(int)
+    out = (
+        pd.DataFrame({"current": cur, "in_transit": it, "wip": wip})
+        .reindex(skus_sel)
+        .fillna(0)
+        .astype(int)
+    )
     return out

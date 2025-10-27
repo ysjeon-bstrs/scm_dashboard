@@ -4,6 +4,7 @@
 이 모듈은 타임라인 빌드 전에 입력 데이터의 유효성을 검증합니다.
 Streamlit 의존성이 제거되어, 순수한 도메인 로직으로 동작합니다.
 """
+
 from __future__ import annotations
 
 import logging
@@ -55,17 +56,23 @@ def validate_timeline_inputs(
 
     if not isinstance(snapshot, pd.DataFrame):
         logger.error("Snapshot is not a DataFrame")
-        raise ValidationError("스냅샷 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        raise ValidationError(
+            "스냅샷 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요."
+        )
 
     if not isinstance(moves, pd.DataFrame):
         logger.error("Moves is not a DataFrame")
-        raise ValidationError("이동 원장 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요.")
+        raise ValidationError(
+            "이동 원장 데이터가 손상되었습니다. 엑셀/시트를 다시 불러와 주세요."
+        )
 
     # ========================================
     # 2단계: 스냅샷 필수 컬럼 검증
     # ========================================
     required_snapshot_cols = {"center", "resource_code", "stock_qty"}
-    missing_snapshot = [col for col in required_snapshot_cols if col not in snapshot.columns]
+    missing_snapshot = [
+        col for col in required_snapshot_cols if col not in snapshot.columns
+    ]
 
     if missing_snapshot:
         logger.error(f"Missing snapshot columns: {missing_snapshot}")
@@ -83,7 +90,8 @@ def validate_timeline_inputs(
     if missing_moves:
         logger.error(f"Missing move columns: {missing_moves}")
         raise ValidationError(
-            "이동 원장 데이터에 필요한 컬럼이 없습니다: " + ", ".join(sorted(missing_moves))
+            "이동 원장 데이터에 필요한 컬럼이 없습니다: "
+            + ", ".join(sorted(missing_moves))
         )
 
     # ========================================
@@ -91,13 +99,17 @@ def validate_timeline_inputs(
     # ========================================
     if not isinstance(start, pd.Timestamp) or not isinstance(end, pd.Timestamp):
         logger.error(f"Invalid date types: start={type(start)}, end={type(end)}")
-        raise ValidationError("기간 정보가 손상되었습니다. 기간 슬라이더를 다시 설정해 주세요.")
+        raise ValidationError(
+            "기간 정보가 손상되었습니다. 기간 슬라이더를 다시 설정해 주세요."
+        )
 
     # ========================================
     # 5단계: 날짜 범위 검증
     # ========================================
     if end < start:
         logger.error(f"Invalid date range: start={start}, end={end}")
-        raise ValidationError("기간의 종료일이 시작일보다 빠릅니다. 기간을 다시 선택하세요.")
+        raise ValidationError(
+            "기간의 종료일이 시작일보다 빠릅니다. 기간을 다시 선택하세요."
+        )
 
     logger.debug("Timeline inputs validation passed")

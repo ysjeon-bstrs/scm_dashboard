@@ -5,6 +5,7 @@
 모든 예외를 정의합니다. UI 계층은 이 예외들을 잡아서
 사용자 친화적인 에러 메시지로 변환합니다.
 """
+
 from __future__ import annotations
 
 
@@ -14,6 +15,7 @@ class DomainError(Exception):
 
     모든 도메인 예외는 이 클래스를 상속합니다.
     """
+
     pass
 
 
@@ -24,6 +26,7 @@ class ValidationError(DomainError):
     입력 데이터가 비즈니스 규칙을 만족하지 않을 때 발생합니다.
     예: 필수 컬럼 누락, 날짜 범위 오류 등
     """
+
     pass
 
 
@@ -34,6 +37,7 @@ class DataLoadError(DomainError):
     Excel, Google Sheets 등에서 데이터를 불러올 때
     오류가 발생한 경우 사용합니다.
     """
+
     pass
 
 
@@ -44,6 +48,7 @@ class FilterError(DomainError):
     센터/SKU 필터링, 날짜 범위 계산 등에서
     오류가 발생한 경우 사용합니다.
     """
+
     pass
 
 
@@ -54,4 +59,5 @@ class TimelineError(DomainError):
     타임라인 생성 과정에서 데이터 부족이나
     설정 오류가 발생한 경우 사용합니다.
     """
+
     pass

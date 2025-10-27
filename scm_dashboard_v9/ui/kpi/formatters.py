@@ -17,22 +17,24 @@ FONT_SIZE_STEP_LONG = 0.25
 
 def escape(value: object) -> str:
     """HTML 이스케이프 처리를 수행합니다.
-    
+
     Args:
         value: 이스케이프할 값
-        
+
     Returns:
         이스케이프된 문자열
     """
-    return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def format_number(value: float | int | None) -> str:
     """숫자를 천 단위 구분 기호가 있는 문자열로 포맷팅합니다.
-    
+
     Args:
         value: 포맷팅할 숫자
-        
+
     Returns:
         "1,234" 형식의 문자열 또는 "-"
     """
@@ -46,7 +48,9 @@ def format_number(value: float | int | None) -> str:
         return "-"
 
 
-def value_font_size(value: str, *, base_size: float = 1.25, min_size: float = 0.9) -> str:
+def value_font_size(
+    value: str, *, base_size: float = 1.25, min_size: float = 0.9
+) -> str:
     """값의 길이에 따라 적절한 폰트 크기를 계산합니다.
 
     긴 숫자는 작은 폰트로 표시하여 카드 내에 잘 맞도록 합니다.
@@ -72,10 +76,10 @@ def value_font_size(value: str, *, base_size: float = 1.25, min_size: float = 0.
 
 def format_days(value: float | None) -> str:
     """일수를 "N일" 형식으로 포맷팅합니다.
-    
+
     Args:
         value: 일수
-        
+
     Returns:
         "30일" 형식의 문자열 또는 "-"
     """
@@ -89,10 +93,10 @@ def format_days(value: float | None) -> str:
 
 def format_date(value: pd.Timestamp | None) -> str:
     """날짜를 "YYYY-MM-DD" 형식으로 포맷팅합니다.
-    
+
     Args:
         value: Timestamp 객체
-        
+
     Returns:
         "2024-12-31" 형식의 문자열 또는 "-"
     """
@@ -104,13 +108,15 @@ def format_date(value: pd.Timestamp | None) -> str:
         return "-"
 
 
-def calculate_coverage_days(current_qty: float | int | None, daily_demand: float | int | None) -> float | None:
+def calculate_coverage_days(
+    current_qty: float | int | None, daily_demand: float | int | None
+) -> float | None:
     """현재 재고량과 일평균 수요로 재고 커버리지 일수를 계산합니다.
-    
+
     Args:
         current_qty: 현재 재고량 (EA)
         daily_demand: 일평균 수요 (EA/day)
-        
+
     Returns:
         재고 커버리지 일수 또는 None
     """
@@ -124,13 +130,15 @@ def calculate_coverage_days(current_qty: float | int | None, daily_demand: float
         return None
 
 
-def calculate_sellout_date(today: pd.Timestamp, coverage_days: float | None) -> pd.Timestamp | None:
+def calculate_sellout_date(
+    today: pd.Timestamp, coverage_days: float | None
+) -> pd.Timestamp | None:
     """재고 소진 예상 날짜를 계산합니다.
-    
+
     Args:
         today: 기준 날짜
         coverage_days: 재고 커버리지 일수
-        
+
     Returns:
         재고 소진 예상 날짜 또는 None
     """
@@ -144,11 +152,11 @@ def calculate_sellout_date(today: pd.Timestamp, coverage_days: float | None) -> 
 
 def should_show_in_transit(center: str, in_transit_value: int) -> bool:
     """In-Transit 재고를 표시해야 하는지 판단합니다.
-    
+
     Args:
         center: 센터 이름
         in_transit_value: In-Transit 재고량
-        
+
     Returns:
         표시 여부
     """

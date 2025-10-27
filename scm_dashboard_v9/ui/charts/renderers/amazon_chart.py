@@ -35,6 +35,7 @@ from .amazon_chart_helpers import (
 if TYPE_CHECKING:
     from scm_dashboard_v9.forecast import AmazonForecastContext
 
+
 def render_amazon_sales_vs_inventory(
     ctx: "AmazonForecastContext",
     *,
@@ -81,7 +82,9 @@ def render_amazon_sales_vs_inventory(
             st.info("AMZUS 데이터가 없습니다.")
         return
 
-    start, end, today, lookback_days, promo_multiplier = extract_forecast_parameters(ctx, df)
+    start, end, today, lookback_days, promo_multiplier = extract_forecast_parameters(
+        ctx, df
+    )
 
     df = df[
         (df["date"] >= start - pd.Timedelta(days=lookback_days + 2))
@@ -94,7 +97,9 @@ def render_amazon_sales_vs_inventory(
 
     inv_actual_snapshot, sales_actual = aggregate_actual_data(df, today)
 
-    avg_demand_by_sku, last_stock_by_sku = calculate_sku_metrics(df, today, lookback_days)
+    avg_demand_by_sku, last_stock_by_sku = calculate_sku_metrics(
+        df, today, lookback_days
+    )
 
     moves_df, inbound = process_moves_data(ctx, target_centers, skus, today, end)
 
@@ -121,8 +126,15 @@ def render_amazon_sales_vs_inventory(
     fallback_skus = sorted((missing_sales_skus | missing_inv_skus))
     if fcst_start <= end and fallback_skus:
         fb_sales, fb_inv = generate_fallback_forecasts(
-            fallback_skus, fcst_start, end, last_stock_by_sku, inbound,
-            avg_demand_by_sku, promo_multiplier, missing_sales_skus, missing_inv_skus
+            fallback_skus,
+            fcst_start,
+            end,
+            last_stock_by_sku,
+            inbound,
+            avg_demand_by_sku,
+            promo_multiplier,
+            missing_sales_skus,
+            missing_inv_skus,
         )
         fallback_sales_rows.extend(fb_sales)
         fallback_inv_rows.extend(fb_inv)
@@ -130,9 +142,18 @@ def render_amazon_sales_vs_inventory(
     # Finalize forecast DataFrames
     default_center = target_centers[0] if target_centers else None
     sales_forecast_df, inv_actual_df, inv_forecast_df = finalize_forecast_dataframes(
-        fallback_sales_rows, fallback_inv_rows, inv_actual_snapshot,
-        inv_actual, inv_forecast, default_center, use_inventory_for_sales,
-        target_centers, skus, start, end, today
+        fallback_sales_rows,
+        fallback_inv_rows,
+        inv_actual_snapshot,
+        inv_actual,
+        inv_forecast,
+        default_center,
+        use_inventory_for_sales,
+        target_centers,
+        skus,
+        start,
+        end,
+        today,
     )
 
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
@@ -144,9 +165,16 @@ def render_amazon_sales_vs_inventory(
     )
 
     # Trim all data to display range
-    inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma = trim_data_to_display_range(
-        inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma,
-        display_start, display_end
+    inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma = (
+        trim_data_to_display_range(
+            inv_actual_df,
+            inv_forecast_df,
+            sales_actual,
+            sales_forecast_df,
+            ma,
+            display_start,
+            display_end,
+        )
     )
 
     colors = sku_colors or sku_color_map(skus)
@@ -222,7 +250,7 @@ def render_amazon_sales_vs_inventory(
     fig.add_vline(x=today, line_color="crimson", line_dash="dash", line_width=2)
 
     fig.update_layout(
-         # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
+        # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함
         title="AMZUS",
         barmode="stack",
         legend=dict(
@@ -254,5 +282,3 @@ def render_amazon_sales_vs_inventory(
     fig.update_xaxes(range=[display_start, display_end])
 
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-
-

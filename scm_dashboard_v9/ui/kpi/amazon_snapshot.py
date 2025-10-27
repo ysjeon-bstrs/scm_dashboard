@@ -73,7 +73,9 @@ def _coerce_snapshot_frame(
         or cols_lower.get("pending_at_fc")
         or cols_lower.get("fc pending")
     )
-    processing_col = cols_lower.get("stock_processing") or cols_lower.get("processing_qty")
+    processing_col = cols_lower.get("stock_processing") or cols_lower.get(
+        "processing_qty"
+    )
     expected_col = cols_lower.get("stock_expected") or cols_lower.get("expected_qty")
     sales_col = cols_lower.get("sales_qty") or cols_lower.get("sale_qty")
 
@@ -130,7 +132,9 @@ def _coerce_snapshot_frame(
         df[column] = df[column].clip(lower=0)
 
     if centers:
-        centers_norm = {str(center).strip() for center in centers if str(center).strip()}
+        centers_norm = {
+            str(center).strip() for center in centers if str(center).strip()
+        }
         df = df[df["center"].isin(centers_norm)]
     skus_norm = {str(sku).strip() for sku in skus if str(sku).strip()}
     if skus_norm:
@@ -405,13 +409,41 @@ def render_amazon_snapshot_kpis(
         for sku in prev_df.index:
             row = prev_df.loc[sku]
             prev_data[str(sku)] = {
-                "stock_qty": float(row.get("stock_qty", 0)) if pd.notna(row.get("stock_qty")) else 0,
-                "stock_available": float(row.get("stock_available", 0)) if pd.notna(row.get("stock_available")) else 0,
-                "pending_fc": float(row.get("pending_fc", 0)) if pd.notna(row.get("pending_fc")) else 0,
-                "stock_processing": float(row.get("stock_processing", 0)) if pd.notna(row.get("stock_processing")) else 0,
-                "stock_expected": float(row.get("stock_expected", 0)) if pd.notna(row.get("stock_expected")) else 0,
-                "sales_yday": float(row.get("sales_yday", 0)) if pd.notna(row.get("sales_yday")) else 0,
-                "cover_days": float(row.get("cover_days", 0)) if pd.notna(row.get("cover_days")) else 0,
+                "stock_qty": (
+                    float(row.get("stock_qty", 0))
+                    if pd.notna(row.get("stock_qty"))
+                    else 0
+                ),
+                "stock_available": (
+                    float(row.get("stock_available", 0))
+                    if pd.notna(row.get("stock_available"))
+                    else 0
+                ),
+                "pending_fc": (
+                    float(row.get("pending_fc", 0))
+                    if pd.notna(row.get("pending_fc"))
+                    else 0
+                ),
+                "stock_processing": (
+                    float(row.get("stock_processing", 0))
+                    if pd.notna(row.get("stock_processing"))
+                    else 0
+                ),
+                "stock_expected": (
+                    float(row.get("stock_expected", 0))
+                    if pd.notna(row.get("stock_expected"))
+                    else 0
+                ),
+                "sales_yday": (
+                    float(row.get("sales_yday", 0))
+                    if pd.notna(row.get("sales_yday"))
+                    else 0
+                ),
+                "cover_days": (
+                    float(row.get("cover_days", 0))
+                    if pd.notna(row.get("cover_days"))
+                    else 0
+                ),
             }
 
     cards_html: list[str] = []
@@ -483,7 +515,9 @@ def render_amazon_snapshot_kpis(
             if delta_salable > 0:
                 available_str += f" <span class='delta-up'>(↑{delta_salable:+,})</span>"
             else:
-                available_str += f" <span class='delta-down'>(↓{abs(delta_salable):,})</span>"
+                available_str += (
+                    f" <span class='delta-down'>(↓{abs(delta_salable):,})</span>"
+                )
         processing_str = _fmt_with_delta(processing, delta_processing)
         expected_str = _fmt_with_delta(expected, delta_expected)
         sales_str = _fmt_with_delta(sales_yday, delta_sales)

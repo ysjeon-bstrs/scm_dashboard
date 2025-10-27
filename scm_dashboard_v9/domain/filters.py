@@ -4,6 +4,7 @@
 이 모듈은 데이터프레임으로부터 센터/SKU 옵션을 추출하고,
 대시보드의 날짜 범위 슬라이더를 위한 경계값을 계산합니다.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
@@ -16,6 +17,7 @@ from center_alias import normalize_center_value
 # ========================================
 # 날짜 정규화 헬퍼
 # ========================================
+
 
 def safe_to_datetime(
     series_or_value,
@@ -77,6 +79,7 @@ def normalize_timestamp(value) -> Optional[pd.Timestamp]:
 # ========================================
 # DataFrame 필터 헬퍼
 # ========================================
+
 
 def filter_by_centers(
     df: pd.DataFrame,
@@ -183,6 +186,7 @@ def filter_by_centers_and_skus(
 # 검증 헬퍼
 # ========================================
 
+
 def is_empty_or_none(df: Optional[pd.DataFrame]) -> bool:
     """
     DataFrame이 None이거나 비어있는지 확인합니다.
@@ -254,8 +258,7 @@ def norm_center(x: str) -> Optional[str]:
 
 
 def extract_center_and_sku_options(
-    moves: pd.DataFrame,
-    snapshot: pd.DataFrame
+    moves: pd.DataFrame, snapshot: pd.DataFrame
 ) -> Tuple[list[str], list[str]]:
     """
     이동 원장과 스냅샷 데이터로부터 선택 가능한 센터와 SKU 목록을 추출합니다.
@@ -296,13 +299,18 @@ def extract_center_and_sku_options(
     # ========================================
     # 2단계: 이동 원장에서 센터 추출 (출발지 + 목적지)
     # ========================================
-    move_centers = pd.concat(
-        [
-            moves.get("from_center", pd.Series(dtype=object)),
-            moves.get("to_center", pd.Series(dtype=object)),
-        ],
-        ignore_index=True,
-    ).dropna().astype(str).str.strip()
+    move_centers = (
+        pd.concat(
+            [
+                moves.get("from_center", pd.Series(dtype=object)),
+                moves.get("to_center", pd.Series(dtype=object)),
+            ],
+            ignore_index=True,
+        )
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
 
     # ========================================
     # 3단계: 모든 센터를 결합하고 정규화
@@ -310,9 +318,7 @@ def extract_center_and_sku_options(
     all_candidates = pd.concat([snap_centers, move_centers], ignore_index=True).dropna()
 
     # 센터명 정규화 및 중복 제거
-    centers = sorted(
-        {c for c in (norm_center(value) for value in all_candidates) if c}
-    )
+    centers = sorted({c for c in (norm_center(value) for value in all_candidates) if c})
 
     # ========================================
     # 4단계: SKU 추출 (snapshot 우선, 없으면 moves)
@@ -325,7 +331,9 @@ def extract_center_and_sku_options(
     return centers, skus
 
 
-def calculate_move_date_bounds(moves: pd.DataFrame) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
+def calculate_move_date_bounds(
+    moves: pd.DataFrame,
+) -> Tuple[Optional[pd.Timestamp], Optional[pd.Timestamp]]:
     """
     이동 원장에서 사용 가능한 가장 이른 날짜와 가장 늦은 날짜를 반환합니다.
 

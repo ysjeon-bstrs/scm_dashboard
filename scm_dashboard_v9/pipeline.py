@@ -8,7 +8,12 @@ from typing import Iterable
 
 import pandas as pd
 
-from .planning.timeline import TimelineBuilder, TimelineContext, prepare_moves, prepare_snapshot
+from .planning.timeline import (
+    TimelineBuilder,
+    TimelineContext,
+    prepare_moves,
+    prepare_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
