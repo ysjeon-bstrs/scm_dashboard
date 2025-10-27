@@ -357,7 +357,7 @@ def build_amazon_snapshot_kpis(
         expected = max(0.0, expected)
         sales_yday = max(0.0, sales_yday)
 
-        ma7 = _ma7_for(normalized, sku, latest_ts) if use_ma7 else None
+        ma7 = _ma7_for(normalized_base, sku, latest_ts) if use_ma7 else None
         demand_candidate = ma7 if ma7 is not None else sales_yday
         if demand_candidate is None:
             demand = None
