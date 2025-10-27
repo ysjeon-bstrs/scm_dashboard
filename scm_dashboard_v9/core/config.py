@@ -75,7 +75,7 @@ class ConsumptionConfig:
     """소비 예측 관련 설정"""
 
     # 추세 계산 기본 기간 (일)
-    default_lookback_days: int = 14
+    default_lookback_days: int = 21
 
     # 추세 계산 최소 기간 (일)
     min_lookback_days: int = 7
