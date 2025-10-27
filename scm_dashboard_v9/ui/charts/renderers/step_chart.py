@@ -10,8 +10,8 @@ from typing import Dict, Optional
 import pandas as pd
 import streamlit as st
 
-from ..colors import STEP_PALETTE, step_sku_color_map, shade_for, tint
-from ..data_utils import safe_dataframe, ensure_naive_index
+from ..colors import STEP_PALETTE, shade_for, step_sku_color_map, tint
+from ..data_utils import ensure_naive_index, safe_dataframe
 from ..plotly_helpers import ensure_plotly_available
 
 try:

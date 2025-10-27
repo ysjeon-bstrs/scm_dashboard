@@ -5,30 +5,31 @@ render_amazon_sales_vs_inventory 함수를 제공합니다.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from center_alias import normalize_center_value
+
 from ..colors import sku_color_map
 from ..data_utils import normalize_inventory_frame
-from ..plotly_helpers import ensure_plotly_available, go
 from ..inventory import clamped_forecast_series
+from ..plotly_helpers import ensure_plotly_available, go
 from ..sales import sales_forecast_from_inventory_projection
 from .amazon_chart_helpers import (
-    extract_forecast_parameters,
-    aggregate_actual_data,
-    calculate_sku_metrics,
-    calculate_moving_average,
-    normalize_snapshot_data,
-    process_moves_data,
-    process_inventory_forecast,
-    process_sales_forecast,
-    generate_fallback_forecasts,
-    finalize_forecast_dataframes,
     add_anchor_to_forecast,
+    aggregate_actual_data,
+    calculate_moving_average,
+    calculate_sku_metrics,
+    extract_forecast_parameters,
+    finalize_forecast_dataframes,
+    generate_fallback_forecasts,
+    normalize_snapshot_data,
+    process_inventory_forecast,
+    process_moves_data,
+    process_sales_forecast,
     trim_data_to_display_range,
 )
 

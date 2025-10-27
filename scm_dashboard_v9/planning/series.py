@@ -8,7 +8,6 @@ from typing import Iterable, Set
 import numpy as np
 import pandas as pd
 
-
 TIMELINE_COLUMNS = ["date", "center", "resource_code", "stock_qty"]
 
 

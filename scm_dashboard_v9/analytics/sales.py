@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable, NamedTuple, Optional, Sequence
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
 class AmazonSalesResult(NamedTuple):

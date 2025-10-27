@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-
 _NUMERIC_COLUMNS = {
     "stock_qty",
     "stock_available",

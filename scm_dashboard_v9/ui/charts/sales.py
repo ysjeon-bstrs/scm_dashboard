@@ -12,6 +12,7 @@ import pandas as pd
 
 from center_alias import normalize_center_value
 from scm_dashboard_v9.domain.filters import filter_by_centers, safe_to_datetime
+
 from .data_utils import coerce_cols, empty_sales_frame
 
 

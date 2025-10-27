@@ -10,13 +10,13 @@ from typing import Iterable, Optional
 import numpy as np
 import pandas as pd
 
-from .sales import make_forecast_sales_capped
 from .inventory_helpers import (
-    validate_and_prepare_forecast_inputs,
     calculate_baseline_rates,
-    simulate_inventory_sales_for_group,
     combine_forecast_results,
+    simulate_inventory_sales_for_group,
+    validate_and_prepare_forecast_inputs,
 )
+from .sales import make_forecast_sales_capped
 
 
 def forecast_sales_and_inventory(

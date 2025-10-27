@@ -14,21 +14,21 @@ import streamlit as st
 from center_alias import normalize_center_value
 from scm_dashboard_v9.core import build_timeline
 
-from .models import AmazonForecastContext
-from .sales import load_amazon_daily_sales_from_snapshot_raw, make_forecast_sales_capped
-from .inventory import forecast_sales_and_inventory
-from .estimation import apply_consumption_with_events
 from .context_helpers import (
-    calculate_promotion_multiplier,
-    normalize_inputs,
-    calculate_latest_snapshot,
-    process_inventory_data,
-    process_sales_history,
+    apply_stock_depletion,
     build_inbound_lookup,
+    calculate_latest_snapshot,
+    calculate_promotion_multiplier,
     calculate_promotion_uplift,
     generate_sales_forecasts,
-    apply_stock_depletion,
+    normalize_inputs,
+    process_inventory_data,
+    process_sales_history,
 )
+from .estimation import apply_consumption_with_events
+from .inventory import forecast_sales_and_inventory
+from .models import AmazonForecastContext
+from .sales import load_amazon_daily_sales_from_snapshot_raw, make_forecast_sales_capped
 
 
 def build_amazon_forecast_context(

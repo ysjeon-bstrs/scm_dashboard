@@ -1,13 +1,13 @@
 """Planning layer exports for SCM dashboard v5."""
 
-from .timeline import TimelineBuilder, TimelineContext, prepare_moves, prepare_snapshot
+from .schedule import annotate_move_schedule
 from .series import (
     SeriesIndex,
     build_center_series,
     build_in_transit_series,
     build_wip_series,
 )
-from .schedule import annotate_move_schedule
+from .timeline import TimelineBuilder, TimelineContext, prepare_moves, prepare_snapshot
 
 __all__ = [
     "TimelineBuilder",
