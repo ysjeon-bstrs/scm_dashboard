@@ -36,7 +36,6 @@ from .metrics import (
 from .styles import inject_responsive_styles
 
 
-
 def build_metric_card(label: str, value: str, *, compact: bool = False) -> str:
     classes = ["kpi-metric-card"]
     if compact:

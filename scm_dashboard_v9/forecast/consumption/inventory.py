@@ -19,7 +19,6 @@ from .inventory_helpers import (
 from .sales import make_forecast_sales_capped
 
 
-
 def forecast_sales_and_inventory(
     daily_sales: pd.DataFrame,
     timeline_center: pd.DataFrame,
