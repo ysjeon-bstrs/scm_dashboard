@@ -315,6 +315,8 @@ def render_inbound_and_wip_tables(
             "qty_ea",
             "pred_inbound_date",
             "lot",
+            "global_b2c",
+            "global_b2b",
         ]
         wip_cols = [c for c in wip_cols if c in arr_wip.columns]
 

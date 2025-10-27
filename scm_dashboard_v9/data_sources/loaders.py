@@ -262,6 +262,10 @@ def load_wip_from_incoming(
         None,
     )
 
+    # Optional channel split columns (new sheet fields)
+    b2c_col = "global_b2c" if "global_b2c" in df_incoming.columns else None
+    b2b_col = "global_b2b" if "global_b2b" in df_incoming.columns else None
+
     if not date_col or not sku_col or not qty_col:
         return pd.DataFrame()
 
@@ -278,6 +282,14 @@ def load_wip_from_incoming(
             "lot": df_incoming[lot_col].astype(str).str.strip() if lot_col else "",
         }
     )
+    if b2c_col:
+        out["global_b2c"] = pd.to_numeric(
+            df_incoming[b2c_col].astype(str).str.replace(",", ""), errors="coerce"
+        )
+    if b2b_col:
+        out["global_b2b"] = pd.to_numeric(
+            df_incoming[b2b_col].astype(str).str.replace(",", ""), errors="coerce"
+        )
     out["wip_start"] = df_incoming[po_col].map(_parse_po_date) if po_col else pd.NaT
     mask_na = out["wip_start"].isna() & out["wip_ready"].notna()
     out.loc[mask_na, "wip_start"] = out.loc[mask_na, "wip_ready"] - pd.to_timedelta(
@@ -287,9 +299,19 @@ def load_wip_from_incoming(
     out = out.dropna(subset=["resource_code", "wip_ready", "wip_start"]).reset_index(
         drop=True
     )
-    return out[
-        ["resource_code", "to_center", "wip_start", "wip_ready", "qty_ea", "lot"]
+    keep_cols = [
+        "resource_code",
+        "to_center",
+        "wip_start",
+        "wip_ready",
+        "qty_ea",
+        "lot",
     ]
+    for optional_col in ["global_b2c", "global_b2b"]:
+        if optional_col in out.columns:
+            keep_cols.append(optional_col)
+
+    return out[keep_cols]
 
 
 def merge_wip_as_moves(
@@ -343,6 +365,10 @@ def merge_wip_as_moves(
             "lot": wip_df_norm.get("lot", ""),
         }
     )
+
+    for optional_col in ["global_b2c", "global_b2b"]:
+        if optional_col in wip_df_norm.columns:
+            wip_moves[optional_col] = wip_df_norm[optional_col]
 
     wip_moves["to_center"] = normalize_center_series(wip_moves["to_center"])
     mask_to_wip = (wip_moves["to_center"].str.upper() == "WIP").fillna(False)
