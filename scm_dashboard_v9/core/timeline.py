@@ -42,5 +42,7 @@ def build_timeline(
     # Normalise timestamps to midnight for consistent downstream filtering.
     timeline = timeline.copy()
     if "date" in timeline.columns:
-        timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce").dt.normalize()
+        timeline["date"] = pd.to_datetime(
+            timeline["date"], errors="coerce"
+        ).dt.normalize()
     return timeline

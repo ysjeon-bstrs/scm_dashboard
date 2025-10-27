@@ -71,12 +71,14 @@ def prepare_amazon_sales_series(
         delta = daily.diff().fillna(0)
         sales = (-delta).clip(lower=0)
 
-        frame = pd.DataFrame({
-            "date": idx,
-            "resource_code": sku,
-            "inventory_qty": daily.values,
-            "sales_qty": sales.values,
-        })
+        frame = pd.DataFrame(
+            {
+                "date": idx,
+                "resource_code": sku,
+                "inventory_qty": daily.values,
+                "sales_qty": sales.values,
+            }
+        )
         series_frames.append(frame)
 
     combined = pd.concat(series_frames, ignore_index=True)
@@ -87,7 +89,9 @@ def prepare_amazon_sales_series(
     )
 
     agg["sales_roll_mean"] = (
-        agg["sales_qty"].rolling(window=int(max(1, rolling_window)), min_periods=1).mean()
+        agg["sales_qty"]
+        .rolling(window=int(max(1, rolling_window)), min_periods=1)
+        .mean()
     )
 
     return AmazonSalesResult(agg, center)
@@ -180,7 +184,11 @@ def prepare_amazon_inventory_layers(
         )
 
     timeline_cols = {"date", "center", "resource_code", "stock_qty"}
-    if timeline is None or timeline.empty or not timeline_cols.issubset(timeline.columns):
+    if (
+        timeline is None
+        or timeline.empty
+        or not timeline_cols.issubset(timeline.columns)
+    ):
         return AmazonSeriesResult(
             pd.Series(dtype=float),
             pd.Series(dtype=float),
@@ -199,7 +207,10 @@ def prepare_amazon_inventory_layers(
     if not center_list:
         center_list = [
             str(center)
-            for center in timeline.get("center", pd.Series(dtype=str)).dropna().astype(str).unique()
+            for center in timeline.get("center", pd.Series(dtype=str))
+            .dropna()
+            .astype(str)
+            .unique()
             if _is_amazon_center(center)
         ]
 
@@ -217,9 +228,7 @@ def prepare_amazon_inventory_layers(
     work = work.dropna(subset=["date"])
     work["center"] = work["center"].astype(str)
     work["resource_code"] = work["resource_code"].astype(str)
-    work = work[
-        work["center"].isin(center_list) & work["resource_code"].isin(sku_list)
-    ]
+    work = work[work["center"].isin(center_list) & work["resource_code"].isin(sku_list)]
 
     if work.empty:
         return AmazonSeriesResult(
@@ -255,9 +264,7 @@ def prepare_amazon_inventory_layers(
             fc = fc.dropna(subset=["date"])
             fc["center"] = fc["center"].astype(str)
             fc["resource_code"] = fc["resource_code"].astype(str)
-            fc = fc[
-                fc["center"].isin(center_list) & fc["resource_code"].isin(sku_list)
-            ]
+            fc = fc[fc["center"].isin(center_list) & fc["resource_code"].isin(sku_list)]
             if not fc.empty:
                 forecast_series = (
                     fc.groupby("date")["stock_qty"]
@@ -271,12 +278,17 @@ def prepare_amazon_inventory_layers(
                 forecast_series.name = "forecast_inventory_qty"
 
                 if latest_snapshot is not None and pd.notna(latest_snapshot):
-                    cons_start = pd.to_datetime(latest_snapshot).normalize() + pd.Timedelta(days=1)
+                    cons_start = pd.to_datetime(
+                        latest_snapshot
+                    ).normalize() + pd.Timedelta(days=1)
                     mask = forecast_series.index < cons_start
                     if mask.any():
                         forecast_series.loc[mask] = np.nan
                         prev_day = cons_start - pd.Timedelta(days=1)
-                        if prev_day in forecast_series.index and prev_day in inventory.index:
+                        if (
+                            prev_day in forecast_series.index
+                            and prev_day in inventory.index
+                        ):
                             forecast_series.loc[prev_day] = inventory.loc[prev_day]
 
     inbound_series: Optional[pd.Series] = None

@@ -30,7 +30,16 @@ def validate_and_prepare_snapshot(
     skus: Sequence[str],
     date_column: str,
     latest_snapshot: pd.Timestamp | None,
-) -> Tuple[pd.DataFrame, pd.DataFrame, list[str], list[str], list[str], pd.Timestamp, pd.Timestamp, Mapping[str, str]]:
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    list[str],
+    list[str],
+    list[str],
+    pd.Timestamp,
+    pd.Timestamp,
+    Mapping[str, str],
+]:
     """스냅샷 데이터를 검증하고 준비합니다.
 
     Returns:
@@ -41,13 +50,18 @@ def validate_and_prepare_snapshot(
     snapshot_view = snapshot.copy()
 
     # Date column 검증
-    if date_column not in snapshot_view.columns and "snapshot_date" in snapshot_view.columns:
+    if (
+        date_column not in snapshot_view.columns
+        and "snapshot_date" in snapshot_view.columns
+    ):
         date_column = "snapshot_date"
     if date_column not in snapshot_view.columns:
         return pd.DataFrame(), pd.DataFrame(), [], [], [], pd.NaT, pd.NaT, {}
 
     # Date 정규화
-    snapshot_view["date"] = pd.to_datetime(snapshot_view[date_column], errors="coerce").dt.normalize()
+    snapshot_view["date"] = pd.to_datetime(
+        snapshot_view[date_column], errors="coerce"
+    ).dt.normalize()
     snapshot_view = snapshot_view.dropna(subset=["date"])
     if snapshot_view.empty:
         return pd.DataFrame(), pd.DataFrame(), [], [], [], pd.NaT, pd.NaT, {}
@@ -97,9 +111,13 @@ def validate_and_prepare_snapshot(
         requested_dt = pd.to_datetime(latest_snapshot).normalize()
         # 모든 선택된 센터가 요청한 날짜에 데이터를 가지고 있는지 확인
         centers_with_data_at_requested = set(
-            filtered_snapshot[filtered_snapshot["date"] == requested_dt]["center"].unique()
+            filtered_snapshot[filtered_snapshot["date"] == requested_dt][
+                "center"
+            ].unique()
         )
-        all_centers_have_data = set(centers_list).issubset(centers_with_data_at_requested)
+        all_centers_have_data = set(centers_list).issubset(
+            centers_with_data_at_requested
+        )
 
         if all_centers_have_data:
             latest_snapshot_dt = requested_dt
@@ -108,21 +126,31 @@ def validate_and_prepare_snapshot(
             # (모든 센터가 데이터를 가진 가장 최근 날짜)
             center_latest_dates = filtered_snapshot.groupby("center")["date"].max()
             if not center_latest_dates.empty:
-                latest_snapshot_dt = pd.to_datetime(center_latest_dates.min()).normalize()
+                latest_snapshot_dt = pd.to_datetime(
+                    center_latest_dates.min()
+                ).normalize()
             else:
-                latest_snapshot_dt = pd.to_datetime(selected_latest_snapshot).normalize()
+                latest_snapshot_dt = pd.to_datetime(
+                    selected_latest_snapshot
+                ).normalize()
 
     # Name map 생성
     name_map: Mapping[str, str] = {}
     if "resource_name" in filtered_snapshot.columns:
-        name_rows = filtered_snapshot.dropna(subset=["resource_code", "resource_name"]).copy()
+        name_rows = filtered_snapshot.dropna(
+            subset=["resource_code", "resource_name"]
+        ).copy()
         if not name_rows.empty:
             name_rows["resource_code"] = name_rows["resource_code"].astype(str)
-            name_rows["resource_name"] = name_rows["resource_name"].astype(str).str.strip()
+            name_rows["resource_name"] = (
+                name_rows["resource_name"].astype(str).str.strip()
+            )
             name_rows = name_rows[name_rows["resource_name"] != ""]
             if not name_rows.empty:
                 name_map = dict(
-                    name_rows.sort_values("date", ascending=False)[["resource_code", "resource_name"]]
+                    name_rows.sort_values("date", ascending=False)[
+                        ["resource_code", "resource_name"]
+                    ]
                     .drop_duplicates(subset=["resource_code"])
                     .itertuples(index=False, name=None)
                 )
@@ -154,7 +182,9 @@ def prepare_moves_data(
 
     if not moves_view.empty:
         if "carrier_mode" in moves_view.columns:
-            moves_view["carrier_mode"] = moves_view["carrier_mode"].astype(str).str.upper()
+            moves_view["carrier_mode"] = (
+                moves_view["carrier_mode"].astype(str).str.upper()
+            )
         for column in ["resource_code", "to_center"]:
             if column in moves_view.columns:
                 moves_view[column] = moves_view[column].astype(str)
@@ -164,12 +194,14 @@ def prepare_moves_data(
 
         if "resource_code" in moves_view.columns:
             moves_view = moves_view[
-                moves_view["resource_code"].isin(sku_list) | (moves_view["resource_code"] == "")
+                moves_view["resource_code"].isin(sku_list)
+                | (moves_view["resource_code"] == "")
             ]
         moves_global = moves_view.copy()
         if "to_center" in moves_view.columns:
             moves_view = moves_view[
-                moves_view["to_center"].isin(centers_list) | (moves_view["to_center"] == "")
+                moves_view["to_center"].isin(centers_list)
+                | (moves_view["to_center"] == "")
             ]
 
     return moves_view, moves_global
@@ -246,9 +278,7 @@ def calculate_wip_pipeline(
             else {}
         )
         wip_30d_dict = (
-            wip_30d_series.astype(int).to_dict()
-            if not wip_30d_series.empty
-            else {}
+            wip_30d_series.astype(int).to_dict() if not wip_30d_series.empty else {}
         )
 
         if "__TOTAL__" in sku_list:
@@ -303,7 +333,11 @@ def aggregate_metrics(
                 & (filtered_snapshot["date"] == latest_date)
             ]
             latest_snapshot_parts.append(center_latest_data)
-        latest_snapshot_rows = pd.concat(latest_snapshot_parts, ignore_index=True) if latest_snapshot_parts else pd.DataFrame()
+        latest_snapshot_rows = (
+            pd.concat(latest_snapshot_parts, ignore_index=True)
+            if latest_snapshot_parts
+            else pd.DataFrame()
+        )
     else:
         latest_snapshot_rows = pd.DataFrame()
 
@@ -323,7 +357,11 @@ def aggregate_metrics(
                 & (snapshot_view["date"] == latest_date)
             ]
             global_snapshot_parts.append(center_latest_data)
-        global_snapshot_rows = pd.concat(global_snapshot_parts, ignore_index=True) if global_snapshot_parts else pd.DataFrame()
+        global_snapshot_rows = (
+            pd.concat(global_snapshot_parts, ignore_index=True)
+            if global_snapshot_parts
+            else pd.DataFrame()
+        )
     else:
         global_snapshot_rows = pd.DataFrame()
 
@@ -347,7 +385,8 @@ def aggregate_metrics(
     # Global current stock 집계
     global_current_totals = (
         global_snapshot_rows.groupby("resource_code")["stock_qty"].sum()
-        if "stock_qty" in global_snapshot_rows.columns and not global_snapshot_rows.empty
+        if "stock_qty" in global_snapshot_rows.columns
+        and not global_snapshot_rows.empty
         else pd.Series(dtype=float)
     )
 

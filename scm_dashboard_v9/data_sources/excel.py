@@ -4,6 +4,7 @@ Excel 파일 데이터 로더
 이 모듈은 사용자가 업로드한 Excel 파일(.xlsx)에서
 스냅샷, 이동 원장, WIP 데이터를 로드합니다.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,7 +19,10 @@ from scm_dashboard_v9.data_sources.loaders import (
     merge_wip_as_moves,
 )
 
-from scm_dashboard_v9.domain.normalization import normalize_moves, normalize_snapshot as normalize_refined_snapshot
+from scm_dashboard_v9.domain.normalization import (
+    normalize_moves,
+    normalize_snapshot as normalize_refined_snapshot,
+)
 
 
 @dataclass
@@ -30,6 +34,7 @@ class LoadedData:
         moves: 정규화된 이동 원장 데이터프레임 (WIP 포함)
         snapshot: 정규화된 스냅샷 데이터프레임
     """
+
     moves: pd.DataFrame
     snapshot: pd.DataFrame
 

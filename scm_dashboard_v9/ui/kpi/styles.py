@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+
 def inject_responsive_styles() -> None:
     """Inject shared CSS styles for KPI cards (re-inject on each run)."""
 
@@ -218,6 +219,3 @@ def inject_responsive_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
-
-
-

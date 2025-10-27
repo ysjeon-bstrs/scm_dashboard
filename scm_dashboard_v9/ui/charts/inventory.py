@@ -12,6 +12,7 @@ import pandas as pd
 
 from .data_utils import coerce_cols, safe_dataframe, ensure_naive_index
 
+
 def total_inventory_series(
     inv_actual: pd.DataFrame,
     inv_forecast: pd.DataFrame,
@@ -39,7 +40,9 @@ def total_inventory_series(
         chunk = chunk[chunk["resource_code"] == sku_str]
         if chunk.empty:
             continue
-        chunk["date"] = pd.to_datetime(chunk.get("date"), errors="coerce").dt.normalize()
+        chunk["date"] = pd.to_datetime(
+            chunk.get("date"), errors="coerce"
+        ).dt.normalize()
         chunk = chunk.dropna(subset=["date"])
         if chunk.empty:
             continue
@@ -57,9 +60,7 @@ def total_inventory_series(
         return pd.Series(dtype=float, index=empty_index)
 
     combined = pd.concat(frames, ignore_index=True)
-    combined = (
-        combined.groupby("date")["stock_qty"].sum().sort_index()
-    )
+    combined = combined.groupby("date")["stock_qty"].sum().sort_index()
 
     index = pd.date_range(start_norm, end_norm, freq="D")
     if index.empty:
@@ -72,7 +73,6 @@ def total_inventory_series(
     combined = combined.fillna(0.0)
     combined.index.name = "date"
     return combined.astype(float)
-
 
 
 def trim_sales_forecast_to_inventory(
@@ -90,7 +90,9 @@ def trim_sales_forecast_to_inventory(
         return forecast_df
 
     forecast = forecast_df.copy()
-    forecast["date"] = pd.to_datetime(forecast.get("date"), errors="coerce").dt.normalize()
+    forecast["date"] = pd.to_datetime(
+        forecast.get("date"), errors="coerce"
+    ).dt.normalize()
     forecast = forecast.dropna(subset=["date"])
     if forecast.empty:
         return forecast
@@ -136,19 +138,30 @@ def inventory_matrix(
     """선택 센터×SKU의 재고(실측) 시계열 매트릭스. index=date, columns=sku"""
     c = coerce_cols(snap_long)
     s = snap_long.rename(
-        columns={c["date"]: "date", c["center"]: "center", c["sku"]: "resource_code", c["qty"]: "stock_qty"}
+        columns={
+            c["date"]: "date",
+            c["center"]: "center",
+            c["sku"]: "resource_code",
+            c["qty"]: "stock_qty",
+        }
     )[["date", "center", "resource_code", "stock_qty"]].copy()
 
     s["date"] = pd.to_datetime(s["date"], errors="coerce").dt.normalize()
-    s = s[s["center"].astype(str).isin(centers) & s["resource_code"].astype(str).isin(skus)]
+    s = s[
+        s["center"].astype(str).isin(centers)
+        & s["resource_code"].astype(str).isin(skus)
+    ]
     if s.empty:
         idx = pd.date_range(start, end, freq="D")
         return pd.DataFrame(0, index=idx, columns=skus)
 
-    pv = (s.groupby(["date", "resource_code"])["stock_qty"].sum()
-            .unstack("resource_code")
-            .reindex(columns=skus, fill_value=0)
-            .sort_index())
+    pv = (
+        s.groupby(["date", "resource_code"])["stock_qty"]
+        .sum()
+        .unstack("resource_code")
+        .reindex(columns=skus, fill_value=0)
+        .sort_index()
+    )
     pv = pv.asfreq("D").ffill()
     pv = pv.loc[(pv.index >= start) & (pv.index <= end)]
     return pv
@@ -180,7 +193,8 @@ def timeline_inventory_matrix(
         return None
 
     pivot = (
-        df.groupby(["date", "resource_code"])["stock_qty"].sum()
+        df.groupby(["date", "resource_code"])["stock_qty"]
+        .sum()
         .unstack("resource_code")
         .reindex(columns=list(skus), fill_value=0.0)
         .sort_index()
@@ -189,7 +203,9 @@ def timeline_inventory_matrix(
     pivot = pivot.loc[(pivot.index >= start) & (pivot.index <= end)]
     return pivot
 
+
 # ---------------- Public renderer ----------------
+
 
 def clamped_forecast_series(
     start_date: pd.Timestamp,
@@ -202,7 +218,9 @@ def clamped_forecast_series(
 
     if pd.isna(start_date) or pd.isna(end_date) or end_date < start_date:
         empty_index = pd.DatetimeIndex([], dtype="datetime64[ns]")
-        return pd.Series(dtype=float, index=empty_index), pd.Series(dtype=float, index=empty_index)
+        return pd.Series(dtype=float, index=empty_index), pd.Series(
+            dtype=float, index=empty_index
+        )
 
     idx = pd.date_range(start_date, end_date, freq="D")
     fcst_sales = pd.Series(0.0, index=idx, dtype=float)
@@ -222,6 +240,3 @@ def clamped_forecast_series(
         inv.loc[d] = max(remain, 0.0)
 
     return fcst_sales, inv
-
-
-

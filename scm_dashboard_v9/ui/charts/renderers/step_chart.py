@@ -22,13 +22,38 @@ except ImportError:
     go = None
 
 _STEP_PALETTE = [
-    "#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
-    "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC",
-    "#1F77B4","#FF7F0E","#2CA02C","#D62728","#9467BD",
-    "#8C564B","#E377C2","#7F7F7F","#BCBD22","#17BECF",
-    "#8DD3C7","#FFFFB3","#BEBADA","#FB8072","#80B1D3",
-    "#FDB462","#B3DE69","#FCCDE5","#D9D9D9","#BC80BD",
-    "#CCEBC5","#FFED6F"
+    "#4E79A7",
+    "#F28E2B",
+    "#E15759",
+    "#76B7B2",
+    "#59A14F",
+    "#EDC948",
+    "#B07AA1",
+    "#FF9DA7",
+    "#9C755F",
+    "#BAB0AC",
+    "#1F77B4",
+    "#FF7F0E",
+    "#2CA02C",
+    "#D62728",
+    "#9467BD",
+    "#8C564B",
+    "#E377C2",
+    "#7F7F7F",
+    "#BCBD22",
+    "#17BECF",
+    "#8DD3C7",
+    "#FFFFB3",
+    "#BEBADA",
+    "#FB8072",
+    "#80B1D3",
+    "#FDB462",
+    "#B3DE69",
+    "#FCCDE5",
+    "#D9D9D9",
+    "#BC80BD",
+    "#CCEBC5",
+    "#FFED6F",
 ]
 
 
@@ -77,8 +102,10 @@ def render_step_chart(
         show_wip = bool(show_wip)
 
     # 기간 슬라이스
-    df = df[(df["date"] >= pd.to_datetime(start).normalize()) &
-            (df["date"] <= pd.to_datetime(end).normalize())]
+    df = df[
+        (df["date"] >= pd.to_datetime(start).normalize())
+        & (df["date"] <= pd.to_datetime(end).normalize())
+    ]
 
     # In‑Transit / WIP 노출 옵션
     if not show_in_transit:
@@ -86,8 +113,7 @@ def render_step_chart(
 
     if centers:
         normalized_centers = [
-            "태광KR" if str(center) == "WIP" else str(center)
-            for center in centers
+            "태광KR" if str(center) == "WIP" else str(center) for center in centers
         ]
         df = df[df["center"].isin(normalized_centers)]
     if skus:
@@ -106,7 +132,9 @@ def render_step_chart(
     # 라벨 생성: SKU @ Center
     plot_df = base_df.copy()
     if not plot_df.empty:
-        plot_df["label"] = plot_df["resource_code"] + " @ " + plot_df["center"].astype(str)
+        plot_df["label"] = (
+            plot_df["resource_code"] + " @ " + plot_df["center"].astype(str)
+        )
     else:
         plot_df = pd.DataFrame(columns=["date", "stock_qty", "label"])
 
@@ -115,9 +143,16 @@ def render_step_chart(
     if snapshot is not None and not snapshot.empty and today is not None:
         today_norm = pd.to_datetime(today).normalize()
         snapshot_df = snapshot.copy()
-        snapshot_df["date"] = pd.to_datetime(snapshot_df.get("date", snapshot_df.get("snapshot_date", pd.NaT)), errors="coerce").dt.normalize()
+        snapshot_df["date"] = pd.to_datetime(
+            snapshot_df.get("date", snapshot_df.get("snapshot_date", pd.NaT)),
+            errors="coerce",
+        ).dt.normalize()
         snapshot_today = snapshot_df[snapshot_df["date"] == today_norm]
-        if not snapshot_today.empty and "center" in snapshot_today.columns and "resource_code" in snapshot_today.columns:
+        if (
+            not snapshot_today.empty
+            and "center" in snapshot_today.columns
+            and "resource_code" in snapshot_today.columns
+        ):
             for _, row in snapshot_today.iterrows():
                 center = str(row.get("center", ""))
                 sku = str(row.get("resource_code", ""))
@@ -139,7 +174,9 @@ def render_step_chart(
                     key = (today_norm, row["center"], row["resource_code"])
                     base_stock = snapshot_today_map.get(key, 0)
                     inbound_qty = max(0, row["stock_qty"] - base_stock)
-                    plot_df.at[idx, "hover_stock"] = f"{base_stock:,.0f} EA + {inbound_qty:,.0f} EA"
+                    plot_df.at[idx, "hover_stock"] = (
+                        f"{base_stock:,.0f} EA + {inbound_qty:,.0f} EA"
+                    )
 
     # 기본 step line
     if plot_df.empty:
@@ -176,7 +213,9 @@ def render_step_chart(
     if not plot_df.empty:
         color_labels.extend(plot_df["label"].unique().tolist())
     if show_wip and not wip_source.empty:
-        wip_skus_for_colors = sorted({str(v) for v in wip_source["resource_code"].unique()})
+        wip_skus_for_colors = sorted(
+            {str(v) for v in wip_source["resource_code"].unique()}
+        )
         color_labels.extend([f"{sku} @ 태광KR" for sku in wip_skus_for_colors])
 
     sku_colors = step_sku_color_map(color_labels)
@@ -206,7 +245,9 @@ def render_step_chart(
         if not wip_skus:
             wip_skus = sorted({str(v) for v in wip_source["resource_code"].unique()})
         wip_pivot = (
-            wip_source.groupby(["date", "resource_code"])["stock_qty"].sum().unstack("resource_code")
+            wip_source.groupby(["date", "resource_code"])["stock_qty"]
+            .sum()
+            .unstack("resource_code")
         )
         wip_pivot = wip_pivot.reindex(columns=wip_skus, fill_value=0.0).sort_index()
         if not wip_pivot.empty:
@@ -282,6 +323,3 @@ def render_step_chart(
 
     # 라벨 겹침 완화: 상단 캡션으로 설명 이동 (Streamlit UI에서 처리)
     st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
-
-
-

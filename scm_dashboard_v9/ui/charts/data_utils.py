@@ -162,7 +162,9 @@ def normalize_inventory_frame(
     else:
         frame["resource_code"] = ""
 
-    frame["stock_qty"] = pd.to_numeric(frame.get("stock_qty"), errors="coerce").fillna(0)
+    frame["stock_qty"] = pd.to_numeric(frame.get("stock_qty"), errors="coerce").fillna(
+        0
+    )
 
     return frame[cols]
 

@@ -142,7 +142,9 @@ def safe_add_scatter(
 
     try:
         fig.add_trace(
-            go.Scatter(x=xs, y=ys, name=name, mode=mode, line=line, yaxis=yaxis, **kwargs)
+            go.Scatter(
+                x=xs, y=ys, name=name, mode=mode, line=line, yaxis=yaxis, **kwargs
+            )
         )
     except Exception:  # pragma: no cover
         return

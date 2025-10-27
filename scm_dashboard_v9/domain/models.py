@@ -4,6 +4,7 @@
 이 모듈은 SCM 대시보드에서 사용하는 정규화된 데이터 모델을 정의합니다.
 모든 모델은 불변(frozen) 데이터클래스로 구현되어 안전한 데이터 전달을 보장합니다.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -130,7 +131,9 @@ class SnapshotTable:
 
         # 센터나 SKU가 비어있으면 빈 결과 반환
         if not centers_set or not skus_set:
-            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+            return pd.DataFrame(
+                columns=["date", "center", "resource_code", "stock_qty"]
+            )
 
         # ========================================
         # 날짜 정규화
@@ -149,7 +152,9 @@ class SnapshotTable:
         ]
 
         if filtered.empty:
-            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+            return pd.DataFrame(
+                columns=["date", "center", "resource_code", "stock_qty"]
+            )
 
         return filtered.copy()
 
@@ -276,7 +281,8 @@ class TimelineBundle:
         # 비어있지 않은 데이터프레임만 수집
         # ========================================
         frames = [
-            df for df in (self.center_lines, self.in_transit_lines, self.wip_lines)
+            df
+            for df in (self.center_lines, self.in_transit_lines, self.wip_lines)
             if not df.empty
         ]
 
@@ -284,7 +290,9 @@ class TimelineBundle:
         # 모든 라인이 비어있으면 빈 데이터프레임 반환
         # ========================================
         if not frames:
-            return pd.DataFrame(columns=["date", "center", "resource_code", "stock_qty"])
+            return pd.DataFrame(
+                columns=["date", "center", "resource_code", "stock_qty"]
+            )
 
         # ========================================
         # 데이터프레임 결합 및 정규화
@@ -292,7 +300,9 @@ class TimelineBundle:
         combined = pd.concat(frames, ignore_index=True)
 
         # 수량을 숫자로 변환 (변환 실패 시 0)
-        combined["stock_qty"] = pd.to_numeric(combined["stock_qty"], errors="coerce").fillna(0)
+        combined["stock_qty"] = pd.to_numeric(
+            combined["stock_qty"], errors="coerce"
+        ).fillna(0)
 
         # 음수 제거 및 정수 변환
         combined["stock_qty"] = combined["stock_qty"].clip(lower=0).round().astype(int)

@@ -4,6 +4,7 @@
 이 모듈은 Streamlit 세션 상태를 사용하여
 로드된 데이터를 관리하고 지속합니다.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -56,7 +57,9 @@ def ensure_data() -> Optional[LoadedData]:
     # ========================================
     # 3단계: Google Sheets 새로 고침
     # ========================================
-    refresh_clicked = st.button("Google Sheets 데이터 새로 고침", key="v5_gsheet_refresh")
+    refresh_clicked = st.button(
+        "Google Sheets 데이터 새로 고침", key="v5_gsheet_refresh"
+    )
 
     # 데이터가 없거나 새로 고침 버튼이 클릭된 경우 Google Sheets에서 로드
     should_load_gsheet = data is None or refresh_clicked
@@ -82,7 +85,9 @@ def ensure_data() -> Optional[LoadedData]:
     # 4단계: 엑셀 파일 업로드 (선택적)
     # ========================================
     with st.expander("엑셀 파일 업로드 (선택)", expanded=False):
-        st.caption("필요할 때만 수동으로 엑셀 파일을 업로드하여 데이터를 교체할 수 있습니다.")
+        st.caption(
+            "필요할 때만 수동으로 엑셀 파일을 업로드하여 데이터를 교체할 수 있습니다."
+        )
 
         excel_data = load_from_excel_uploader()
 

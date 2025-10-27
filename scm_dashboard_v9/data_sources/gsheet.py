@@ -4,6 +4,7 @@ Google Sheets 데이터 로더
 이 모듈은 Google Sheets API를 통해
 스냅샷, 이동 원장, WIP 데이터를 로드합니다.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -17,7 +18,10 @@ from scm_dashboard_v9.data_sources.loaders import (
     merge_wip_as_moves,
 )
 
-from scm_dashboard_v9.domain.normalization import normalize_moves, normalize_snapshot as normalize_refined_snapshot
+from scm_dashboard_v9.domain.normalization import (
+    normalize_moves,
+    normalize_snapshot as normalize_refined_snapshot,
+)
 
 from .excel import LoadedData
 

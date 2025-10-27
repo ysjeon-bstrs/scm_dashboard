@@ -7,6 +7,7 @@ Streamlit 사용자 친화적인 에러 메시지로 변환합니다.
 이를 통해 도메인 계층은 Streamlit에 의존하지 않으면서도
 UI에서 적절한 에러 메시지를 표시할 수 있습니다.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager

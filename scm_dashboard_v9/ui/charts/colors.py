@@ -9,21 +9,62 @@ from typing import Dict, Optional, Sequence, Tuple
 
 # 계단식 차트와 비슷한 톤의 기본 팔레트 (20+ 색상)
 PALETTE = [
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
-    "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
-    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
-    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
+    "#4E79A7",
+    "#F28E2B",
+    "#E15759",
+    "#76B7B2",
+    "#59A14F",
+    "#EDC948",
+    "#B07AA1",
+    "#FF9DA7",
+    "#9C755F",
+    "#BAB0AC",
+    "#1F77B4",
+    "#FF7F0E",
+    "#2CA02C",
+    "#D62728",
+    "#9467BD",
+    "#8C564B",
+    "#E377C2",
+    "#7F7F7F",
+    "#BCBD22",
+    "#17BECF",
 ]
 
 # Step 차트 전용 확장 팔레트
 STEP_PALETTE = [
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
-    "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
-    "#1F77B4", "#FF7F0E", "#2CA02C", "#D62728", "#9467BD",
-    "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF",
-    "#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072", "#80B1D3",
-    "#FDB462", "#B3DE69", "#FCCDE5", "#D9D9D9", "#BC80BD",
-    "#CCEBC5", "#FFED6F",
+    "#4E79A7",
+    "#F28E2B",
+    "#E15759",
+    "#76B7B2",
+    "#59A14F",
+    "#EDC948",
+    "#B07AA1",
+    "#FF9DA7",
+    "#9C755F",
+    "#BAB0AC",
+    "#1F77B4",
+    "#FF7F0E",
+    "#2CA02C",
+    "#D62728",
+    "#9467BD",
+    "#8C564B",
+    "#E377C2",
+    "#7F7F7F",
+    "#BCBD22",
+    "#17BECF",
+    "#8DD3C7",
+    "#FFFFB3",
+    "#BEBADA",
+    "#FB8072",
+    "#80B1D3",
+    "#FDB462",
+    "#B3DE69",
+    "#FCCDE5",
+    "#D9D9D9",
+    "#BC80BD",
+    "#CCEBC5",
+    "#FFED6F",
 ]
 
 # 센터별 음영 계수 (밝기 조정)
@@ -119,7 +160,9 @@ def shade_for(center: str, index: int) -> float:
     return max(0.4, 1.0 - step)
 
 
-def sku_colors(skus: Sequence[str], base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def sku_colors(
+    skus: Sequence[str], base: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
     """SKU별 고정 색상 매핑 딕셔너리를 생성합니다.
 
     Args:
