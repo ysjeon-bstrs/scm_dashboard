@@ -105,10 +105,11 @@ def _coerce_snapshot_frame(
 
     df["snap_time"] = pd.to_datetime(df.get("snap_time"), errors="coerce")
 
-    # snap_time이 모두 null이면 date 컬럼을 폴백으로 사용
-    if df["snap_time"].isna().all():
-        if "date" in df.columns:
-            df["snap_time"] = pd.to_datetime(df.get("date"), errors="coerce")
+    # 개선: 행 단위 폴백 — snap_time 개별 NaT에 대해 date 값을 보완
+    # (기존: 전체가 NaT일 때만 date로 대체 → 일부 NaT가 있는 경우 정보 손실)
+    if "date" in df.columns:
+        date_parsed = pd.to_datetime(df.get("date"), errors="coerce")
+        df["snap_time"] = df["snap_time"].fillna(date_parsed)
 
     df = df.dropna(subset=["snap_time"]).copy()
 
