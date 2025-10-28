@@ -14,6 +14,7 @@ _NUMERIC_COLUMNS = {
     "stock_available",
     "pending_fc",
     "stock_processing",
+    "stock_readytoship",
     "stock_expected",
     "sales_qty",
 }
@@ -75,6 +76,9 @@ def _coerce_snapshot_frame(
     processing_col = cols_lower.get("stock_processing") or cols_lower.get(
         "processing_qty"
     )
+    readytoship_col = cols_lower.get("stock_readytoship") or cols_lower.get(
+        "readytoship_qty"
+    )
     expected_col = cols_lower.get("stock_expected") or cols_lower.get("expected_qty")
     sales_col = cols_lower.get("sales_qty") or cols_lower.get("sale_qty")
 
@@ -93,6 +97,8 @@ def _coerce_snapshot_frame(
         rename_map[pending_col] = "pending_fc"
     if processing_col:
         rename_map[processing_col] = "stock_processing"
+    if readytoship_col:
+        rename_map[readytoship_col] = "stock_readytoship"
     if expected_col:
         rename_map[expected_col] = "stock_expected"
     if sales_col:
@@ -334,12 +340,15 @@ def build_amazon_snapshot_kpis(
     for sku in sku_order:
         sku_current = current[current["resource_code"] == sku]
         if sku_current.empty:
-            total = avail = pending_fc = processing = expected = sales_yday = 0.0
+            total = avail = pending_fc = processing = readytoship = expected = (
+                sales_yday
+            ) = 0.0
         else:
             total = float(sku_current["stock_qty"].sum())
             avail = float(sku_current["stock_available"].sum())
             pending_fc = float(sku_current.get("pending_fc", 0).sum())
             processing = float(sku_current["stock_processing"].sum())
+            readytoship = float(sku_current.get("stock_readytoship", 0).sum())
             expected = float(sku_current["stock_expected"].sum())
             sales_yday = float(sku_current["sales_qty"].sum())
 
@@ -347,6 +356,7 @@ def build_amazon_snapshot_kpis(
         avail = max(0.0, avail)
         pending_fc = max(0.0, pending_fc)
         processing = max(0.0, processing)
+        readytoship = max(0.0, readytoship)
         expected = max(0.0, expected)
         sales_yday = max(0.0, sales_yday)
 
@@ -372,6 +382,7 @@ def build_amazon_snapshot_kpis(
                 "stock_available": int(round(avail)),
                 "pending_fc": int(round(pending_fc)),
                 "stock_processing": int(round(processing)),
+                "stock_readytoship": int(round(readytoship)),
                 "stock_expected": int(round(expected)),
                 "sales_yday": int(round(sales_yday)),
                 "sales_ma7": float(ma7) if ma7 is not None else np.nan,
@@ -444,6 +455,11 @@ def render_amazon_snapshot_kpis(
                     if pd.notna(row.get("stock_processing"))
                     else 0
                 ),
+                "stock_readytoship": (
+                    float(row.get("stock_readytoship", 0))
+                    if pd.notna(row.get("stock_readytoship"))
+                    else 0
+                ),
                 "stock_expected": (
                     float(row.get("stock_expected", 0))
                     if pd.notna(row.get("stock_expected"))
@@ -472,6 +488,7 @@ def render_amazon_snapshot_kpis(
         available = int(getattr(row, "stock_available", 0))
         pending_fc = int(getattr(row, "pending_fc", 0))
         processing = int(getattr(row, "stock_processing", 0))
+        readytoship = int(getattr(row, "stock_readytoship", 0))
         expected = int(getattr(row, "stock_expected", 0))
         sales_yday = int(getattr(row, "sales_yday", 0))
         cover_days = getattr(row, "cover_days", None)
@@ -481,6 +498,7 @@ def render_amazon_snapshot_kpis(
         delta_total = None
         delta_available = None
         delta_processing = None
+        delta_readytoship = None
         delta_expected = None
         delta_sales = None
         delta_cover = None
@@ -490,6 +508,7 @@ def render_amazon_snapshot_kpis(
             delta_available = available - int(prev.get("stock_available", 0))
             delta_pending_fc = pending_fc - int(prev.get("pending_fc", 0))
             delta_processing = processing - int(prev.get("stock_processing", 0))
+            delta_readytoship = readytoship - int(prev.get("stock_readytoship", 0))
             delta_expected = expected - int(prev.get("stock_expected", 0))
             delta_sales = sales_yday - int(prev.get("sales_yday", 0))
             if pd.notna(cover_days) and prev.get("cover_days", 0) > 0:
@@ -534,7 +553,20 @@ def render_amazon_snapshot_kpis(
                     f" <span class='delta-down'>(↓{abs(delta_salable):,})</span>"
                 )
         processing_str = _fmt_with_delta(processing, delta_processing)
-        expected_str = _fmt_with_delta(expected, delta_expected)
+        # 입고예정: 입고 등록 + FC로 배송 중 (예: 3,888 + 8,856)
+        # 전체 합계에 대한 delta 표시
+        inbound_total = readytoship + expected
+        delta_inbound = None
+        if delta_readytoship is not None and delta_expected is not None:
+            delta_inbound = delta_readytoship + delta_expected
+        expected_str = f"{_format_int(readytoship)} + {_format_int(expected)}"
+        if delta_inbound is not None and delta_inbound != 0:
+            if delta_inbound > 0:
+                expected_str += f" <span class='delta-up'>(↑{delta_inbound:+,})</span>"
+            else:
+                expected_str += (
+                    f" <span class='delta-down'>(↓{abs(delta_inbound):,})</span>"
+                )
         sales_str = _fmt_with_delta(sales_yday, delta_sales)
         cover_str = _fmt_cover_with_delta(cover_days, delta_cover)
 
@@ -542,7 +574,7 @@ def render_amazon_snapshot_kpis(
             _MetricValue("총 재고", total_str, "판매가능+고객 주문건+FC 처리중 합계"),
             _MetricValue("판매가능", available_str, "가용재고+FC 재배치 중"),
             _MetricValue("입고처리중", processing_str, "FC 도착 후 재고화 진행 중"),
-            _MetricValue("입고예정", expected_str, "FC로 배송 중"),
+            _MetricValue("입고예정", expected_str, "입고 등록 + FC로 배송 중"),
             _MetricValue("어제 판매", sales_str, "전일 판매량"),
             _MetricValue("커버일수", cover_str, "판매가능 ÷ 일평균 수요"),
         ]
@@ -586,6 +618,6 @@ def render_amazon_snapshot_kpis(
 
     st.caption(
         "총 재고=판매가능+FC 처리 중+고객주문 · 판매가능=가용재고+FC 재배치 중 · "
-        "입고처리중=FC 도착 후 재고화 진행 중 · 입고예정=입고예약+FC 도착+재고화 진행중 · "
+        "입고처리중=FC 도착 후 재고화 진행 중 · 입고예정=입고 등록+FC로 배송 중 · "
         "커버일수=판매가능 ÷ 7일 평균 일판매"
     )
