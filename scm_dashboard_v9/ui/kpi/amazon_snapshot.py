@@ -340,7 +340,9 @@ def build_amazon_snapshot_kpis(
     for sku in sku_order:
         sku_current = current[current["resource_code"] == sku]
         if sku_current.empty:
-            total = avail = pending_fc = processing = readytoship = expected = sales_yday = 0.0
+            total = avail = pending_fc = processing = readytoship = expected = (
+                sales_yday
+            ) = 0.0
         else:
             total = float(sku_current["stock_qty"].sum())
             avail = float(sku_current["stock_available"].sum())
