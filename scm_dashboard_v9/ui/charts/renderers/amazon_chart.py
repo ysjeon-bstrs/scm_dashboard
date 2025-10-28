@@ -263,8 +263,8 @@ def render_amazon_sales_vs_inventory(
             traceorder="normal",
             bgcolor="rgba(255,255,255,0.6)",
         ),
-        # 상단 여백 축소해 겹침 방지
-        margin=dict(l=30, r=20, t=10, b=90),
+        # 상단 여백을 넉넉하게 확보해 제목이 가려지지 않도록 함
+        margin=dict(l=30, r=20, t=40, b=90),
         hovermode="x unified",
         xaxis=dict(title="Date"),
         yaxis=dict(title="판매량 (EA/Day)", tickformat=",.0f"),
