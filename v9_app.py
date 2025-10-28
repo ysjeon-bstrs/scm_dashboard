@@ -435,47 +435,6 @@ def _render_amazon_section(
     sku_colors_map = _sku_color_map(selected_skus)
     snap_amz = filter_by_centers(snapshot_df, amazon_centers)
 
-    # DEBUG: stock_readytoship 데이터 확인
-    with st.expander("🔍 DEBUG: stock_readytoship 데이터 확인", expanded=False):
-        st.caption("스냅샷 데이터에 stock_readytoship 컬럼이 제대로 로드되었는지 확인")
-
-        # 컬럼 목록 표시
-        st.write("**snap_amz 컬럼 목록:**")
-        st.write(list(snap_amz.columns))
-
-        # stock_readytoship 관련 컬럼 확인
-        readytoship_cols = [
-            col for col in snap_amz.columns if "readytoship" in col.lower()
-        ]
-        if readytoship_cols:
-            st.success(f"stock_readytoship 관련 컬럼 발견: {readytoship_cols}")
-
-            # 샘플 데이터 표시
-            st.write("**snap_amz 샘플 데이터 (최신 5행):**")
-            display_cols = [
-                "snap_time",
-                "date",
-                "center",
-                "resource_code",
-                "stock_available",
-                "stock_expected",
-            ] + readytoship_cols
-            available_cols = [col for col in display_cols if col in snap_amz.columns]
-            st.dataframe(snap_amz[available_cols].tail(5))
-
-            # 통계 정보
-            for col in readytoship_cols:
-                st.write(f"**{col} 통계:**")
-                st.write(f"- 합계: {snap_amz[col].sum()}")
-                st.write(f"- 0이 아닌 행 수: {(snap_amz[col] != 0).sum()}")
-                st.write(f"- 데이터 타입: {snap_amz[col].dtype}")
-        else:
-            st.error("stock_readytoship 컬럼을 찾을 수 없습니다!")
-
-            # 원본 snapshot_df도 확인
-            st.write("**원본 snapshot_df 컬럼 목록:**")
-            st.write(list(snapshot_df.columns))
-
     # Amazon KPI 설정 토글
     # 설정: 전 스냅샷 대비 Δ만 유지 (커버일 기준 토글 제거)
     show_delta = st.toggle("전 스냅샷 대비 Δ", value=True)
