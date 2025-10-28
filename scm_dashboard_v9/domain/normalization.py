@@ -302,6 +302,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     - stock_available: 사용가능 재고 (숫자, Amazon FBA)
     - stock_expected: 입고예정 재고 (숫자, Amazon FBA)
     - stock_processing: 입고처리중 재고 (숫자, Amazon FBA)
+    - stock_readytoship: 입고등록 재고 (숫자, Amazon FBA)
+    - pending_fc: FC 재배치중 재고 (숫자, Amazon FBA)
     - snap_time: 스냅샷 시간 (datetime64, Amazon FBA)
 
     Args:
@@ -345,6 +347,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     available_col = _pick_column(["stock_available", "available_qty", "사용가능재고"])
     expected_col = _pick_column(["stock_expected", "expected_qty", "입고예정"])
     processing_col = _pick_column(["stock_processing", "processing_qty", "입고처리중"])
+    readytoship_col = _pick_column(["stock_readytoship", "readytoship_qty", "입고등록"])
     snap_time_col = _pick_column(["snap_time", "snapshot_time", "snapshot_datetime"])
     pending_fc_col = _pick_column(
         ["pending_fc", "pending_fc_qty", "fc_pending", "pending at fc"]
@@ -373,6 +376,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         rename_map[expected_col] = "stock_expected"
     if processing_col:
         rename_map[processing_col] = "stock_processing"
+    if readytoship_col:
+        rename_map[readytoship_col] = "stock_readytoship"
     if snap_time_col:
         rename_map[snap_time_col] = "snap_time"
     if pending_fc_col:
@@ -425,6 +430,12 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .fillna(0.0)
             .astype(float)
         )
+    if "stock_readytoship" in out.columns:
+        out["stock_readytoship"] = (
+            pd.to_numeric(out.get("stock_readytoship"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
     if "pending_fc" in out.columns:
         out["pending_fc"] = (
             pd.to_numeric(out.get("pending_fc"), errors="coerce")
@@ -446,6 +457,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         "stock_available",
         "stock_expected",
         "stock_processing",
+        "stock_readytoship",
         "pending_fc",
         "snap_time",
     ]:
