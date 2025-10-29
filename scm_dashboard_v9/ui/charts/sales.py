@@ -458,35 +458,8 @@ def sales_forecast_from_inventory_projection(
     pivot = pivot.reindex(full_index).sort_index()
     pivot = pivot.ffill().fillna(0.0)
 
-    # DEBUG: Streamlit 런타임 체크 및 디버그 활성화
-    debug_enabled = False
-    try:
-        import streamlit as st
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        if get_script_run_ctx() is not None:
-            debug_enabled = True
-            st.write(
-                "\n**🔍 [sales_forecast_from_inventory_projection] 판매량 계산 디버그:**"
-            )
-            st.write(f"- today: {today_norm}")
-            st.write(f"- SKUs: {skus_norm}")
-            st.write(f"- pivot (재고 시계열) shape: {pivot.shape}")
-            st.write("  pivot 샘플 (마지막 10행):")
-            st.dataframe(pivot.tail(10))
-    except (ImportError, RuntimeError):
-        pass
-
     diff = pivot.diff()
     sales = (-diff).clip(lower=0.0)
-
-    if debug_enabled:
-        st.write(f"\n**재고 변화(diff) 및 초기 판매량(sales):**")
-        st.write("  diff 샘플 (마지막 10행):")
-        st.dataframe(diff.tail(10))
-        st.write("  sales (초기, diff 기반) 샘플 (마지막 10행):")
-        st.dataframe(sales.tail(10))
-        st.write(f"  sales 합계 (SKU별): {sales.sum().to_dict()}")
 
     # 재고가 증가한 날(입고가 있는 날)에도 실제로는 판매가 발생합니다.
     # 하지만 재고 변화(diff)로는 정확히 계산할 수 없습니다:
@@ -504,16 +477,6 @@ def sales_forecast_from_inventory_projection(
     avg_sales = sales_no_inbound.mean(skipna=True)
     avg_sales = avg_sales.where(np.isfinite(avg_sales), 0.0)
 
-    if debug_enabled:
-        st.write(f"\n**입고 날짜 처리:**")
-        st.write(f"  평균 일 판매량 (입고 날짜 제외, SKU별): {avg_sales.to_dict()}")
-        for sku in sales.columns:
-            if sku in inbound_mask.columns and inbound_mask[sku].any():
-                inbound_dates = inbound_mask.index[inbound_mask[sku]]
-                st.write(
-                    f"  {sku}: 입고 날짜 {len(inbound_dates)}개 → 평균 판매량 {avg_sales[sku]:.1f}로 대체 (1배만)"
-                )
-
     for sku in sales.columns:
         if sku in inbound_mask.columns and inbound_mask[sku].any():
             sales.loc[inbound_mask[sku], sku] = avg_sales[sku]
@@ -521,9 +484,6 @@ def sales_forecast_from_inventory_projection(
     # 재고가 0인 날짜에만 판매를 0으로 설정.
     # 이전 로직은 첫 번째 0 이후 모든 판매를 차단했지만,
     # 재고가 다시 양수가 되면 판매도 재개되어야 합니다.
-    if debug_enabled:
-        st.write(f"\n**재고 0 날짜 판매량 clamping:**")
-
     for sku in sales.columns:
         stock_series = pivot[sku]
         # 미래 기간에서만 체크
@@ -532,23 +492,8 @@ def sales_forecast_from_inventory_projection(
 
         if zero_mask.any():
             zero_dates = future_stock.index[zero_mask]
-            if debug_enabled:
-                st.write(
-                    f"  {sku}: 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜만 판매량 0으로 설정"
-                )
             # 재고가 0인 날짜에만 판매를 0으로 설정
             sales.loc[zero_dates, sku] = 0.0
-        elif debug_enabled:
-            st.write(f"  {sku}: 미래 기간에 재고 0 없음 → clamping 안 함")
-
-    if debug_enabled:
-        st.write(f"\n**최종 판매량 (미래분만):**")
-        future_preview = sales.loc[sales.index > today_norm].tail(10)
-        st.write("  sales (최종) 샘플 (마지막 10행):")
-        st.dataframe(future_preview)
-        st.write(
-            f"  sales 합계 (SKU별, 미래분만): {sales.loc[sales.index > today_norm].sum().to_dict()}"
-        )
 
     future = sales.loc[sales.index > today_norm]
     if future.empty:
