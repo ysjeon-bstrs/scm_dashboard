@@ -449,6 +449,7 @@ def finalize_forecast_dataframes(
     fallback_sales_rows: list[pd.DataFrame],
     fallback_inv_rows: list[pd.DataFrame],
     inv_actual_snapshot: pd.DataFrame,
+    sales_actual: pd.DataFrame,
     inv_actual: Optional[pd.DataFrame],
     inv_forecast: Optional[pd.DataFrame],
     default_center: str | None,
@@ -458,6 +459,7 @@ def finalize_forecast_dataframes(
     start: pd.Timestamp,
     end: pd.Timestamp,
     today: pd.Timestamp,
+    lookback_days: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fallback rows를 병합하고 inventory override를 처리하여 최종 DataFrame들을 생성합니다.
 
@@ -465,6 +467,7 @@ def finalize_forecast_dataframes(
         fallback_sales_rows: 판매 예측 fallback 리스트
         fallback_inv_rows: 재고 예측 fallback 리스트
         inv_actual_snapshot: 실측 재고 스냅샷
+        sales_actual: 과거 실제 판매 데이터 (sales_qty)
         inv_actual: Override용 실측 재고 (optional)
         inv_forecast: Override용 재고 예측 (optional)
         default_center: 기본 센터
@@ -474,12 +477,13 @@ def finalize_forecast_dataframes(
         start: 시작 날짜
         end: 종료 날짜
         today: 현재 날짜
+        lookback_days: 평균 판매량 계산 기간
 
     Returns:
         tuple: (sales_forecast_df, inv_actual_df, inv_forecast_df)
     """
     from ..data_utils import normalize_inventory_frame
-    from ..sales import sales_forecast_from_inventory_projection
+    from ..sales import sales_forecast_from_actual_sales_with_stock_limit
 
     # DEBUG: 디버그 정보 수집
     # Only enable debug logging when Streamlit runtime is actually running
@@ -582,37 +586,51 @@ def finalize_forecast_dataframes(
 
     if (
         use_inventory_for_sales
-        and not inv_actual_df.empty
         and not inv_forecast_df.empty
+        and sales_actual is not None
+        and not sales_actual.empty
     ):
         if debug_enabled:
             st.write(
-                "✅ use_inventory_for_sales 조건 통과 → sales_forecast_from_inventory_projection 호출"
+                "✅ use_inventory_for_sales 조건 통과 → sales_forecast_from_actual_sales_with_stock_limit 호출"
             )
-        derived_sales = sales_forecast_from_inventory_projection(
-            inv_actual_df,
+            st.write(f"- sales_actual: {len(sales_actual)} 행")
+            st.write(f"- lookback_days: {lookback_days}")
+
+        derived_sales = sales_forecast_from_actual_sales_with_stock_limit(
+            sales_actual,
             inv_forecast_df,
-            centers=target_centers,
             skus=skus,
             start=start,
             end=end,
             today=today,
+            lookback_days=lookback_days,
         )
         if debug_enabled:
             st.write(f"- derived_sales: {len(derived_sales)} 행")
+            if not derived_sales.empty:
+                st.write("  derived_sales 샘플 (처음 10행):")
+                st.dataframe(derived_sales.head(10))
+                st.write(
+                    f"  sales_qty 통계: 합계={derived_sales['sales_qty'].sum():,.0f}, "
+                    f"평균={derived_sales['sales_qty'].mean():,.2f}, "
+                    f"최대={derived_sales['sales_qty'].max():,.0f}"
+                )
+
         if not derived_sales.empty:
-            sales_forecast_df = (
-                derived_sales.rename(columns={"sales_ea": "sales_qty"})
-                if "sales_ea" in derived_sales.columns
-                else derived_sales.copy()
-            )
+            sales_forecast_df = derived_sales.copy()
             if debug_enabled:
                 st.success(
                     f"✅ sales_forecast_df 업데이트: {len(sales_forecast_df)} 행"
                 )
     else:
         if debug_enabled:
-            st.error("❌ use_inventory_for_sales 조건 실패 → 판매 예측 생성 안됨!")
+            st.error(
+                f"❌ use_inventory_for_sales 조건 실패 → 판매 예측 생성 안됨!\n"
+                f"  - inv_forecast_df.empty: {inv_forecast_df.empty}\n"
+                f"  - sales_actual is None: {sales_actual is None}\n"
+                f"  - sales_actual.empty: {sales_actual.empty if sales_actual is not None else 'N/A'}"
+            )
 
     if debug_enabled:
         st.write(f"\n**[finalize_forecast_dataframes] 최종 결과:**")

@@ -146,6 +146,7 @@ def render_amazon_sales_vs_inventory(
         fallback_sales_rows,
         fallback_inv_rows,
         inv_actual_snapshot,
+        sales_actual,  # 과거 실제 판매 데이터 추가
         inv_actual,
         inv_forecast,
         default_center,
@@ -155,6 +156,7 @@ def render_amazon_sales_vs_inventory(
         start,
         end,
         today,
+        lookback_days,  # 평균 계산 기간 추가
     )
 
     show_ma7 = bool(getattr(ctx, "show_ma7", True))
