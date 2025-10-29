@@ -481,6 +481,19 @@ def finalize_forecast_dataframes(
     from ..data_utils import normalize_inventory_frame
     from ..sales import sales_forecast_from_inventory_projection
 
+    # DEBUG: 디버그 정보 수집
+    # Only enable debug logging when Streamlit runtime is actually running
+    debug_enabled = False
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        # Check if we're running inside a Streamlit app context
+        if get_script_run_ctx() is not None:
+            debug_enabled = True
+    except (ImportError, RuntimeError):
+        pass
+
     sales_forecast_df = (
         pd.concat(fallback_sales_rows, ignore_index=True)
         if fallback_sales_rows
@@ -492,6 +505,19 @@ def finalize_forecast_dataframes(
         if fallback_inv_rows
         else pd.DataFrame(columns=["date", "resource_code", "stock_qty"])
     )
+
+    if debug_enabled:
+        st.write("\n**[finalize_forecast_dataframes] 초기 상태:**")
+        st.write(f"- fallback_sales_rows 개수: {len(fallback_sales_rows)}")
+        st.write(f"- fallback_inv_rows 개수: {len(fallback_inv_rows)}")
+        st.write(f"- sales_forecast_df (from fallback): {len(sales_forecast_df)} 행")
+        st.write(f"- inv_forecast_df (from fallback): {len(inv_forecast_df)} 행")
+        st.write(
+            f"- inv_actual (parameter) is None: {inv_actual is None}, empty: {inv_actual.empty if inv_actual is not None else 'N/A'}"
+        )
+        st.write(
+            f"- inv_forecast (parameter) is None: {inv_forecast is None}, empty: {inv_forecast.empty if inv_forecast is not None else 'N/A'}"
+        )
 
     inv_actual_df = normalize_inventory_frame(
         inv_actual_snapshot, default_center=default_center
@@ -506,16 +532,40 @@ def finalize_forecast_dataframes(
         inv_actual_df = normalize_inventory_frame(
             inv_actual, default_center=default_center
         )
+        if debug_enabled:
+            st.write(
+                f"- inv_actual override 적용 → inv_actual_df: {len(inv_actual_df)} 행"
+            )
     if inv_forecast is not None and not inv_forecast.empty:
         override_inventory = True
         inv_forecast_df = normalize_inventory_frame(
             inv_forecast, default_center=default_center
         )
+        if debug_enabled:
+            st.write(
+                f"- inv_forecast override 적용 → inv_forecast_df: {len(inv_forecast_df)} 행"
+            )
+
+    if debug_enabled:
+        st.write(f"- override_inventory: {override_inventory}")
 
     if override_inventory and (inv_forecast is None or inv_forecast.empty):
         # When only actuals are injected we should not keep stale fallback forecasts.
+        if debug_enabled:
+            st.warning(
+                "⚠️ override_inventory=True이지만 inv_forecast가 비어있어 inv_forecast_df 초기화!"
+            )
         inv_forecast_df = pd.DataFrame(
             columns=["date", "center", "resource_code", "stock_qty"]
+        )
+
+    if debug_enabled:
+        st.write(f"\n**[finalize_forecast_dataframes] override 후 상태:**")
+        st.write(f"- inv_actual_df: {len(inv_actual_df)} 행")
+        st.write(f"- inv_forecast_df: {len(inv_forecast_df)} 행")
+        st.write(f"- use_inventory_for_sales: {use_inventory_for_sales}")
+        st.write(
+            f"- 조건 체크: inv_actual_df empty={inv_actual_df.empty}, inv_forecast_df empty={inv_forecast_df.empty}"
         )
 
     if (
@@ -523,6 +573,10 @@ def finalize_forecast_dataframes(
         and not inv_actual_df.empty
         and not inv_forecast_df.empty
     ):
+        if debug_enabled:
+            st.write(
+                "✅ use_inventory_for_sales 조건 통과 → sales_forecast_from_inventory_projection 호출"
+            )
         derived_sales = sales_forecast_from_inventory_projection(
             inv_actual_df,
             inv_forecast_df,
@@ -532,12 +586,27 @@ def finalize_forecast_dataframes(
             end=end,
             today=today,
         )
+        if debug_enabled:
+            st.write(f"- derived_sales: {len(derived_sales)} 행")
         if not derived_sales.empty:
             sales_forecast_df = (
                 derived_sales.rename(columns={"sales_ea": "sales_qty"})
                 if "sales_ea" in derived_sales.columns
                 else derived_sales.copy()
             )
+            if debug_enabled:
+                st.success(
+                    f"✅ sales_forecast_df 업데이트: {len(sales_forecast_df)} 행"
+                )
+    else:
+        if debug_enabled:
+            st.error("❌ use_inventory_for_sales 조건 실패 → 판매 예측 생성 안됨!")
+
+    if debug_enabled:
+        st.write(f"\n**[finalize_forecast_dataframes] 최종 결과:**")
+        st.write(f"- sales_forecast_df: {len(sales_forecast_df)} 행")
+        st.write(f"- inv_actual_df: {len(inv_actual_df)} 행")
+        st.write(f"- inv_forecast_df: {len(inv_forecast_df)} 행")
 
     return sales_forecast_df, inv_actual_df, inv_forecast_df
 
