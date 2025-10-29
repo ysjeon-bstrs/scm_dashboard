@@ -43,7 +43,7 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다."
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     creds_obj = gs.get("credentials", None)
     creds_json = gs.get("credentials_json", None)
@@ -59,7 +59,7 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다."
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     if "private_key" in credentials_info:
         credentials_info["private_key"] = (
@@ -77,7 +77,7 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json"
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     def _read(name: str) -> pd.DataFrame:
         try:
