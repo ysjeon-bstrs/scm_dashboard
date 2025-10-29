@@ -165,6 +165,23 @@ def render_amazon_sales_vs_inventory(
         inv_actual_df, inv_forecast_df, today, display_start, display_end
     )
 
+    # DEBUG: trim 전 데이터 확인
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx() is not None:
+            st.write("\n**[render_amazon_sales_vs_inventory] trim 전:**")
+            st.write(f"- display_start: {display_start}")
+            st.write(f"- display_end: {display_end}")
+            st.write(f"- sales_forecast_df: {len(sales_forecast_df)} 행")
+            if not sales_forecast_df.empty:
+                st.write(
+                    f"  날짜 범위: {sales_forecast_df['date'].min()} ~ {sales_forecast_df['date'].max()}"
+                )
+            st.write(f"- inv_forecast_df: {len(inv_forecast_df)} 행")
+    except (ImportError, RuntimeError):
+        pass
+
     # Trim all data to display range
     inv_actual_df, inv_forecast_df, sales_actual, sales_forecast_df, ma = (
         trim_data_to_display_range(
@@ -178,8 +195,37 @@ def render_amazon_sales_vs_inventory(
         )
     )
 
+    # DEBUG: trim 후 데이터 확인
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx() is not None:
+            st.write("\n**[render_amazon_sales_vs_inventory] trim 후:**")
+            st.write(f"- sales_forecast_df: {len(sales_forecast_df)} 행")
+            if not sales_forecast_df.empty:
+                st.write(
+                    f"  날짜 범위: {sales_forecast_df['date'].min()} ~ {sales_forecast_df['date'].max()}"
+                )
+                st.dataframe(sales_forecast_df.head(10))
+            else:
+                st.error("❌ sales_forecast_df가 비어있음! (trim 후)")
+            st.write(f"- inv_forecast_df: {len(inv_forecast_df)} 행")
+    except (ImportError, RuntimeError):
+        pass
+
     colors = sku_colors or sku_color_map(skus)
     fig = go.Figure()
+
+    # DEBUG: 차트 그리기 시작
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx() is not None:
+            st.write("\n**[render_amazon_sales_vs_inventory] 차트 그리기:**")
+            st.write(f"- sales_actual.empty: {sales_actual.empty}")
+            st.write(f"- sales_forecast_df.empty: {sales_forecast_df.empty}")
+    except (ImportError, RuntimeError):
+        pass
 
     if not sales_actual.empty:
         for sku, group in sales_actual.groupby("resource_code"):
@@ -194,6 +240,14 @@ def render_amazon_sales_vs_inventory(
             )
 
     if not sales_forecast_df.empty:
+        try:
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+            if get_script_run_ctx() is not None:
+                st.write("✅ sales_forecast_df 조건 통과 → 차트에 추가 중...")
+        except (ImportError, RuntimeError):
+            pass
+
         for sku, group in sales_forecast_df.groupby("resource_code"):
             color = colors.get(sku, "#6BA3FF")
             fig.add_bar(
@@ -204,6 +258,14 @@ def render_amazon_sales_vs_inventory(
                 opacity=0.45,
                 hovertemplate="날짜: %{x|%Y-%m-%d}<br>판매: %{y:,.0f} EA<br>%{fullData.name}<extra></extra>",
             )
+    else:
+        try:
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+            if get_script_run_ctx() is not None:
+                st.error("❌ sales_forecast_df.empty=True → 차트에 추가되지 않음!")
+        except (ImportError, RuntimeError):
+            pass
 
     if not inv_actual_df.empty:
         for sku, group in inv_actual_df.groupby("resource_code"):
