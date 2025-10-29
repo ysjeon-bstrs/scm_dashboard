@@ -16,6 +16,7 @@ def render_taekwang_stock_dashboard(
     selected_skus: Sequence[str],
     resource_name_map: Mapping[str, str] | None = None,
     sku_colors: Mapping[str, str] | None = None,
+    inbound_moves: pd.DataFrame | None = None,
 ) -> None:
     """태광KR 가상창고 배분 현황을 Amazon 카드 UI로 렌더링합니다."""
 
@@ -60,8 +61,73 @@ def render_taekwang_stock_dashboard(
         .reset_index()
     )
 
-    # 운영창고와 키핑창고 재고를 모두 합쳐 총 재고를 계산
-    aggregated["total_qty"] = aggregated[quantity_cols].sum(axis=1)
+    # 입고예정 정보를 표시하기 위해 WIP(입고예정내역) 데이터를 미리 가공
+    inbound_summary: dict[str, dict[str, tuple[int, pd.Timestamp]]] = {}
+    if inbound_moves is not None and not inbound_moves.empty:
+        # 입고예정 정보는 생산 진행(WIP) 물량으로 들어오므로, WIP 레코드만 필터링
+        inbound_working = inbound_moves.copy()
+        resource_series = inbound_working.get("resource_code")
+        if resource_series is None:
+            inbound_working["resource_code"] = ""
+        else:
+            inbound_working["resource_code"] = resource_series.astype(str).str.strip()
+        inbound_working = inbound_working[
+            inbound_working["resource_code"].isin(selected_skus)
+        ]
+        inbound_working = inbound_working[inbound_working.get("carrier_mode") == "WIP"]
+
+        if not inbound_working.empty:
+            # 입고 예정일은 event_date(=wip_ready)를 최우선으로 사용하고, 없으면 arrival_date를 사용
+            event_dates = pd.to_datetime(
+                inbound_working.get("event_date"), errors="coerce"
+            )
+            arrival_dates = pd.to_datetime(
+                inbound_working.get("arrival_date"), errors="coerce"
+            )
+            inbound_working["_inbound_date"] = event_dates.fillna(
+                arrival_dates
+            ).dt.normalize()
+
+            # 최근 날짜 기준 비교를 위해 오늘 날짜(현지 시간 기준)를 확보
+            today_norm = pd.Timestamp.now(tz=None).normalize()
+
+            # 채널별(글로벌B2B/글로벌B2C)로 가장 가까운 입고예정 수량과 일자를 추출
+            for sku, sku_group in inbound_working.groupby("resource_code"):
+                channel_info: dict[str, tuple[int, pd.Timestamp]] = {}
+
+                for channel_col in ["global_b2b", "global_b2c"]:
+                    if channel_col not in sku_group.columns:
+                        continue
+
+                    # 채널별 배정 수량을 숫자로 변환하여 양수(실제 입고 예정 물량)만 남김
+                    channel_qty = pd.to_numeric(
+                        sku_group[channel_col], errors="coerce"
+                    ).fillna(0)
+                    positive_mask = channel_qty > 0
+                    if not positive_mask.any():
+                        continue
+
+                    channel_df = sku_group.loc[positive_mask].copy()
+                    channel_df["_channel_qty"] = channel_qty[positive_mask].astype(int)
+                    channel_df["_inbound_date"] = pd.to_datetime(
+                        channel_df["_inbound_date"], errors="coerce"
+                    )
+                    channel_df = channel_df.dropna(subset=["_inbound_date"])
+                    if channel_df.empty:
+                        continue
+
+                    # 오늘 이후 일정이 있으면 그중 가장 빠른 날짜, 없으면 전체 중 가장 빠른 날짜
+                    future_df = channel_df[channel_df["_inbound_date"] >= today_norm]
+                    target_df = future_df if not future_df.empty else channel_df
+                    target_row = target_df.sort_values("_inbound_date").iloc[0]
+
+                    channel_info[channel_col] = (
+                        int(target_row["_channel_qty"]),
+                        target_row["_inbound_date"],
+                    )
+
+                if channel_info:
+                    inbound_summary[str(sku)] = channel_info
 
     # Amazon KPI 카드 스타일을 재사용하여 UI 일관성 확보
     _inject_card_styles()
@@ -92,32 +158,42 @@ def render_taekwang_stock_dashboard(
                 f"{sku}</h4>"
             )
 
-        # 가상창고 내 운영/키핑 창고별 수량을 KPI 카드로 구성
+        # 가상창고(실제 재고 이동이 아닌 논리 배분)에서 운영재고/입고예정 물량을 명확히 구분하여 KPI 카드 구성
+        b2b_inbound = inbound_summary.get(sku, {}).get("global_b2b")
+        b2c_inbound = inbound_summary.get(sku, {}).get("global_b2c")
+
+        def _format_inbound(value: tuple[int, pd.Timestamp] | None) -> str:
+            """입고예정 수량과 일자를 KPI 표기 형식으로 변환합니다."""
+
+            # 입고예정 물량이 없으면 미정으로 표시
+            if value is None:
+                return "+0 (미정)"
+
+            qty, due_date = value
+            if pd.isna(due_date):
+                return f"+{_format_int(qty)} (미정)"
+            return f"+{_format_int(qty)} ({due_date:%m/%d})"
+
         metrics = [
             (
-                "총 재고",
-                _format_int(row.total_qty),
-                "태광KR 가상창고에 배정된 전체 수량 (운영+키핑 포함)",
-            ),
-            (
-                "글로벌B2B 운영창고",
+                "글로벌B2B 운영재고",
                 _format_int(row.global_b2b_running),
-                "글로벌 B2B 부서가 운영창고에 보유 중인 배정 재고",
+                "글로벌 B2B 부서가 운영(출고 가능) 가상창고에 배정한 재고",
             ),
             (
-                "글로벌B2B 키핑창고",
-                _format_int(row.global_b2b_keeping),
-                "글로벌 B2B 주문/출고 예약분(키핑창고) 수량",
-            ),
-            (
-                "글로벌B2C 운영창고",
+                "글로벌B2C 운영재고",
                 _format_int(row.global_b2c_running),
-                "글로벌 B2C 부서 운영창고 배정 재고",
+                "글로벌 B2C 부서 운영 가상창고 배정 재고",
             ),
             (
-                "글로벌B2C 키핑창고",
-                _format_int(row.global_b2c_keeping),
-                "글로벌 B2C 주문·발송 예약분(키핑창고) 수량",
+                "글로벌B2B 입고예정",
+                _format_inbound(b2b_inbound),
+                "입고예정내역에서 글로벌 B2B용으로 배정된 가상 입고(운영창고 유입 예정)",
+            ),
+            (
+                "글로벌B2C 입고예정",
+                _format_inbound(b2c_inbound),
+                "입고예정내역에서 글로벌 B2C용으로 배정된 가상 입고(운영창고 유입 예정)",
             ),
         ]
 
@@ -148,3 +224,5 @@ def render_taekwang_stock_dashboard(
         st.caption(f"{latest_snap:%Y-%m-%d %H:%M} 기준")
     else:
         st.caption("스냅샷 시각 정보를 확인할 수 없습니다.")
+
+    st.caption("한 시간 단위로 업데이트됩니다")

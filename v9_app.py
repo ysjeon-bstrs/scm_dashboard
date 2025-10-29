@@ -782,6 +782,7 @@ def main() -> None:
             selected_skus=selected_skus,
             resource_name_map=resource_name_map,
             sku_colors=_sku_color_map(selected_skus),
+            inbound_moves=data.moves,
         )
     else:
         logger.warning(
