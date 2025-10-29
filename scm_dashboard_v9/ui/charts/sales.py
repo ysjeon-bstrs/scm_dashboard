@@ -461,14 +461,25 @@ def sales_forecast_from_inventory_projection(
     diff = pivot.diff()
     sales = (-diff).clip(lower=0.0)
 
-    # 재고가 증가한 날(입고가 있었던 날)에 판매를 0으로 설정.
-    # 이전 로직은 평균 판매량으로 채웠지만, 이는 과다 측정을 유발합니다.
-    # 입고 날짜는 실제 판매가 재고 변화에서 정확히 계산되지 않으므로 0이 안전합니다.
+    # 재고가 증가한 날(입고가 있는 날)에도 실제로는 판매가 발생합니다.
+    # 하지만 재고 변화(diff)로는 정확히 계산할 수 없습니다:
+    #   예: 재고 100 → 입고 50, 판매 30 → 재고 120
+    #   diff = +20 → sales = 0 (하지만 실제로는 30 판매)
+    # 해결: 입고 날짜를 제외한 평균 일 판매량을 입고 날짜에 적용
     inbound_mask = diff > 0
+
+    # 입고 날짜를 제외하고 평균 계산 (입고 횟수에 비례하지 않도록)
+    sales_no_inbound = sales.copy()
+    for sku in sales.columns:
+        if sku in inbound_mask.columns and inbound_mask[sku].any():
+            sales_no_inbound.loc[inbound_mask[sku], sku] = np.nan
+
+    avg_sales = sales_no_inbound.mean(skipna=True)
+    avg_sales = avg_sales.where(np.isfinite(avg_sales), 0.0)
 
     for sku in sales.columns:
         if sku in inbound_mask.columns and inbound_mask[sku].any():
-            sales.loc[inbound_mask[sku], sku] = 0.0
+            sales.loc[inbound_mask[sku], sku] = avg_sales[sku]
 
     # 재고가 0인 날짜에만 판매를 0으로 설정.
     # 이전 로직은 첫 번째 0 이후 모든 판매를 차단했지만,
@@ -499,6 +510,141 @@ def sales_forecast_from_inventory_projection(
     tidy = tidy.dropna(subset=["date"])
     tidy["sales_ea"] = tidy["sales_ea"].clip(lower=0)
     return tidy.sort_values(["resource_code", "date"]).reset_index(drop=True)
+
+
+def sales_forecast_from_actual_sales_with_stock_limit(
+    sales_actual: pd.DataFrame,
+    inv_forecast: pd.DataFrame,
+    *,
+    skus: Sequence[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+    lookback_days: int = 28,
+) -> pd.DataFrame:
+    """과거 실제 판매량(sales_qty)으로 평균을 계산하고 미래에 적용.
+    재고가 0인 날짜는 판매도 0으로 설정하여 재고-판매 시각적 일치.
+
+    Args:
+        sales_actual: 과거 실제 판매 데이터 (columns: date, resource_code, sales_qty)
+        inv_forecast: 미래 재고 예측 (columns: date, resource_code, stock_qty)
+        skus: SKU 목록
+        start: 예측 시작일
+        end: 예측 종료일
+        today: 오늘 날짜 (과거/미래 구분)
+        lookback_days: 평균 계산 시 조회할 과거 일수
+
+    Returns:
+        DataFrame: 미래 판매 예측 (columns: date, resource_code, sales_qty)
+    """
+    # DEBUG: Streamlit 런타임 체크
+    debug_enabled = False
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx() is not None:
+            debug_enabled = True
+            st.write(
+                "\n**🔍 [sales_forecast_from_actual_sales_with_stock_limit] 과거 판매 기반 예측:**"
+            )
+    except (ImportError, RuntimeError):
+        pass
+
+    today_norm = pd.to_datetime(today).normalize()
+    start_norm = pd.to_datetime(start).normalize()
+    end_norm = pd.to_datetime(end).normalize()
+
+    # 1. 과거 sales_qty로 평균 계산 (정확한 데이터 사용)
+    if sales_actual is None or sales_actual.empty:
+        avg_sales_by_sku = {sku: 0.0 for sku in skus}
+        if debug_enabled:
+            st.warning("  ⚠️ sales_actual이 비어있음 → 평균 판매량 0으로 설정")
+    else:
+        lookback_start = today_norm - pd.Timedelta(days=lookback_days)
+        recent_sales = sales_actual[
+            (sales_actual["date"] >= lookback_start)
+            & (sales_actual["date"] <= today_norm)
+        ].copy()
+
+        avg_sales_by_sku = {}
+        for sku in skus:
+            sku_sales = recent_sales[recent_sales["resource_code"] == sku]["sales_qty"]
+            avg = float(sku_sales.mean()) if not sku_sales.empty else 0.0
+            avg_sales_by_sku[sku] = max(0.0, avg)
+
+        if debug_enabled:
+            st.write(f"  - lookback 기간: {lookback_start} ~ {today_norm}")
+            st.write(f"  - 과거 판매 데이터: {len(recent_sales)} 행")
+            st.write(f"  - **평균 일 판매량 (SKU별):** {avg_sales_by_sku}")
+
+    # 2. 미래 날짜에 평균 적용 (단순하고 명확)
+    future_start = today_norm + pd.Timedelta(days=1)
+    if future_start > end_norm:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
+
+    future_dates = pd.date_range(future_start, end_norm, freq="D")
+    forecast_rows = []
+    for sku in skus:
+        for date in future_dates:
+            forecast_rows.append(
+                {
+                    "date": date,
+                    "resource_code": sku,
+                    "sales_qty": avg_sales_by_sku[sku],
+                }
+            )
+
+    sales_forecast = pd.DataFrame(forecast_rows)
+
+    if debug_enabled:
+        st.write(f"\n  - 미래 기간: {future_start} ~ {end_norm}")
+        st.write(f"  - 초기 판매 예측: {len(sales_forecast)} 행")
+        st.write(
+            f"  - 판매 합계 (SKU별): {sales_forecast.groupby('resource_code')['sales_qty'].sum().to_dict()}"
+        )
+
+    if sales_forecast.empty:
+        return pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
+
+    # 3. 재고가 0인 날짜는 판매도 0으로 설정 (시각적 일치)
+    if inv_forecast is not None and not inv_forecast.empty:
+        inv_forecast = inv_forecast.copy()
+        inv_forecast["date"] = pd.to_datetime(inv_forecast["date"]).dt.normalize()
+
+        if debug_enabled:
+            st.write(f"\n  **재고 기반 판매 제약:**")
+
+        for sku in skus:
+            sku_inv = inv_forecast[inv_forecast["resource_code"] == sku]
+
+            # 날짜별로 센터 간 재고 합산 (여러 센터의 재고를 총합으로 계산)
+            # 한 센터만 0이어도 다른 센터에 재고가 있으면 판매 가능
+            stock_by_date = sku_inv.groupby("date")["stock_qty"].sum()
+            zero_dates = stock_by_date[stock_by_date <= 0].index.values
+
+            if len(zero_dates) > 0:
+                mask = (sales_forecast["resource_code"] == sku) & (
+                    sales_forecast["date"].isin(zero_dates)
+                )
+                sales_forecast.loc[mask, "sales_qty"] = 0.0
+
+                if debug_enabled:
+                    st.write(
+                        f"  - {sku}: 총 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜 판매량 0으로 설정"
+                    )
+            elif debug_enabled:
+                st.write(f"  - {sku}: 총 재고 0 없음 → 평균 판매량 유지")
+
+    if debug_enabled:
+        st.write(f"\n  **최종 판매 예측:**")
+        st.write(
+            f"  - 판매 합계 (SKU별): {sales_forecast.groupby('resource_code')['sales_qty'].sum().to_dict()}"
+        )
+        st.write("  - 샘플 (마지막 10행):")
+        st.dataframe(sales_forecast.tail(10))
+
+    return sales_forecast
 
 
 def sales_from_snapshot_decays(
