@@ -25,11 +25,13 @@ from .metrics import compute_depletion_from_timeline, compute_depletion_metrics
 from .metrics import extract_daily_demand as _extract_daily_demand
 from .metrics import movement_breakdown_per_center as _movement_breakdown_per_center
 from .styles import inject_responsive_styles as _inject_responsive_styles
+from .taekwang_stock import render_taekwang_stock_dashboard
 
 __all__ = [
     "build_amazon_snapshot_kpis",
     "render_amazon_snapshot_kpis",
     "render_sku_summary_cards",
+    "render_taekwang_stock_dashboard",
     "compute_depletion_from_timeline",
     "compute_depletion_metrics",
 ]
