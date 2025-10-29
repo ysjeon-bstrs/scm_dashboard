@@ -539,49 +539,6 @@ def _render_amazon_section(
         promotion_events=events,
         use_consumption_forecast=use_cons_forecast,
     )
-
-    # DEBUG: 아마존 차트 데이터 확인
-    with st.expander("🔍 DEBUG: 아마존 차트 데이터 확인", expanded=True):
-        st.write("**파라미터:**")
-        st.write(f"- today: {today_norm}")
-        st.write(f"- start: {start_ts}")
-        st.write(f"- end: {end_ts}")
-        st.write(f"- selected_skus: {selected_skus}")
-        st.write(f"- amazon_centers: {amazon_centers}")
-
-        st.write("\n**inv_actual_from_step:**")
-        if inv_actual_from_step is None or inv_actual_from_step.empty:
-            st.warning("비어있음!")
-        else:
-            st.success(f"행 수: {len(inv_actual_from_step)}")
-            st.dataframe(inv_actual_from_step.head(10))
-
-        st.write("\n**inv_forecast_from_step:**")
-        if inv_forecast_from_step is None or inv_forecast_from_step.empty:
-            st.warning("비어있음!")
-        else:
-            st.success(f"행 수: {len(inv_forecast_from_step)}")
-            st.dataframe(inv_forecast_from_step.head(10))
-
-        st.write("\n**amz_ctx 데이터:**")
-        st.write(f"- snapshot_long: {len(getattr(amz_ctx, 'snapshot_long', pd.DataFrame()))} 행")
-        st.write(f"- moves: {len(getattr(amz_ctx, 'moves', pd.DataFrame()))} 행")
-        st.write(f"- inv_forecast: {len(getattr(amz_ctx, 'inv_forecast', pd.DataFrame()))} 행")
-        st.write(f"- sales_forecast: {len(getattr(amz_ctx, 'sales_forecast', pd.DataFrame()))} 행")
-
-        # snapshot_long의 sales_qty 확인
-        snap_long = getattr(amz_ctx, 'snapshot_long', pd.DataFrame())
-        if not snap_long.empty and 'sales_qty' in snap_long.columns:
-            st.write(f"\n**snapshot_long sales_qty 통계:**")
-            st.write(f"- 합계: {snap_long['sales_qty'].sum():,.0f}")
-            st.write(f"- 0이 아닌 행: {(snap_long['sales_qty'] != 0).sum()}")
-            st.write(f"- 날짜 범위: {snap_long['date'].min()} ~ {snap_long['date'].max()}")
-
-            # SKU별 sales_qty
-            sales_by_sku = snap_long.groupby('resource_code')['sales_qty'].sum()
-            st.write(f"\n**SKU별 sales_qty:**")
-            st.dataframe(sales_by_sku)
-
     render_amazon_sales_vs_inventory(
         amz_ctx,
         inv_actual=inv_actual_from_step,
