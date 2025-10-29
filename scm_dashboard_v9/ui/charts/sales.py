@@ -475,9 +475,13 @@ def sales_forecast_from_inventory_projection(
     # Once the stock reaches zero we clamp subsequent sales to zero.  This
     # prevents tiny negative diffs introduced by floating point noise from
     # leaking into the forecast bars after depletion.
+    # IMPORTANT: Only apply this to future dates (> today) to avoid clamping
+    # all sales to zero when inv_actual contains zeros due to data issues.
     for sku in sales.columns:
         stock_series = pivot[sku]
-        zero_dates = stock_series.index[stock_series <= 0]
+        # Only look for zeros in the future period
+        future_stock = stock_series.loc[stock_series.index > today_norm]
+        zero_dates = future_stock.index[future_stock <= 0]
         if len(zero_dates) > 0:
             first_zero = zero_dates[0]
             sales.loc[sales.index >= first_zero, sku] = 0.0
