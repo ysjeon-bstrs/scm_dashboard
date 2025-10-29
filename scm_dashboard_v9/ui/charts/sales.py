@@ -488,24 +488,35 @@ def sales_forecast_from_inventory_projection(
         st.dataframe(sales.tail(10))
         st.write(f"  sales 합계 (SKU별): {sales.sum().to_dict()}")
 
-    # 재고가 증가한 날(입고가 있었던 날)에 판매를 0으로 설정.
-    # 이전 로직은 평균 판매량으로 채웠지만, 이는 과다 측정을 유발합니다.
-    # 입고 날짜는 실제 판매가 재고 변화에서 정확히 계산되지 않으므로 0이 안전합니다.
+    # 재고가 증가한 날(입고가 있는 날)에도 실제로는 판매가 발생합니다.
+    # 하지만 재고 변화(diff)로는 정확히 계산할 수 없습니다:
+    #   예: 재고 100 → 입고 50, 판매 30 → 재고 120
+    #   diff = +20 → sales = 0 (하지만 실제로는 30 판매)
+    # 해결: 입고 날짜를 제외한 평균 일 판매량을 입고 날짜에 적용
     inbound_mask = diff > 0
+
+    # 입고 날짜를 제외하고 평균 계산 (입고 횟수에 비례하지 않도록)
+    sales_no_inbound = sales.copy()
+    for sku in sales.columns:
+        if sku in inbound_mask.columns and inbound_mask[sku].any():
+            sales_no_inbound.loc[inbound_mask[sku], sku] = np.nan
+
+    avg_sales = sales_no_inbound.mean(skipna=True)
+    avg_sales = avg_sales.where(np.isfinite(avg_sales), 0.0)
 
     if debug_enabled:
         st.write(f"\n**입고 날짜 처리:**")
-        st.write("  ⚠️ 입고 날짜의 판매량을 0으로 설정 (과다 측정 방지)")
+        st.write(f"  평균 일 판매량 (입고 날짜 제외, SKU별): {avg_sales.to_dict()}")
         for sku in sales.columns:
             if sku in inbound_mask.columns and inbound_mask[sku].any():
                 inbound_dates = inbound_mask.index[inbound_mask[sku]]
                 st.write(
-                    f"  {sku}: 입고 날짜 {len(inbound_dates)}개 → 판매량 0으로 설정"
+                    f"  {sku}: 입고 날짜 {len(inbound_dates)}개 → 평균 판매량 {avg_sales[sku]:.1f}로 대체 (1배만)"
                 )
 
     for sku in sales.columns:
         if sku in inbound_mask.columns and inbound_mask[sku].any():
-            sales.loc[inbound_mask[sku], sku] = 0.0
+            sales.loc[inbound_mask[sku], sku] = avg_sales[sku]
 
     # 재고가 0인 날짜에만 판매를 0으로 설정.
     # 이전 로직은 첫 번째 0 이후 모든 판매를 차단했지만,
