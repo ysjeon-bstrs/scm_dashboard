@@ -482,12 +482,17 @@ def finalize_forecast_dataframes(
     from ..sales import sales_forecast_from_inventory_projection
 
     # DEBUG: 디버그 정보 수집
+    # Only enable debug logging when Streamlit runtime is actually running
+    debug_enabled = False
     try:
         import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
 
-        debug_enabled = True
+        # Check if we're running inside a Streamlit app context
+        if get_script_run_ctx() is not None:
+            debug_enabled = True
     except (ImportError, RuntimeError):
-        debug_enabled = False
+        pass
 
     sales_forecast_df = (
         pd.concat(fallback_sales_rows, ignore_index=True)
