@@ -148,4 +148,3 @@ def render_taekwang_stock_dashboard(
         st.caption(f"{latest_snap:%Y-%m-%d %H:%M} 기준")
     else:
         st.caption("스냅샷 시각 정보를 확인할 수 없습니다.")
-

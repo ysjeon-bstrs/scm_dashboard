@@ -178,7 +178,9 @@ def load_from_excel(
 
     tk_stock_df = None
     if "tk_stock_distrib" in xl.sheet_names:
-        tk_stock_df = pd.read_excel(bio, sheet_name="tk_stock_distrib", engine="openpyxl")
+        tk_stock_df = pd.read_excel(
+            bio, sheet_name="tk_stock_distrib", engine="openpyxl"
+        )
         bio.seek(0)
 
     return df_move, df_ref, df_incoming, snapshot_raw_df, tk_stock_df
@@ -471,9 +473,7 @@ def normalize_tk_stock_distrib(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     normalized["standard_date"] = pd.to_datetime(
         normalized["standard_date"], errors="coerce"
     ).dt.normalize()
-    normalized["snap_time"] = pd.to_datetime(
-        normalized["snap_time"], errors="coerce"
-    )
+    normalized["snap_time"] = pd.to_datetime(normalized["snap_time"], errors="coerce")
 
     # 수량 컬럼을 숫자형으로 안전하게 변환
     for qty_col in [
@@ -483,15 +483,11 @@ def normalize_tk_stock_distrib(df: Optional[pd.DataFrame]) -> pd.DataFrame:
         "global_b2c_keeping",
     ]:
         normalized[qty_col] = (
-            pd.to_numeric(normalized[qty_col], errors="coerce")
-            .fillna(0)
-            .astype(float)
+            pd.to_numeric(normalized[qty_col], errors="coerce").fillna(0).astype(float)
         )
 
     # 제품코드와 로트는 문자열로 다듬어 공백 제거
-    normalized["product_code"] = (
-        normalized["product_code"].astype(str).str.strip()
-    )
+    normalized["product_code"] = normalized["product_code"].astype(str).str.strip()
     normalized["lot"] = normalized["lot"].astype(str).str.strip()
 
     return normalized[
