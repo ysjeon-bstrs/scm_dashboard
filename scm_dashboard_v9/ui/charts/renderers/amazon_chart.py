@@ -250,7 +250,9 @@ def render_amazon_sales_vs_inventory(
                 )
             )
 
-    fig.add_vline(x=today, line_color="crimson", line_dash="dash", line_width=2)
+    fig.add_vline(
+        x=today, line_color="rgba(220, 20, 60, 0.3)", line_dash="solid", line_width=2
+    )
 
     fig.update_layout(
         # 내부 제목 제거: 바깥에서 v5_main이 섹션 제목을 이미 표시함

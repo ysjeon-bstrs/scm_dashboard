@@ -537,20 +537,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
     Returns:
         DataFrame: 미래 판매 예측 (columns: date, resource_code, sales_qty)
     """
-    # DEBUG: Streamlit 런타임 체크
-    debug_enabled = False
-    try:
-        import streamlit as st
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        if get_script_run_ctx() is not None:
-            debug_enabled = True
-            st.write(
-                "\n**🔍 [sales_forecast_from_actual_sales_with_stock_limit] 과거 판매 기반 예측:**"
-            )
-    except (ImportError, RuntimeError):
-        pass
-
     today_norm = pd.to_datetime(today).normalize()
     start_norm = pd.to_datetime(start).normalize()
     end_norm = pd.to_datetime(end).normalize()
@@ -558,8 +544,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
     # 1. 과거 sales_qty로 평균 계산 (정확한 데이터 사용)
     if sales_actual is None or sales_actual.empty:
         avg_sales_by_sku = {sku: 0.0 for sku in skus}
-        if debug_enabled:
-            st.warning("  ⚠️ sales_actual이 비어있음 → 평균 판매량 0으로 설정")
     else:
         lookback_start = today_norm - pd.Timedelta(days=lookback_days)
         recent_sales = sales_actual[
@@ -572,11 +556,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
             sku_sales = recent_sales[recent_sales["resource_code"] == sku]["sales_qty"]
             avg = float(sku_sales.mean()) if not sku_sales.empty else 0.0
             avg_sales_by_sku[sku] = max(0.0, avg)
-
-        if debug_enabled:
-            st.write(f"  - lookback 기간: {lookback_start} ~ {today_norm}")
-            st.write(f"  - 과거 판매 데이터: {len(recent_sales)} 행")
-            st.write(f"  - **평균 일 판매량 (SKU별):** {avg_sales_by_sku}")
 
     # 2. 미래 날짜에 평균 적용 (단순하고 명확)
     future_start = today_norm + pd.Timedelta(days=1)
@@ -597,13 +576,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
 
     sales_forecast = pd.DataFrame(forecast_rows)
 
-    if debug_enabled:
-        st.write(f"\n  - 미래 기간: {future_start} ~ {end_norm}")
-        st.write(f"  - 초기 판매 예측: {len(sales_forecast)} 행")
-        st.write(
-            f"  - 판매 합계 (SKU별): {sales_forecast.groupby('resource_code')['sales_qty'].sum().to_dict()}"
-        )
-
     if sales_forecast.empty:
         return pd.DataFrame(columns=["date", "resource_code", "sales_qty"])
 
@@ -611,9 +583,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
     if inv_forecast is not None and not inv_forecast.empty:
         inv_forecast = inv_forecast.copy()
         inv_forecast["date"] = pd.to_datetime(inv_forecast["date"]).dt.normalize()
-
-        if debug_enabled:
-            st.write(f"\n  **재고 기반 판매 제약:**")
 
         for sku in skus:
             sku_inv = inv_forecast[inv_forecast["resource_code"] == sku]
@@ -624,21 +593,6 @@ def sales_forecast_from_actual_sales_with_stock_limit(
                     sales_forecast["date"].isin(zero_dates)
                 )
                 sales_forecast.loc[mask, "sales_qty"] = 0.0
-
-                if debug_enabled:
-                    st.write(
-                        f"  - {sku}: 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜 판매량 0으로 설정"
-                    )
-            elif debug_enabled:
-                st.write(f"  - {sku}: 재고 0 없음 → 평균 판매량 유지")
-
-    if debug_enabled:
-        st.write(f"\n  **최종 판매 예측:**")
-        st.write(
-            f"  - 판매 합계 (SKU별): {sales_forecast.groupby('resource_code')['sales_qty'].sum().to_dict()}"
-        )
-        st.write("  - 샘플 (마지막 10행):")
-        st.dataframe(sales_forecast.tail(10))
 
     return sales_forecast
 
