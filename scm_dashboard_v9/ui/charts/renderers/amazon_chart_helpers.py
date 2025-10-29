@@ -501,18 +501,18 @@ def finalize_forecast_dataframes(
     )
 
     override_inventory = False
-    if inv_actual is not None:
+    if inv_actual is not None and not inv_actual.empty:
         override_inventory = True
         inv_actual_df = normalize_inventory_frame(
             inv_actual, default_center=default_center
         )
-    if inv_forecast is not None:
+    if inv_forecast is not None and not inv_forecast.empty:
         override_inventory = True
         inv_forecast_df = normalize_inventory_frame(
             inv_forecast, default_center=default_center
         )
 
-    if override_inventory and inv_forecast is None:
+    if override_inventory and (inv_forecast is None or inv_forecast.empty):
         # When only actuals are injected we should not keep stale fallback forecasts.
         inv_forecast_df = pd.DataFrame(
             columns=["date", "center", "resource_code", "stock_qty"]
