@@ -617,11 +617,7 @@ def sales_forecast_from_actual_sales_with_stock_limit(
 
         for sku in skus:
             sku_inv = inv_forecast[inv_forecast["resource_code"] == sku]
-
-            # 날짜별로 센터 간 재고 합산 (여러 센터의 재고를 총합으로 계산)
-            # 한 센터만 0이어도 다른 센터에 재고가 있으면 판매 가능
-            stock_by_date = sku_inv.groupby("date")["stock_qty"].sum()
-            zero_dates = stock_by_date[stock_by_date <= 0].index.values
+            zero_dates = sku_inv[sku_inv["stock_qty"] <= 0]["date"].values
 
             if len(zero_dates) > 0:
                 mask = (sales_forecast["resource_code"] == sku) & (
@@ -631,10 +627,10 @@ def sales_forecast_from_actual_sales_with_stock_limit(
 
                 if debug_enabled:
                     st.write(
-                        f"  - {sku}: 총 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜 판매량 0으로 설정"
+                        f"  - {sku}: 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜 판매량 0으로 설정"
                     )
             elif debug_enabled:
-                st.write(f"  - {sku}: 총 재고 0 없음 → 평균 판매량 유지")
+                st.write(f"  - {sku}: 재고 0 없음 → 평균 판매량 유지")
 
     if debug_enabled:
         st.write(f"\n  **최종 판매 예측:**")

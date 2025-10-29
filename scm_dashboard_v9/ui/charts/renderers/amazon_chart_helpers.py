@@ -528,9 +528,16 @@ def finalize_forecast_dataframes(
         and sales_actual is not None
         and not sales_actual.empty
     ):
+        # target_centers로 필터링 (아마존 센터 재고만 아마존 판매에 영향)
+        inv_forecast_filtered = (
+            inv_forecast_df[inv_forecast_df["center"].isin(target_centers)].copy()
+            if "center" in inv_forecast_df.columns and target_centers
+            else inv_forecast_df
+        )
+
         derived_sales = sales_forecast_from_actual_sales_with_stock_limit(
             sales_actual,
-            inv_forecast_df,
+            inv_forecast_filtered,
             skus=skus,
             start=start,
             end=end,
