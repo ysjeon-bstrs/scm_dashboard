@@ -6,6 +6,7 @@
 
 # Public API (외부에서 직접 사용하는 함수)
 from .amazon_snapshot import build_amazon_snapshot_kpis, render_amazon_snapshot_kpis
+from .taekwang_stock import render_taekwang_stock_dashboard
 from .cards import build_center_card as _build_center_card
 from .cards import build_grid as _build_grid
 from .cards import build_metric_card as _build_metric_card
@@ -30,6 +31,7 @@ __all__ = [
     "build_amazon_snapshot_kpis",
     "render_amazon_snapshot_kpis",
     "render_sku_summary_cards",
+    "render_taekwang_stock_dashboard",
     "compute_depletion_from_timeline",
     "compute_depletion_metrics",
 ]

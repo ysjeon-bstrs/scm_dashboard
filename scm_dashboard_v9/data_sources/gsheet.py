@@ -21,6 +21,7 @@ from scm_dashboard_v9.data_sources.loaders import (
     load_from_gsheet_api,
     load_wip_from_incoming,
     merge_wip_as_moves,
+    normalize_tk_stock_distrib,
 )
 from scm_dashboard_v9.domain.normalization import (
     normalize_moves,
@@ -61,10 +62,10 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     try:
         with st.spinner(show_spinner_message):
             with measure_time_context("Google Sheets API fetch"):
-                df_move, df_ref, df_incoming = load_from_gsheet_api()
+                df_move, df_ref, df_incoming, df_tk_stock = load_from_gsheet_api()
                 logger.debug(
                     f"Raw data loaded: {len(df_move)} moves, {len(df_ref)} snapshots, "
-                    f"{len(df_incoming)} incoming"
+                    f"{len(df_incoming)} incoming, {len(df_tk_stock)} tk_stock"
                 )
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
@@ -110,4 +111,11 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     logger.info("Google Sheets data loaded successfully")
     st.success("Google Sheets 데이터가 업데이트되었습니다.")
 
-    return LoadedData(moves=moves, snapshot=snapshot)
+    # 태광KR 가상창고 배분 시트를 정규화하여 대시보드에서 사용할 수 있도록 저장
+    tk_stock_distrib = normalize_tk_stock_distrib(df_tk_stock)
+
+    return LoadedData(
+        moves=moves,
+        snapshot=snapshot,
+        tk_stock_distrib=tk_stock_distrib,
+    )

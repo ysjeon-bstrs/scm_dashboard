@@ -11,7 +11,11 @@ from .charts import (
     render_sku_summary_cards,
     render_step_chart,
 )
-from .kpi import build_amazon_snapshot_kpis, render_amazon_snapshot_kpis
+from .kpi import (
+    build_amazon_snapshot_kpis,
+    render_amazon_snapshot_kpis,
+    render_taekwang_stock_dashboard,
+)
 from .tables import (
     build_resource_name_map,
     render_inbound_and_wip_tables,
@@ -25,6 +29,7 @@ __all__ = (
     "render_amazon_sales_vs_inventory",
     "render_sku_summary_cards",
     "render_amazon_snapshot_kpis",
+    "render_taekwang_stock_dashboard",
     "build_amazon_snapshot_kpis",
     # Tables
     "render_inbound_and_wip_tables",
