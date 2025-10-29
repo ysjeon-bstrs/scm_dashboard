@@ -22,6 +22,109 @@ DEFAULT_FALLBACK_DAYS = 1
 # ============================================================
 
 
+def _calculate_pred_inbound_core(
+    moves: pd.DataFrame,
+    *,
+    today: pd.Timestamp,
+    lag_days: int,
+    past_arrival_buffer_days: int = PAST_ARRIVAL_BUFFER_DAYS,
+) -> pd.Series:
+    """
+    예상 입고일(pred_inbound_date) 계산 핵심 로직
+
+    이 함수는 calculate_predicted_inbound_date와 annotate_move_schedule의
+    공통 로직을 담당합니다. 중복 제거 및 일관성 보장을 위해 추출되었습니다.
+
+    계산 규칙:
+    1. inbound_date가 있으면 그대로 사용 (최우선)
+    2. WIP: event_date를 그대로 사용 (리드타임 추가 안 함)
+    3. In-Transit:
+       - 과거/오늘 도착: today + past_arrival_buffer_days
+       - 미래 도착: arrival_date/eta_date + lag_days
+
+    Args:
+        moves: 이동 원장 DataFrame (날짜 컬럼이 이미 정규화되어 있어야 함)
+        today: 오늘 날짜 (기준일)
+        lag_days: 입고 반영 리드타임 (일)
+        past_arrival_buffer_days: 과거 도착건 처리 버퍼 (기본 3일)
+
+    Returns:
+        pred_inbound_date Series (NaT 포함 가능)
+    """
+    if moves.empty:
+        return pd.Series(pd.NaT, index=moves.index, dtype="datetime64[ns]")
+
+    today_norm = pd.to_datetime(today).normalize()
+    pred_inbound = pd.Series(pd.NaT, index=moves.index, dtype="datetime64[ns]")
+
+    # carrier_mode 확인
+    carrier_mode = moves.get("carrier_mode", pd.Series("", index=moves.index))
+    is_wip = carrier_mode.astype(str).str.upper() == "WIP"
+
+    # 1. inbound_date가 있으면 우선 사용
+    inbound_col = moves.get("inbound_date")
+    mask_inbound = (
+        inbound_col.notna()
+        if inbound_col is not None
+        else pd.Series(False, index=moves.index)
+    )
+    if mask_inbound.any():
+        pred_inbound.loc[mask_inbound] = inbound_col.loc[mask_inbound]
+
+    # 2. WIP: event_date 그대로 사용
+    wip_mask = is_wip & (~mask_inbound)
+    if wip_mask.any():
+        event_series = moves.get("event_date")
+        if isinstance(event_series, pd.Series):
+            event_normalized = pd.to_datetime(
+                event_series, errors="coerce"
+            ).dt.normalize()
+            wip_with_event = wip_mask & event_normalized.notna()
+            if wip_with_event.any():
+                pred_inbound.loc[wip_with_event] = event_normalized.loc[wip_with_event]
+
+    # 3. In-Transit: arrival/eta + 리드타임
+    intransit_mask = (~is_wip) & (~mask_inbound)
+    arrival_series = moves.get("arrival_date")
+    eta_series = moves.get("eta_date")
+
+    if isinstance(arrival_series, pd.Series) and isinstance(eta_series, pd.Series):
+        arrival_normalized = pd.to_datetime(
+            arrival_series, errors="coerce"
+        ).dt.normalize()
+        eta_normalized = pd.to_datetime(eta_series, errors="coerce").dt.normalize()
+        effective_arrival = arrival_normalized.fillna(eta_normalized)
+    elif isinstance(arrival_series, pd.Series):
+        effective_arrival = pd.to_datetime(
+            arrival_series, errors="coerce"
+        ).dt.normalize()
+    elif isinstance(eta_series, pd.Series):
+        effective_arrival = pd.to_datetime(eta_series, errors="coerce").dt.normalize()
+    else:
+        effective_arrival = pd.Series(
+            pd.NaT, index=moves.index, dtype="datetime64[ns]"
+        )
+
+    mask_eta = intransit_mask & effective_arrival.notna()
+
+    if mask_eta.any():
+        # 과거/오늘 도착: today + buffer_days
+        past_eta = mask_eta & (effective_arrival <= today_norm)
+        if past_eta.any():
+            pred_inbound.loc[past_eta] = today_norm + pd.Timedelta(
+                days=int(past_arrival_buffer_days)
+            )
+
+        # 미래 도착: arrival + lag_days
+        future_eta = mask_eta & (effective_arrival > today_norm)
+        if future_eta.any():
+            pred_inbound.loc[future_eta] = effective_arrival.loc[
+                future_eta
+            ] + pd.Timedelta(days=int(lag_days))
+
+    return pd.to_datetime(pred_inbound).dt.normalize()
+
+
 def calculate_predicted_inbound_date(
     moves: pd.DataFrame,
     *,
@@ -67,7 +170,6 @@ def calculate_predicted_inbound_date(
         return moves_out
 
     moves_out = moves.copy()
-    today_norm = pd.to_datetime(today).normalize()
 
     # ========================================
     # 1단계: 필수 컬럼 보완
@@ -97,73 +199,16 @@ def calculate_predicted_inbound_date(
             ).dt.normalize()
 
     # ========================================
-    # 3단계: carrier_mode 확인
+    # 3단계: 핵심 계산 로직 호출 (중복 제거)
     # ========================================
-    carrier_mode = moves_out.get("carrier_mode", pd.Series("", index=moves_out.index))
-    is_wip = carrier_mode.astype(str).str.upper() == "WIP"
+    pred_inbound = _calculate_pred_inbound_core(
+        moves_out,
+        today=today,
+        lag_days=lag_days,
+        past_arrival_buffer_days=past_arrival_buffer_days,
+    )
 
-    # ========================================
-    # 4단계: pred_inbound_date 계산
-    # ========================================
-    pred_inbound = pd.Series(pd.NaT, index=moves_out.index, dtype="datetime64[ns]")
-
-    # 4-1. inbound_date가 있으면 우선 사용
-    mask_inbound = moves_out["inbound_date"].notna()
-    if mask_inbound.any():
-        pred_inbound.loc[mask_inbound] = moves_out.loc[mask_inbound, "inbound_date"]
-
-    # 4-2. WIP: event_date 그대로 사용
-    wip_mask = is_wip & (~mask_inbound)
-    if wip_mask.any():
-        event_series = moves_out.get("event_date")
-        if isinstance(event_series, pd.Series):
-            event_normalized = pd.to_datetime(
-                event_series, errors="coerce"
-            ).dt.normalize()
-            wip_with_event = wip_mask & event_normalized.notna()
-            if wip_with_event.any():
-                pred_inbound.loc[wip_with_event] = event_normalized.loc[wip_with_event]
-
-    # 4-3. In-Transit: arrival/eta + 리드타임
-    intransit_mask = (~is_wip) & (~mask_inbound)
-    arrival_series = moves_out.get("arrival_date")
-    eta_series = moves_out.get("eta_date")
-
-    if isinstance(arrival_series, pd.Series) and isinstance(eta_series, pd.Series):
-        arrival_normalized = pd.to_datetime(
-            arrival_series, errors="coerce"
-        ).dt.normalize()
-        eta_normalized = pd.to_datetime(eta_series, errors="coerce").dt.normalize()
-        effective_arrival = arrival_normalized.fillna(eta_normalized)
-    elif isinstance(arrival_series, pd.Series):
-        effective_arrival = pd.to_datetime(
-            arrival_series, errors="coerce"
-        ).dt.normalize()
-    elif isinstance(eta_series, pd.Series):
-        effective_arrival = pd.to_datetime(eta_series, errors="coerce").dt.normalize()
-    else:
-        effective_arrival = pd.Series(
-            pd.NaT, index=moves_out.index, dtype="datetime64[ns]"
-        )
-
-    mask_eta = intransit_mask & effective_arrival.notna()
-
-    if mask_eta.any():
-        # 과거/오늘 도착: today + buffer_days
-        past_eta = mask_eta & (effective_arrival <= today_norm)
-        if past_eta.any():
-            pred_inbound.loc[past_eta] = today_norm + pd.Timedelta(
-                days=int(past_arrival_buffer_days)
-            )
-
-        # 미래 도착: arrival + lag_days
-        future_eta = mask_eta & (effective_arrival > today_norm)
-        if future_eta.any():
-            pred_inbound.loc[future_eta] = effective_arrival.loc[
-                future_eta
-            ] + pd.Timedelta(days=int(lag_days))
-
-    moves_out["pred_inbound_date"] = pd.to_datetime(pred_inbound).dt.normalize()
+    moves_out["pred_inbound_date"] = pred_inbound
     return moves_out
 
 
@@ -184,65 +229,53 @@ def annotate_move_schedule(
         horizon_end + pd.Timedelta(days=1),
     )
 
+    # 전처리: 날짜 정규화 및 컬럼 준비
     out = normalize_dates(moves)
     out["carrier_mode"] = out.get("carrier_mode", "").astype(str).str.upper()
-    is_wip = out["carrier_mode"] == "WIP"
     actual_onboard = pd.to_datetime(
         out.get("onboard_date"), errors="coerce"
     ).dt.normalize()
     out["_onboard_date_actual"] = actual_onboard
 
-    pred = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+    # 핵심 계산 로직 호출 (중복 제거)
+    # annotate_move_schedule는 과거 도착건에 3일 고정 사용
+    pred = _calculate_pred_inbound_core(
+        out,
+        today=today,
+        lag_days=lag_days,
+        past_arrival_buffer_days=3,  # 하드코딩된 3일
+    )
+
+    # 후처리: 폴백 로직 적용
+    is_wip = out["carrier_mode"] == "WIP"
     inbound_col = out.get("inbound_date")
     has_inbound = (
         inbound_col.notna()
         if inbound_col is not None
         else pd.Series(False, index=out.index)
     )
-    if has_inbound.any():
-        pred.loc[has_inbound] = inbound_col.loc[has_inbound]
 
-    # WIP: event_date (intended_push_date) 그대로 사용
-    wip_mask = is_wip & (~has_inbound)
-    if wip_mask.any():
-        event_raw = out.get("event_date")
-        if isinstance(event_raw, pd.Series):
-            event_series = pd.to_datetime(event_raw, errors="coerce").dt.normalize()
-            wip_with_event = wip_mask & event_series.notna()
-            if wip_with_event.any():
-                pred.loc[wip_with_event] = event_series.loc[wip_with_event]
-
-    # In-Transit: arrival/eta + 리드타임
+    # arrival_date 또는 eta_date가 있는지 확인
     arrival_raw = out.get("arrival_date")
-    if isinstance(arrival_raw, pd.Series):
-        arrival_series = pd.to_datetime(arrival_raw, errors="coerce").dt.normalize()
-    else:
-        arrival_series = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
-
     eta_raw = out.get("eta_date")
-    if isinstance(eta_raw, pd.Series):
-        eta_series = pd.to_datetime(eta_raw, errors="coerce").dt.normalize()
-    else:
-        eta_series = pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+    arrival_series = (
+        pd.to_datetime(arrival_raw, errors="coerce").dt.normalize()
+        if isinstance(arrival_raw, pd.Series)
+        else pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+    )
+    eta_series = (
+        pd.to_datetime(eta_raw, errors="coerce").dt.normalize()
+        if isinstance(eta_raw, pd.Series)
+        else pd.Series(pd.NaT, index=out.index, dtype="datetime64[ns]")
+    )
     effective_arrival = arrival_series.fillna(eta_series)
     intransit_mask = (~is_wip) & (~has_inbound)
     has_arrival = intransit_mask & effective_arrival.notna()
-    if has_arrival.any():
-        arr_dates = effective_arrival
-        # 과거/오늘 arrival: today + 3일 (수정: 기존 lag_days에서 3일로)
-        past_arrival = has_arrival & (arr_dates <= today_norm)
-        if past_arrival.any():
-            pred.loc[past_arrival] = today_norm + pd.Timedelta(days=3)
 
-        # 미래 arrival: arrival + lag_days
-        future_arrival = has_arrival & (arr_dates > today_norm)
-        if future_arrival.any():
-            pred.loc[future_arrival] = arr_dates.loc[future_arrival] + pd.Timedelta(
-                days=int(lag_days)
-            )
-
+    wip_mask = is_wip & (~has_inbound)
     has_signal = has_inbound | (wip_mask & pred.notna()) | has_arrival
     need_fallback = has_signal & pred.isna()
+
     if need_fallback.any():
         pred.loc[need_fallback] = fallback_date
 
