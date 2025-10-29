@@ -455,19 +455,21 @@ def normalize_tk_stock_distrib(df: Optional[pd.DataFrame]) -> pd.DataFrame:
     # rename을 적용하고 필요 컬럼만 유지
     normalized = df.rename(columns=rename_map).copy()
 
-    # 필수 컬럼이 누락된 경우를 대비해 기본 컬럼을 생성
-    for col in [
-        "standard_date",
-        "product_code",
-        "lot",
-        "global_b2b_running",
-        "global_b2b_keeping",
-        "global_b2c_running",
-        "global_b2c_keeping",
-        "snap_time",
-    ]:
+    # 필수 컬럼이 누락된 경우를 대비해 기본값으로 컬럼 생성
+    # 수량 컬럼은 0, 날짜/텍스트 컬럼은 NA로 초기화
+    required_cols = {
+        "standard_date": pd.NA,
+        "product_code": pd.NA,
+        "lot": pd.NA,
+        "global_b2b_running": 0,
+        "global_b2b_keeping": 0,
+        "global_b2c_running": 0,
+        "global_b2c_keeping": 0,
+        "snap_time": pd.NA,
+    }
+    for col, default_value in required_cols.items():
         if col not in normalized.columns:
-            normalized[col] = pd.NA
+            normalized[col] = default_value
 
     # 날짜/시간 컬럼을 Timestamp로 변환
     normalized["standard_date"] = pd.to_datetime(

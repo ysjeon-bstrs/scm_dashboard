@@ -786,7 +786,9 @@ def main() -> None:
         )
     else:
         logger.warning(
-            "tk_stock_distrib 속성이 없는 LoadedData 인스턴스 감지: 세션 새로고침 필요"
+            "tk_stock_distrib 속성이 없습니다. "
+            "Google Sheets에 'tk_stock_distrib' 시트가 있는지 확인하거나, "
+            "Streamlit 세션을 새로고침(Ctrl+R)해주세요."
         )
 
     # ========================================
