@@ -158,7 +158,7 @@ def render_taekwang_stock_dashboard(
                 f"{sku}</h4>"
             )
 
-        # 가상창고 내 운영/입고예정 창고 구분을 명확히 설명하며 KPI 카드 구성
+        # 가상창고(실제 재고 이동이 아닌 논리 배분)에서 운영재고/입고예정 물량을 명확히 구분하여 KPI 카드 구성
         b2b_inbound = inbound_summary.get(sku, {}).get("global_b2b")
         b2c_inbound = inbound_summary.get(sku, {}).get("global_b2c")
 
@@ -176,14 +176,14 @@ def render_taekwang_stock_dashboard(
 
         metrics = [
             (
-                "글로벌B2B 운영창고",
+                "글로벌B2B 운영재고",
                 _format_int(row.global_b2b_running),
-                "글로벌 B2B 부서가 운영창고에 보유 중인 배정 재고",
+                "글로벌 B2B 부서가 운영(출고 가능) 가상창고에 배정한 재고",
             ),
             (
-                "글로벌B2C 운영창고",
+                "글로벌B2C 운영재고",
                 _format_int(row.global_b2c_running),
-                "글로벌 B2C 부서 운영창고 배정 재고",
+                "글로벌 B2C 부서 운영 가상창고 배정 재고",
             ),
             (
                 "글로벌B2B 입고예정",
