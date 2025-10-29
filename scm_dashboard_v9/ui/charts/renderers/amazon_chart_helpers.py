@@ -562,7 +562,19 @@ def finalize_forecast_dataframes(
     if debug_enabled:
         st.write(f"\n**[finalize_forecast_dataframes] override 후 상태:**")
         st.write(f"- inv_actual_df: {len(inv_actual_df)} 행")
+        if not inv_actual_df.empty:
+            st.write("  inv_actual_df 샘플 (처음 10행):")
+            st.dataframe(inv_actual_df.head(10))
+            st.write(
+                f"  stock_qty 통계: 합계={inv_actual_df['stock_qty'].sum():,.0f}, 최대={inv_actual_df['stock_qty'].max():,.0f}"
+            )
         st.write(f"- inv_forecast_df: {len(inv_forecast_df)} 행")
+        if not inv_forecast_df.empty:
+            st.write("  inv_forecast_df 샘플 (처음 10행):")
+            st.dataframe(inv_forecast_df.head(10))
+            st.write(
+                f"  stock_qty 통계: 합계={inv_forecast_df['stock_qty'].sum():,.0f}, 최대={inv_forecast_df['stock_qty'].max():,.0f}"
+            )
         st.write(f"- use_inventory_for_sales: {use_inventory_for_sales}")
         st.write(
             f"- 조건 체크: inv_actual_df empty={inv_actual_df.empty}, inv_forecast_df empty={inv_forecast_df.empty}"
