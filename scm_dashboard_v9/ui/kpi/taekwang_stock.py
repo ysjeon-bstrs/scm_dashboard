@@ -2,12 +2,154 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+import logging
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
 
 from .amazon_snapshot import _format_int, _inject_card_styles
+
+# Type aliases for better readability
+InboundInfo = Tuple[int, pd.Timestamp]
+ChannelInboundMap = Dict[str, InboundInfo]
+InboundSummary = Dict[str, ChannelInboundMap]
+
+logger = logging.getLogger(__name__)
+
+
+def _calculate_inbound_summary(
+    inbound_moves: pd.DataFrame,
+    selected_skus: Sequence[str],
+    today: pd.Timestamp,
+) -> InboundSummary:
+    """
+    입고예정 데이터에서 채널별 가장 가까운 입고 예정 수량과 일자를 계산합니다.
+
+    Args:
+        inbound_moves: WIP 이동 데이터 (carrier_mode == "WIP")
+        selected_skus: 선택된 SKU 목록
+        today: 기준 날짜 (입고 예정일 비교용)
+
+    Returns:
+        {sku: {channel: (qty, date)}} 형식의 딕셔너리
+        - 채널: "global_b2b", "global_b2c"
+        - qty: 입고 예정 수량
+        - date: 입고 예정일
+
+    Examples:
+        >>> moves = pd.DataFrame({
+        ...     "resource_code": ["BA00021"],
+        ...     "carrier_mode": ["WIP"],
+        ...     "global_b2b": [1000],
+        ...     "event_date": ["2025-12-25"],
+        ... })
+        >>> summary = _calculate_inbound_summary(moves, ["BA00021"], pd.Timestamp("2025-12-01"))
+        >>> summary["BA00021"]["global_b2b"]
+        (1000, Timestamp('2025-12-25'))
+    """
+    inbound_summary: InboundSummary = {}
+
+    # 입고예정 정보는 생산 진행(WIP) 물량으로 들어오므로, WIP 레코드만 필터링
+    inbound_working = inbound_moves.copy()
+    resource_series = inbound_working.get("resource_code")
+    if resource_series is None:
+        inbound_working["resource_code"] = ""
+    else:
+        inbound_working["resource_code"] = resource_series.astype(str).str.strip()
+
+    inbound_working = inbound_working[
+        inbound_working["resource_code"].isin(selected_skus)
+    ]
+    inbound_working = inbound_working[inbound_working.get("carrier_mode") == "WIP"]
+
+    if inbound_working.empty:
+        return inbound_summary
+
+    # 입고 예정일은 event_date(=wip_ready)를 최우선으로 사용하고, 없으면 arrival_date를 사용
+    event_dates = pd.to_datetime(inbound_working.get("event_date"), errors="coerce")
+    arrival_dates = pd.to_datetime(inbound_working.get("arrival_date"), errors="coerce")
+    inbound_working["_inbound_date"] = event_dates.fillna(arrival_dates).dt.normalize()
+
+    # 입고예정일이 모두 누락된 경우 경고 로그 출력
+    if inbound_working["_inbound_date"].isna().all():
+        logger.warning(
+            "모든 입고예정 레코드에서 입고예정일 정보가 누락되었습니다 "
+            "(event_date, arrival_date 모두 없음)"
+        )
+        return inbound_summary
+
+    # 채널별(글로벌B2B/글로벌B2C)로 가장 가까운 입고예정 수량과 일자를 추출
+    for sku, sku_group in inbound_working.groupby("resource_code"):
+        channel_info: ChannelInboundMap = {}
+
+        for channel_col in ["global_b2b", "global_b2c"]:
+            if channel_col not in sku_group.columns:
+                continue
+
+            # 채널별 배정 수량을 숫자로 변환하여 양수(실제 입고 예정 물량)만 남김
+            channel_qty = pd.to_numeric(sku_group[channel_col], errors="coerce").fillna(
+                0
+            )
+            positive_mask = channel_qty > 0
+            if not positive_mask.any():
+                continue
+
+            channel_df = sku_group.loc[positive_mask].copy()
+            channel_df["_channel_qty"] = channel_qty[positive_mask].astype(int)
+            channel_df["_inbound_date"] = pd.to_datetime(
+                channel_df["_inbound_date"], errors="coerce"
+            )
+            channel_df = channel_df.dropna(subset=["_inbound_date"])
+            if channel_df.empty:
+                logger.debug(
+                    f"SKU {sku}, 채널 {channel_col}: 입고예정일 정보 없음 "
+                    "(event_date, arrival_date 모두 누락)"
+                )
+                continue
+
+            # 오늘 이후 일정이 있으면 그중 가장 빠른 날짜, 없으면 전체 중 가장 빠른 날짜
+            future_df = channel_df[channel_df["_inbound_date"] >= today]
+            target_df = future_df if not future_df.empty else channel_df
+            target_row = target_df.sort_values("_inbound_date").iloc[0]
+
+            channel_info[channel_col] = (
+                int(target_row["_channel_qty"]),
+                target_row["_inbound_date"],
+            )
+
+        if channel_info:
+            inbound_summary[str(sku)] = channel_info
+
+    return inbound_summary
+
+
+def _format_inbound(value: Optional[InboundInfo]) -> str:
+    """
+    입고예정 수량과 일자를 KPI 표기 형식으로 변환합니다.
+
+    Args:
+        value: (수량, 일자) 튜플 또는 None
+
+    Returns:
+        "+1,000 (12/25)" 형식의 문자열
+
+    Examples:
+        >>> _format_inbound((1000, pd.Timestamp("2025-12-25")))
+        '+1,000 (12/25)'
+        >>> _format_inbound(None)
+        '+0 (미정)'
+        >>> _format_inbound((500, pd.NaT))
+        '+500 (미정)'
+    """
+    # 입고예정 물량이 없으면 미정으로 표시
+    if value is None:
+        return "+0 (미정)"
+
+    qty, due_date = value
+    if pd.isna(due_date):
+        return f"+{_format_int(qty)} (미정)"
+    return f"+{_format_int(qty)} ({due_date:%m/%d})"
 
 
 def render_taekwang_stock_dashboard(
@@ -62,72 +204,12 @@ def render_taekwang_stock_dashboard(
     )
 
     # 입고예정 정보를 표시하기 위해 WIP(입고예정내역) 데이터를 미리 가공
-    inbound_summary: dict[str, dict[str, tuple[int, pd.Timestamp]]] = {}
+    inbound_summary: InboundSummary = {}
     if inbound_moves is not None and not inbound_moves.empty:
-        # 입고예정 정보는 생산 진행(WIP) 물량으로 들어오므로, WIP 레코드만 필터링
-        inbound_working = inbound_moves.copy()
-        resource_series = inbound_working.get("resource_code")
-        if resource_series is None:
-            inbound_working["resource_code"] = ""
-        else:
-            inbound_working["resource_code"] = resource_series.astype(str).str.strip()
-        inbound_working = inbound_working[
-            inbound_working["resource_code"].isin(selected_skus)
-        ]
-        inbound_working = inbound_working[inbound_working.get("carrier_mode") == "WIP"]
-
-        if not inbound_working.empty:
-            # 입고 예정일은 event_date(=wip_ready)를 최우선으로 사용하고, 없으면 arrival_date를 사용
-            event_dates = pd.to_datetime(
-                inbound_working.get("event_date"), errors="coerce"
-            )
-            arrival_dates = pd.to_datetime(
-                inbound_working.get("arrival_date"), errors="coerce"
-            )
-            inbound_working["_inbound_date"] = event_dates.fillna(
-                arrival_dates
-            ).dt.normalize()
-
-            # 최근 날짜 기준 비교를 위해 오늘 날짜(현지 시간 기준)를 확보
-            today_norm = pd.Timestamp.now(tz=None).normalize()
-
-            # 채널별(글로벌B2B/글로벌B2C)로 가장 가까운 입고예정 수량과 일자를 추출
-            for sku, sku_group in inbound_working.groupby("resource_code"):
-                channel_info: dict[str, tuple[int, pd.Timestamp]] = {}
-
-                for channel_col in ["global_b2b", "global_b2c"]:
-                    if channel_col not in sku_group.columns:
-                        continue
-
-                    # 채널별 배정 수량을 숫자로 변환하여 양수(실제 입고 예정 물량)만 남김
-                    channel_qty = pd.to_numeric(
-                        sku_group[channel_col], errors="coerce"
-                    ).fillna(0)
-                    positive_mask = channel_qty > 0
-                    if not positive_mask.any():
-                        continue
-
-                    channel_df = sku_group.loc[positive_mask].copy()
-                    channel_df["_channel_qty"] = channel_qty[positive_mask].astype(int)
-                    channel_df["_inbound_date"] = pd.to_datetime(
-                        channel_df["_inbound_date"], errors="coerce"
-                    )
-                    channel_df = channel_df.dropna(subset=["_inbound_date"])
-                    if channel_df.empty:
-                        continue
-
-                    # 오늘 이후 일정이 있으면 그중 가장 빠른 날짜, 없으면 전체 중 가장 빠른 날짜
-                    future_df = channel_df[channel_df["_inbound_date"] >= today_norm]
-                    target_df = future_df if not future_df.empty else channel_df
-                    target_row = target_df.sort_values("_inbound_date").iloc[0]
-
-                    channel_info[channel_col] = (
-                        int(target_row["_channel_qty"]),
-                        target_row["_inbound_date"],
-                    )
-
-                if channel_info:
-                    inbound_summary[str(sku)] = channel_info
+        today_norm = pd.Timestamp.now(tz=None).normalize()
+        inbound_summary = _calculate_inbound_summary(
+            inbound_moves, selected_skus, today_norm
+        )
 
     # Amazon KPI 카드 스타일을 재사용하여 UI 일관성 확보
     _inject_card_styles()
@@ -161,18 +243,6 @@ def render_taekwang_stock_dashboard(
         # 가상창고(실제 재고 이동이 아닌 논리 배분)에서 운영재고/입고예정 물량을 명확히 구분하여 KPI 카드 구성
         b2b_inbound = inbound_summary.get(sku, {}).get("global_b2b")
         b2c_inbound = inbound_summary.get(sku, {}).get("global_b2c")
-
-        def _format_inbound(value: tuple[int, pd.Timestamp] | None) -> str:
-            """입고예정 수량과 일자를 KPI 표기 형식으로 변환합니다."""
-
-            # 입고예정 물량이 없으면 미정으로 표시
-            if value is None:
-                return "+0 (미정)"
-
-            qty, due_date = value
-            if pd.isna(due_date):
-                return f"+{_format_int(qty)} (미정)"
-            return f"+{_format_int(qty)} ({due_date:%m/%d})"
 
         metrics = [
             (
