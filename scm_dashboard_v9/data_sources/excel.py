@@ -17,6 +17,7 @@ from scm_dashboard_v9.data_sources.loaders import (
     load_from_excel,
     load_wip_from_incoming,
     merge_wip_as_moves,
+    normalize_tk_stock_distrib,
 )
 from scm_dashboard_v9.domain.normalization import (
     normalize_moves,
@@ -34,10 +35,12 @@ class LoadedData:
     Attributes:
         moves: 정규화된 이동 원장 데이터프레임 (WIP 포함)
         snapshot: 정규화된 스냅샷 데이터프레임
+        tk_stock_distrib: 태광KR 가상창고 배분 현황 DataFrame
     """
 
     moves: pd.DataFrame
     snapshot: pd.DataFrame
+    tk_stock_distrib: Optional[pd.DataFrame] = None
 
 
 def load_from_excel_uploader() -> Optional[LoadedData]:
@@ -70,7 +73,7 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
     # ========================================
     # 2단계: Excel 파일 로드 (v4 로더 사용)
     # ========================================
-    df_move, df_ref, df_incoming, snapshot_raw_df = load_from_excel(file)
+    df_move, df_ref, df_incoming, snapshot_raw_df, df_tk_stock = load_from_excel(file)
 
     # ========================================
     # 2.5단계: snapshot_raw 캐싱 (있는 경우)
@@ -99,4 +102,11 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
     except Exception as exc:  # pragma: no cover - streamlit feedback
         st.warning(f"WIP 불러오기 실패: {exc}")
 
-    return LoadedData(moves=moves, snapshot=snapshot)
+    # 태광KR 가상창고 배분 시트를 정규화하여 Streamlit 세션에서 활용
+    tk_stock_distrib = normalize_tk_stock_distrib(df_tk_stock)
+
+    return LoadedData(
+        moves=moves,
+        snapshot=snapshot,
+        tk_stock_distrib=tk_stock_distrib,
+    )

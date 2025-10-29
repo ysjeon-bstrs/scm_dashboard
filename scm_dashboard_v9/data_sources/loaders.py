@@ -16,11 +16,21 @@ from scm_dashboard_v9.core.config import GSHEET_ID
 
 
 @st.cache_data(ttl=300)
-def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_from_gsheet_api() -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
     """Google Sheets API를 통해 데이터를 로드합니다.
 
     Returns:
-        Tuple of (moves DataFrame, refined snapshot DataFrame, incoming DataFrame)
+        Tuple of (
+            이동 원장 DataFrame,
+            정제 스냅샷 DataFrame,
+            입고예정내역 DataFrame,
+            태광KR 가상창고 배분 DataFrame,
+        )
     """
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -79,6 +89,7 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     df_move = _read("SCM_통합")
     df_ref = _read("snap_정제")
     df_incoming = _read("입고예정내역")
+    df_taekwang = _read("tk_stock_distrib")
 
     try:
         df_snap_raw = _read("snapshot_raw")
@@ -98,20 +109,32 @@ def load_from_gsheet_api() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     except Exception:
         st.session_state["_snapshot_raw_cache"] = None
 
-    return df_move, df_ref, df_incoming
+    return df_move, df_ref, df_incoming, df_taekwang
 
 
 @st.cache_data(ttl=300)
 def load_from_excel(
     file: Any,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+]:
     """Excel 파일에서 데이터를 로드합니다.
 
     Args:
         file: Streamlit file uploader에서 받은 파일 객체
 
     Returns:
-        Tuple of (moves DataFrame, refined snapshot DataFrame, incoming DataFrame, snapshot_raw DataFrame)
+        Tuple of (
+            이동 원장 DataFrame,
+            정제 스냅샷 DataFrame,
+            입고예정내역 DataFrame,
+            snapshot_raw DataFrame,
+            태광KR 가상창고 배분 DataFrame,
+        )
     """
     data = file.read() if hasattr(file, "read") else file
     bio = BytesIO(data) if isinstance(data, (bytes, bytearray)) else file
@@ -153,7 +176,14 @@ def load_from_excel(
         )
         bio.seek(0)
 
-    return df_move, df_ref, df_incoming, snapshot_raw_df
+    tk_stock_df = None
+    if "tk_stock_distrib" in xl.sheet_names:
+        tk_stock_df = pd.read_excel(
+            bio, sheet_name="tk_stock_distrib", engine="openpyxl"
+        )
+        bio.seek(0)
+
+    return df_move, df_ref, df_incoming, snapshot_raw_df, tk_stock_df
 
 
 def load_snapshot_raw() -> pd.DataFrame:
@@ -383,3 +413,92 @@ def merge_wip_as_moves(
     for col in ["onboard_date", "arrival_date", "event_date"]:
         wip_moves[col] = pd.to_datetime(wip_moves[col], errors="coerce").dt.normalize()
     return pd.concat([moves_df, wip_moves], ignore_index=True)
+
+
+def normalize_tk_stock_distrib(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """태광KR 가상창고 배분 시트를 정규화합니다."""
+
+    # 원본 DataFrame이 없거나 비어 있는 경우, 예상 스키마를 가진 빈 DataFrame 반환
+    if df is None or df.empty:
+        return pd.DataFrame(
+            columns=[
+                "standard_date",
+                "product_code",
+                "lot",
+                "global_b2b_running",
+                "global_b2b_keeping",
+                "global_b2c_running",
+                "global_b2c_keeping",
+                "snap_time",
+            ]
+        )
+
+    # 컬럼명 매핑을 위해 소문자 스트립 버전을 생성
+    cols_lower = {str(col).strip().lower(): col for col in df.columns}
+
+    # 표준 컬럼명으로 rename 매핑 구성
+    rename_map = {}
+    for target in [
+        "standard_date",
+        "product_code",
+        "lot",
+        "global_b2b_running",
+        "global_b2b_keeping",
+        "global_b2c_running",
+        "global_b2c_keeping",
+        "snap_time",
+    ]:
+        source = cols_lower.get(target)
+        if source:
+            rename_map[source] = target
+
+    # rename을 적용하고 필요 컬럼만 유지
+    normalized = df.rename(columns=rename_map).copy()
+
+    # 필수 컬럼이 누락된 경우를 대비해 기본 컬럼을 생성
+    for col in [
+        "standard_date",
+        "product_code",
+        "lot",
+        "global_b2b_running",
+        "global_b2b_keeping",
+        "global_b2c_running",
+        "global_b2c_keeping",
+        "snap_time",
+    ]:
+        if col not in normalized.columns:
+            normalized[col] = pd.NA
+
+    # 날짜/시간 컬럼을 Timestamp로 변환
+    normalized["standard_date"] = pd.to_datetime(
+        normalized["standard_date"], errors="coerce"
+    ).dt.normalize()
+    normalized["snap_time"] = pd.to_datetime(normalized["snap_time"], errors="coerce")
+
+    # 수량 컬럼을 숫자형으로 안전하게 변환
+    for qty_col in [
+        "global_b2b_running",
+        "global_b2b_keeping",
+        "global_b2c_running",
+        "global_b2c_keeping",
+    ]:
+        normalized[qty_col] = (
+            pd.to_numeric(normalized[qty_col], errors="coerce").fillna(0).astype(float)
+        )
+
+    # 제품코드와 로트는 문자열로 다듬어 공백 제거
+    normalized["product_code"] = normalized["product_code"].astype(str).str.strip()
+    normalized["lot"] = normalized["lot"].astype(str).str.strip()
+
+    return normalized[
+        [
+            "standard_date",
+            "product_code",
+            "lot",
+            "global_b2b_running",
+            "global_b2b_keeping",
+            "global_b2c_running",
+            "global_b2c_keeping",
+            "snap_time",
+        ]
+    ].copy()

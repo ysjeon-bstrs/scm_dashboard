@@ -50,6 +50,7 @@ from scm_dashboard_v9.ui import (
     render_amazon_snapshot_kpis,
     render_sku_summary_cards,
     render_step_chart,
+    render_taekwang_stock_dashboard,
 )
 from scm_dashboard_v9.ui.adapters import handle_domain_errors
 from scm_dashboard_v9.ui.charts import _sku_color_map, _timeline_inventory_matrix
@@ -594,6 +595,9 @@ def main() -> None:
     else:
         snapshot_df["date"] = pd.NaT
 
+    # SKU → 품명 매핑을 미리 생성하여 각 대시보드에서 재사용
+    resource_name_map = build_resource_name_map(snapshot_df)
+
     # ========================================
     # 4단계: 센터 및 SKU 옵션 추출
     # ========================================
@@ -767,6 +771,23 @@ def main() -> None:
         snapshot=snapshot_df,
     )
 
+    # 태광KR 가상창고(운영/키핑) 배분 데이터를 구버전 세션에서도 안전하게 조회
+    taekwang_stock_df = getattr(data, "tk_stock_distrib", None)
+
+    if taekwang_stock_df is not None:
+        # Amazon 대시보드 전에 태광KR 가상창고 배분 현황을 노출
+        st.divider()
+        render_taekwang_stock_dashboard(
+            taekwang_stock_df,
+            selected_skus=selected_skus,
+            resource_name_map=resource_name_map,
+            sku_colors=_sku_color_map(selected_skus),
+        )
+    else:
+        logger.warning(
+            "tk_stock_distrib 속성이 없는 LoadedData 인스턴스 감지: 세션 새로고침 필요"
+        )
+
     # ========================================
     # 13단계: Amazon US 판매 vs 재고 차트
     # ========================================
@@ -804,8 +825,6 @@ def main() -> None:
     # ========================================
     # 15단계: 재고 현황 테이블
     # ========================================
-    resource_name_map = build_resource_name_map(snapshot_df)
-
     display_df = render_inventory_table(
         snapshot=snapshot_df,
         selected_centers=selected_centers,
