@@ -488,47 +488,45 @@ def sales_forecast_from_inventory_projection(
         st.dataframe(sales.tail(10))
         st.write(f"  sales 합계 (SKU별): {sales.sum().to_dict()}")
 
-    # 재고가 증가한 날(입고가 있었던 날)에도 최소한의 판매 막대를 유지하기 위해
-    # 해당 SKU의 평균 판매량을 채워 넣는다. 평균이 정의되지 않으면 0으로 둔다.
-    # Vectorized operation으로 성능 개선
+    # 재고가 증가한 날(입고가 있었던 날)에 판매를 0으로 설정.
+    # 이전 로직은 평균 판매량으로 채웠지만, 이는 과다 측정을 유발합니다.
+    # 입고 날짜는 실제 판매가 재고 변화에서 정확히 계산되지 않으므로 0이 안전합니다.
     inbound_mask = diff > 0
-    avg_sales = sales.replace(0, np.nan).mean(skipna=True)
-    avg_sales = avg_sales.where(np.isfinite(avg_sales), 0.0)
 
     if debug_enabled:
         st.write(f"\n**입고 날짜 처리:**")
-        st.write(f"  평균 판매량 (SKU별): {avg_sales.to_dict()}")
+        st.write("  ⚠️ 입고 날짜의 판매량을 0으로 설정 (과다 측정 방지)")
         for sku in sales.columns:
             if sku in inbound_mask.columns and inbound_mask[sku].any():
                 inbound_dates = inbound_mask.index[inbound_mask[sku]]
                 st.write(
-                    f"  {sku}: 입고 날짜 {len(inbound_dates)}개 → 평균 판매량 {avg_sales[sku]:.1f}로 대체"
+                    f"  {sku}: 입고 날짜 {len(inbound_dates)}개 → 판매량 0으로 설정"
                 )
 
     for sku in sales.columns:
         if sku in inbound_mask.columns and inbound_mask[sku].any():
-            sales.loc[inbound_mask[sku], sku] = avg_sales[sku]
+            sales.loc[inbound_mask[sku], sku] = 0.0
 
-    # Once the stock reaches zero we clamp subsequent sales to zero.  This
-    # prevents tiny negative diffs introduced by floating point noise from
-    # leaking into the forecast bars after depletion.
-    # IMPORTANT: Only apply this to future dates (> today) to avoid clamping
-    # all sales to zero when inv_actual contains zeros due to data issues.
+    # 재고가 0인 날짜에만 판매를 0으로 설정.
+    # 이전 로직은 첫 번째 0 이후 모든 판매를 차단했지만,
+    # 재고가 다시 양수가 되면 판매도 재개되어야 합니다.
     if debug_enabled:
-        st.write(f"\n**재고 0 체크 및 판매량 clamping:**")
+        st.write(f"\n**재고 0 날짜 판매량 clamping:**")
 
     for sku in sales.columns:
         stock_series = pivot[sku]
-        # Only look for zeros in the future period
+        # 미래 기간에서만 체크
         future_stock = stock_series.loc[stock_series.index > today_norm]
-        zero_dates = future_stock.index[future_stock <= 0]
-        if len(zero_dates) > 0:
-            first_zero = zero_dates[0]
+        zero_mask = future_stock <= 0
+
+        if zero_mask.any():
+            zero_dates = future_stock.index[zero_mask]
             if debug_enabled:
                 st.write(
-                    f"  {sku}: 재고 0 발견 (first_zero={first_zero}) → {first_zero} 이후 판매량 0으로 설정"
+                    f"  {sku}: 재고 0인 날짜 {len(zero_dates)}개 → 해당 날짜만 판매량 0으로 설정"
                 )
-            sales.loc[sales.index >= first_zero, sku] = 0.0
+            # 재고가 0인 날짜에만 판매를 0으로 설정
+            sales.loc[zero_dates, sku] = 0.0
         elif debug_enabled:
             st.write(f"  {sku}: 미래 기간에 재고 0 없음 → clamping 안 함")
 
