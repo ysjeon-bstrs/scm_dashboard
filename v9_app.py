@@ -771,14 +771,22 @@ def main() -> None:
         snapshot=snapshot_df,
     )
 
-    # Amazon 대시보드 전에 태광KR 가상창고 배분 현황을 노출
-    st.divider()
-    render_taekwang_stock_dashboard(
-        data.tk_stock_distrib,
-        selected_skus=selected_skus,
-        resource_name_map=resource_name_map,
-        sku_colors=_sku_color_map(selected_skus),
-    )
+    # 태광KR 가상창고(운영/키핑) 배분 데이터를 구버전 세션에서도 안전하게 조회
+    taekwang_stock_df = getattr(data, "tk_stock_distrib", None)
+
+    if taekwang_stock_df is not None:
+        # Amazon 대시보드 전에 태광KR 가상창고 배분 현황을 노출
+        st.divider()
+        render_taekwang_stock_dashboard(
+            taekwang_stock_df,
+            selected_skus=selected_skus,
+            resource_name_map=resource_name_map,
+            sku_colors=_sku_color_map(selected_skus),
+        )
+    else:
+        logger.warning(
+            "tk_stock_distrib 속성이 없는 LoadedData 인스턴스 감지: 세션 새로고침 필요"
+        )
 
     # ========================================
     # 13단계: Amazon US 판매 vs 재고 차트
