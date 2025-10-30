@@ -101,9 +101,7 @@ def _calculate_pred_inbound_core(
     elif isinstance(eta_series, pd.Series):
         effective_arrival = pd.to_datetime(eta_series, errors="coerce").dt.normalize()
     else:
-        effective_arrival = pd.Series(
-            pd.NaT, index=moves.index, dtype="datetime64[ns]"
-        )
+        effective_arrival = pd.Series(pd.NaT, index=moves.index, dtype="datetime64[ns]")
 
     mask_eta = intransit_mask & effective_arrival.notna()
 
