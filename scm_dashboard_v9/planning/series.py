@@ -105,6 +105,12 @@ def build_center_series(
     mv = moves.copy()
     ship_start_col = _resolve_onboard_column(mv)
 
+    # 최적화: SKU별로 moves를 미리 그룹화하여 캐싱 (O(N×M) → O(N+M))
+    moves_by_sku = {}
+    if not mv.empty:
+        for sku_key, sku_group in mv.groupby("resource_code"):
+            moves_by_sku[sku_key] = sku_group
+
     lines = []
     for (ct, sku), grp in snapshot.groupby(["center", "resource_code"]):
         if ct not in centers_set or sku not in skus_set:
@@ -127,7 +133,8 @@ def build_center_series(
         stock_series = stock_series.ffill().fillna(0.0)
         ts["stock_qty"] = stock_series
 
-        mv_sku = mv[mv["resource_code"] == sku]
+        # 최적화: 캐시된 딕셔너리에서 SKU 데이터 가져오기
+        mv_sku = moves_by_sku.get(sku, pd.DataFrame())
         if not mv_sku.empty:
             eff_minus = (
                 mv_sku[
