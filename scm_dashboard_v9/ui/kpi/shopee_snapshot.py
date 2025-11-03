@@ -274,15 +274,40 @@ def render_shopee_snapshot_kpis(
 
     color_map = dict(sku_colors or {})
 
-    # 센터별로 그룹화하여 카드 생성
-    cards_html: list[str] = []
+    # 국가별 이모지 매핑
+    country_flags = {
+        "SBSMY": "🇲🇾",
+        "SBSSG": "🇸🇬",
+        "SBSTH": "🇹🇭",
+        "SBSPH": "🇵🇭",
+    }
 
+    # 데이터가 있는지 먼저 확인
+    has_any_data = False
     for center in SHOPEE_CENTERS:
+        center_data = kpi_df[kpi_df["center"] == center]
+        if not center_data.empty:
+            has_any_data = True
+            break
+
+    if not has_any_data:
+        st.info("선택된 SKU에 대한 SHOPEE 데이터가 없습니다.")
+        return
+
+    # 센터(국가)별로 구분하여 표시
+    for idx, center in enumerate(SHOPEE_CENTERS):
         center_data = kpi_df[kpi_df["center"] == center]
         if center_data.empty:
             continue
 
         center_name = SHOPEE_CENTER_NAMES.get(center, center)
+        flag = country_flags.get(center, "🏪")
+
+        # 국가 헤더 표시
+        st.markdown(f"#### {flag} {center_name}")
+
+        # 해당 국가의 카드들 생성
+        cards_html: list[str] = []
 
         for row in center_data.itertuples(index=False):
             sku = str(row.resource_code)
@@ -293,17 +318,17 @@ def render_shopee_snapshot_kpis(
             if resource_name_map is not None:
                 resource_name = str(resource_name_map.get(sku, "")).strip()
 
-            # 헤더: 센터명 + 품명 + SKU
+            # 헤더: 품명 + SKU (국가명은 이미 위에 표시했으므로 제거)
             if resource_name:
                 header_html = (
                     f"<h4><span class='color-dot' style='background-color:{color}'></span>"
-                    f"{center_name} · {resource_name} "
+                    f"{resource_name} "
                     f"<span style='color: #666; font-size: 0.9em;'>[{sku}]</span></h4>"
                 )
             else:
                 header_html = (
                     f"<h4><span class='color-dot' style='background-color:{color}'></span>"
-                    f"{center_name} · {sku}</h4>"
+                    f"{sku}</h4>"
                 )
 
             # 메트릭 구성
@@ -348,14 +373,21 @@ def render_shopee_snapshot_kpis(
             )
             cards_html.append(card_html)
 
-    if not cards_html:
-        st.info("선택된 SKU에 대한 SHOPEE 데이터가 없습니다.")
-        return
+        # 해당 국가의 카드들 표시
+        st.markdown(
+            "<div class='amz-kpi-container'>" + "".join(cards_html) + "</div>",
+            unsafe_allow_html=True,
+        )
 
-    st.markdown(
-        "<div class='amz-kpi-container'>" + "".join(cards_html) + "</div>",
-        unsafe_allow_html=True,
-    )
+        # 마지막 국가가 아니면 구분선 추가
+        if idx < len(SHOPEE_CENTERS) - 1:
+            # 다음 국가에 데이터가 있는지 확인
+            has_next = any(
+                not kpi_df[kpi_df["center"] == next_center].empty
+                for next_center in SHOPEE_CENTERS[idx + 1 :]
+            )
+            if has_next:
+                st.markdown("<br>", unsafe_allow_html=True)
 
     # 최신 스냅샷 시각 표시
     latest_snap = kpi_df["snap_time"].max()
