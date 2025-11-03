@@ -305,6 +305,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     - stock_readytoship: 입고등록 재고 (숫자, Amazon FBA)
     - pending_fc: FC 재배치중 재고 (숫자, Amazon FBA)
     - snap_time: 스냅샷 시간 (datetime64, Amazon FBA)
+    - selling_speed: 판매속도 (숫자, SHOPEE)
+    - coverage_days: 커버일수 (숫자, SHOPEE)
 
     Args:
         frame: 원본 스냅샷 데이터프레임
@@ -353,6 +355,10 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         ["pending_fc", "pending_fc_qty", "fc_pending", "pending at fc"]
     )  # 신규 컬럼
 
+    # SHOPEE 스냅샷 전용 컬럼 (선택적)
+    selling_speed_col = _pick_column(["selling_speed", "sales_speed", "판매속도"])
+    coverage_days_col = _pick_column(["coverage_days", "cover_days", "커버일수"])
+
     if not date_col or not center_col or not resource_col or not stock_col:
         raise KeyError(
             "snapshot frame must include date/center/resource_code/stock_qty columns"
@@ -382,6 +388,12 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         rename_map[snap_time_col] = "snap_time"
     if pending_fc_col:
         rename_map[pending_fc_col] = "pending_fc"
+
+    # SHOPEE 컬럼 매핑 (선택적)
+    if selling_speed_col:
+        rename_map[selling_speed_col] = "selling_speed"
+    if coverage_days_col:
+        rename_map[coverage_days_col] = "coverage_days"
 
     out = out.rename(columns=rename_map)
 
@@ -445,6 +457,20 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     if "snap_time" in out.columns:
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
+    # SHOPEE 컬럼 타입 변환 (선택적)
+    if "selling_speed" in out.columns:
+        out["selling_speed"] = (
+            pd.to_numeric(out.get("selling_speed"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
+    if "coverage_days" in out.columns:
+        out["coverage_days"] = (
+            pd.to_numeric(out.get("coverage_days"), errors="coerce")
+            .fillna(0.0)
+            .astype(float)
+        )
+
     out = out.dropna(subset=["date"])
     out = out[(out["center"] != "") & (out["resource_code"] != "")]
 
@@ -460,6 +486,8 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         "stock_readytoship",
         "pending_fc",
         "snap_time",
+        "selling_speed",
+        "coverage_days",
     ]:
         if optional_col in out.columns:
             columns.append(optional_col)
