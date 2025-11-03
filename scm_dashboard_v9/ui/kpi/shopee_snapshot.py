@@ -309,9 +309,7 @@ def render_shopee_snapshot_kpis(
             key = (str(row.center), str(row.resource_code))
             prev_dict[key] = {
                 "stock_available": (
-                    float(row.stock_available)
-                    if pd.notna(row.stock_available)
-                    else 0
+                    float(row.stock_available) if pd.notna(row.stock_available) else 0
                 ),
                 "stock_readytoship": (
                     float(row.stock_readytoship)
@@ -344,9 +342,7 @@ def render_shopee_snapshot_kpis(
                 return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
         return formatted
 
-    def _fmt_speed_with_delta(
-        value: float | None, delta: float | None
-    ) -> str:
+    def _fmt_speed_with_delta(value: float | None, delta: float | None) -> str:
         """판매속도를 delta와 함께 포맷팅합니다."""
         formatted = _format_selling_speed(value)
         if delta is not None and abs(delta) >= 0.1:
@@ -412,7 +408,10 @@ def render_shopee_snapshot_kpis(
                     prev_data.get("stock_readytoship", 0)
                 )
                 # selling_speed와 coverage_days는 0이 아닌 경우에만 delta 계산
-                if kpi_data["selling_speed"] > 0 or prev_data.get("selling_speed", 0) > 0:
+                if (
+                    kpi_data["selling_speed"] > 0
+                    or prev_data.get("selling_speed", 0) > 0
+                ):
                     delta_speed = kpi_data["selling_speed"] - prev_data.get(
                         "selling_speed", 0
                     )
