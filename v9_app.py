@@ -882,16 +882,6 @@ def main() -> None:
             # SHOPEE KPI 설정 토글
             shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
 
-            # 디버그: 원본 스냅샷 데이터 (SHOPEE 센터만)
-            with st.expander("🔍 디버그: 1단계 - 원본 스냅샷 데이터", expanded=False):
-                shopee_raw = snapshot_df[snapshot_df["center"].isin(shopee_centers)].copy()
-                st.caption(f"snapshot_df에서 SHOPEE 센터 필터링 후")
-                st.write(f"**전체 컬럼**: {list(shopee_raw.columns)}")
-                st.write(f"**selling_speed 컬럼 존재?**: {'selling_speed' in shopee_raw.columns}")
-                st.write(f"**coverage_days 컬럼 존재?**: {'coverage_days' in shopee_raw.columns}")
-                if not shopee_raw.empty:
-                    st.dataframe(shopee_raw.head(10), use_container_width=True)
-
             # KPI 데이터 빌드 (현재 + 이전 스냅샷)
             shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
                 snapshot_df=snapshot_df,
@@ -899,17 +889,6 @@ def main() -> None:
                 shopee_centers=shopee_centers,
                 show_delta=shopee_show_delta,
             )
-
-            # 디버그: 처리된 KPI 데이터
-            with st.expander("🔍 디버그: 2단계 - 처리된 KPI 데이터", expanded=False):
-                st.caption("build_shopee_snapshot_kpis() 실행 후")
-                if shopee_kpi_df is not None and not shopee_kpi_df.empty:
-                    st.write(f"**전체 컬럼**: {list(shopee_kpi_df.columns)}")
-                    st.write(f"**selling_speed 컬럼 존재?**: {'selling_speed' in shopee_kpi_df.columns}")
-                    st.write(f"**coverage_days 컬럼 존재?**: {'coverage_days' in shopee_kpi_df.columns}")
-                    st.dataframe(shopee_kpi_df, use_container_width=True)
-                else:
-                    st.warning("KPI 데이터가 비어있습니다")
 
             # KPI 카드 렌더링
             render_shopee_snapshot_kpis(
