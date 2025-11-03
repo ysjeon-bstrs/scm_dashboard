@@ -46,8 +46,10 @@ from scm_dashboard_v9.forecast import (
 )
 from scm_dashboard_v9.ui import (
     build_amazon_snapshot_kpis,
+    build_shopee_snapshot_kpis,
     render_amazon_sales_vs_inventory,
     render_amazon_snapshot_kpis,
+    render_shopee_snapshot_kpis,
     render_sku_summary_cards,
     render_step_chart,
     render_taekwang_stock_dashboard,
@@ -812,7 +814,39 @@ def main() -> None:
     )
 
     # ========================================
-    # 14단계: 입고 예정 및 WIP 테이블
+    # 14단계: SHOPEE 대시보드
+    # ========================================
+    # SHOPEE 센터 목록 (필터와 무관)
+    shopee_centers = ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]
+
+    # 스냅샷에 SHOPEE 센터 데이터가 있는지 확인
+    has_shopee_data = False
+    if not snapshot_df.empty and "center" in snapshot_df.columns:
+        snapshot_centers = snapshot_df["center"].dropna().astype(str).str.strip().unique()
+        has_shopee_data = any(c in shopee_centers for c in snapshot_centers)
+
+    if has_shopee_data:
+        st.divider()
+        # st.expander로 토글 가능하게 만들기 (기본값: 열림)
+        with st.expander("🛍️ SHOPEE 대시보드", expanded=True):
+            shopee_kpi_df = build_shopee_snapshot_kpis(
+                snapshot_df,
+                skus=selected_skus,
+                centers=shopee_centers,
+            )
+
+            if shopee_kpi_df is not None and not shopee_kpi_df.empty:
+                render_shopee_snapshot_kpis(
+                    shopee_kpi_df,
+                    sku_colors=_sku_color_map(selected_skus),
+                    resource_name_map=resource_name_map,
+                    max_cols=4,
+                )
+            else:
+                st.info("선택된 SKU에 대한 SHOPEE 데이터가 없습니다.")
+
+    # ========================================
+    # 15단계: 입고 예정 및 WIP 테이블
     # ========================================
     render_inbound_and_wip_tables(
         moves=data.moves,
@@ -826,7 +860,7 @@ def main() -> None:
     )
 
     # ========================================
-    # 15단계: 재고 현황 테이블
+    # 16단계: 재고 현황 테이블
     # ========================================
     display_df = render_inventory_table(
         snapshot=snapshot_df,
@@ -836,7 +870,7 @@ def main() -> None:
     )
 
     # ========================================
-    # 16단계: 로트 상세 (단일 SKU 선택 시)
+    # 17단계: 로트 상세 (단일 SKU 선택 시)
     # ========================================
     # center_latest_dates 계산 (재고 테이블 함수 내부에서 이미 계산됨)
     center_latest_series = (
