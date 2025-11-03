@@ -27,6 +27,7 @@ SHOPEE_CENTER_NAMES = {
 _NUMERIC_COLUMNS = {
     "stock_available",
     "stock_readytoship",
+    "sales_qty",
     "selling_speed",
     "coverage_days",
 }
