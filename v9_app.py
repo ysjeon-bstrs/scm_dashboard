@@ -423,13 +423,6 @@ def _build_shopee_kpi_data(
     )
     previous_df = None
     if show_delta and kpi_df is not None and not kpi_df.empty:
-        # snap_time 컬럼이 있고 유효한 값이 있으면 사용, 아니면 date 컬럼 사용
-        time_col = "snap_time"
-        if "snap_time" not in snapshot_df.columns or not snapshot_df[
-            "snap_time"
-        ].notna().any():
-            time_col = "date"
-
         # 센터별로 이전 스냅샷 찾기 (각 센터의 2번째 최신 시간)
         prev_snapshots = []
         debug_info = []  # 디버그용
@@ -445,12 +438,20 @@ def _build_shopee_kpi_data(
                 debug_info.append(f"{center}: 최신 시간 없음")
                 continue
 
-            # 해당 센터의 모든 스냅샷 시간 가져오기
+            # 해당 센터에 대해 time_col 결정 (센터별로!)
             center_mask = snapshot_df["center"] == center
-            snap_times = pd.to_datetime(snapshot_df[time_col], errors="coerce")
-            center_times = snapshot_df[center_mask & snap_times.notna()][
-                time_col
-            ].unique()
+            center_data = snapshot_df[center_mask]
+
+            # 이 센터에 snap_time이 있고 유효한 값이 있으면 사용, 아니면 date 사용
+            center_time_col = "snap_time"
+            if "snap_time" not in center_data.columns or not center_data[
+                "snap_time"
+            ].notna().any():
+                center_time_col = "date"
+
+            # 해당 센터의 모든 스냅샷 시간 가져오기
+            snap_times = pd.to_datetime(center_data[center_time_col], errors="coerce")
+            center_times = center_data[snap_times.notna()][center_time_col].unique()
             center_times_sorted = sorted(
                 [pd.to_datetime(t) for t in center_times], reverse=True
             )
@@ -460,7 +461,7 @@ def _build_shopee_kpi_data(
 
             # 디버그 정보 수집
             debug_info.append(
-                f"{center}: 최신={center_latest_ts:%Y-%m-%d %H:%M}, "
+                f"{center}: time_col={center_time_col}, 최신={center_latest_ts:%Y-%m-%d %H:%M}, "
                 f"전체시간={len(center_times_sorted)}개, "
                 f"이전시간={len(prev_times)}개"
             )
@@ -468,8 +469,9 @@ def _build_shopee_kpi_data(
                 prev_latest_ts = prev_times[0]  # 바로 이전 스냅샷
                 debug_info.append(f"  → 이전={prev_latest_ts:%Y-%m-%d %H:%M}")
                 # 정확히 그 시간의 데이터만 선택
-                prev_mask = (
-                    center_mask & (snap_times == prev_latest_ts)
+                prev_mask = center_mask & (
+                    pd.to_datetime(snapshot_df[center_time_col], errors="coerce")
+                    == prev_latest_ts
                 )
                 center_prev = snapshot_df[prev_mask]
                 if not center_prev.empty:
@@ -943,6 +945,21 @@ def main() -> None:
             # 디버그: Delta 데이터 확인
             if shopee_show_delta:
                 with st.expander("🔍 디버그: Delta 데이터", expanded=False):
+                    st.write("**센터별 snap_time 상태 체크:**")
+                    for center in shopee_centers:
+                        center_data = snapshot_df[snapshot_df["center"] == center]
+                        total_rows = len(center_data)
+                        snap_time_valid = center_data["snap_time"].notna().sum()
+                        snap_time_null = center_data["snap_time"].isna().sum()
+                        st.write(f"{center}: 전체 {total_rows}행, snap_time 유효 {snap_time_valid}행, NaT {snap_time_null}행")
+                        if snap_time_valid > 0:
+                            sample = center_data[center_data["snap_time"].notna()][["resource_code", "date", "snap_time"]].head(3)
+                            st.dataframe(sample, use_container_width=True)
+                        else:
+                            st.warning(f"  → {center}는 snap_time이 모두 NaT!")
+
+                    st.divider()
+
                     st.write("**원본 snapshot_df의 SHOPEE 시간 정보 (date vs snap_time):**")
                     shopee_raw_times = snapshot_df[snapshot_df["center"].isin(shopee_centers)][
                         ["center", "resource_code", "date", "snap_time"]
