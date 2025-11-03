@@ -423,25 +423,43 @@ def _build_shopee_kpi_data(
     )
     previous_df = None
     if show_delta and kpi_df is not None and not kpi_df.empty:
-        latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
-        if not pd.isna(latest_snap_ts):
-            # snap_time 컬럼이 있고 유효한 값이 있으면 사용, 아니면 date 컬럼 사용
-            time_col = "snap_time"
-            if "snap_time" not in snapshot_df.columns or not snapshot_df[
-                "snap_time"
-            ].notna().any():
-                time_col = "date"
+        # snap_time 컬럼이 있고 유효한 값이 있으면 사용, 아니면 date 컬럼 사용
+        time_col = "snap_time"
+        if "snap_time" not in snapshot_df.columns or not snapshot_df[
+            "snap_time"
+        ].notna().any():
+            time_col = "date"
 
-            # 이전 스냅샷 데이터 필터링
+        # 센터별로 이전 스냅샷 찾기 (각 센터의 최신 시간 기준)
+        prev_snapshots = []
+        for center in shopee_centers:
+            center_kpi = kpi_df[kpi_df["center"] == center]
+            if center_kpi.empty:
+                continue
+
+            # 해당 센터의 현재 최신 시간
+            center_latest_ts = pd.to_datetime(center_kpi["snap_time"].max())
+            if pd.isna(center_latest_ts):
+                continue
+
+            # 해당 센터의 이전 스냅샷 데이터 필터링
+            center_mask = snapshot_df["center"] == center
             snap_prev_ts = pd.to_datetime(snapshot_df[time_col], errors="coerce")
-            snap_prev_mask = (snap_prev_ts.notna()) & (snap_prev_ts < latest_snap_ts)
-            snap_prev = snapshot_df[snap_prev_mask]
-            if not snap_prev.empty:
-                previous_df = build_shopee_snapshot_kpis(
-                    snap_prev,
-                    skus=selected_skus,
-                    centers=shopee_centers,
-                )
+            snap_prev_mask = (
+                center_mask & (snap_prev_ts.notna()) & (snap_prev_ts < center_latest_ts)
+            )
+            center_prev = snapshot_df[snap_prev_mask]
+            if not center_prev.empty:
+                prev_snapshots.append(center_prev)
+
+        # 모든 센터의 이전 스냅샷 합치기
+        if prev_snapshots:
+            snap_prev = pd.concat(prev_snapshots, ignore_index=True)
+            previous_df = build_shopee_snapshot_kpis(
+                snap_prev,
+                skus=selected_skus,
+                centers=shopee_centers,
+            )
     return kpi_df, previous_df
 
 
