@@ -221,6 +221,9 @@ def _format_selling_speed(value: float | None) -> str:
         return "-"
     if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
         return "-"
+    # 0 또는 매우 작은 값은 "-"로 표시
+    if float(value) <= 0:
+        return "-"
     try:
         return f"{float(value):.1f}개/일"
     except (TypeError, ValueError):
@@ -243,6 +246,9 @@ def _format_coverage_days(value: float | None) -> str:
         return "∞"
     if isinstance(value, float) and np.isnan(value):
         return "-"
+    # 0 또는 매우 작은 값은 "-"로 표시
+    if float(value) <= 0:
+        return "-"
     try:
         return f"{float(value):.1f}일"
     except (TypeError, ValueError):
@@ -252,8 +258,11 @@ def _format_coverage_days(value: float | None) -> str:
 def render_shopee_snapshot_kpis(
     kpi_df: pd.DataFrame | None,
     *,
+    selected_skus: Sequence[str],
     sku_colors: Mapping[str, str] | None = None,
     resource_name_map: Mapping[str, str] | None = None,
+    show_delta: bool = False,
+    previous_df: pd.DataFrame | None = None,
     max_cols: int = 4,
 ) -> None:
     """
@@ -261,14 +270,13 @@ def render_shopee_snapshot_kpis(
 
     Args:
         kpi_df: build_shopee_snapshot_kpis()에서 생성한 KPI 데이터프레임
+        selected_skus: 선택된 SKU 목록 (수량 0이어도 표시)
         sku_colors: SKU별 색상 매핑
         resource_name_map: SKU → 품명 매핑
+        show_delta: 전 스냅샷 대비 델타 표시 여부
+        previous_df: 이전 스냅샷 KPI 데이터프레임
         max_cols: 그리드 최대 열 수 (기본값: 4)
     """
-    if kpi_df is None or kpi_df.empty:
-        st.info("SHOPEE 데이터를 찾을 수 없습니다.")
-        return
-
     # Amazon 카드 스타일 재사용
     _inject_card_styles()
 
@@ -282,75 +290,177 @@ def render_shopee_snapshot_kpis(
         "SBSPH": "🇵🇭",
     }
 
-    # 데이터가 있는지 먼저 확인
-    has_any_data = False
-    for center in SHOPEE_CENTERS:
-        center_data = kpi_df[kpi_df["center"] == center]
-        if not center_data.empty:
-            has_any_data = True
-            break
+    # KPI 데이터를 딕셔너리로 변환 (빠른 조회용)
+    kpi_dict: dict[tuple[str, str], dict] = {}
+    if kpi_df is not None and not kpi_df.empty:
+        for row in kpi_df.itertuples(index=False):
+            key = (str(row.center), str(row.resource_code))
+            kpi_dict[key] = {
+                "stock_available": row.stock_available,
+                "stock_readytoship": row.stock_readytoship,
+                "selling_speed": row.selling_speed,
+                "coverage_days": row.coverage_days,
+            }
 
-    if not has_any_data:
-        st.info("선택된 SKU에 대한 SHOPEE 데이터가 없습니다.")
-        return
+    # 이전 스냅샷 데이터를 딕셔너리로 변환 (센터, SKU별 조회)
+    prev_dict: dict[tuple[str, str], dict] = {}
+    if show_delta and previous_df is not None and not previous_df.empty:
+        for row in previous_df.itertuples(index=False):
+            key = (str(row.center), str(row.resource_code))
+            prev_dict[key] = {
+                "stock_available": (
+                    float(row.stock_available) if pd.notna(row.stock_available) else 0
+                ),
+                "stock_readytoship": (
+                    float(row.stock_readytoship)
+                    if pd.notna(row.stock_readytoship)
+                    else 0
+                ),
+                "selling_speed": (
+                    float(row.selling_speed) if pd.notna(row.selling_speed) else 0
+                ),
+                "coverage_days": (
+                    float(row.coverage_days) if pd.notna(row.coverage_days) else 0
+                ),
+            }
+
+    # 최신 스냅샷 시각
+    latest_snap = None
+    if kpi_df is not None and not kpi_df.empty:
+        latest_snap = kpi_df["snap_time"].max()
+
+    # Delta 포맷팅 헬퍼 함수
+    def _fmt_with_delta(value: int | float, delta: int | float | None) -> str:
+        """정수 값을 delta와 함께 포맷팅합니다."""
+        formatted = _format_int(value)
+        if delta is not None and delta != 0:
+            if delta > 0:
+                delta_str = f"{int(delta):+,}"
+                return f"{formatted} <span class='delta-up'>(↑{delta_str})</span>"
+            else:
+                delta_str = f"{abs(int(delta)):,}"
+                return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
+        return formatted
+
+    def _fmt_speed_with_delta(value: float | None, delta: float | None) -> str:
+        """판매속도를 delta와 함께 포맷팅합니다."""
+        formatted = _format_selling_speed(value)
+        if delta is not None and abs(delta) >= 0.1:
+            if delta > 0:
+                delta_str = f"+{delta:.1f}"
+                return f"{formatted} <span class='delta-up'>(↑{delta_str})</span>"
+            else:
+                delta_str = f"{abs(delta):.1f}"
+                return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
+        return formatted
+
+    def _fmt_cover_with_delta(value: float | None, delta: float | None) -> str:
+        """커버일수를 delta와 함께 포맷팅합니다."""
+        formatted = _format_coverage_days(value)
+        if delta is not None and abs(delta) >= 0.1:
+            if delta > 0:
+                delta_str = f"+{delta:.1f}"
+                return f"{formatted} <span class='delta-up'>(↑{delta_str})</span>"
+            else:
+                delta_str = f"{abs(delta):.1f}"
+                return f"{formatted} <span class='delta-down'>(↓{delta_str})</span>"
+        return formatted
 
     # 센터(국가)별로 구분하여 표시
     for idx, center in enumerate(SHOPEE_CENTERS):
-        center_data = kpi_df[kpi_df["center"] == center]
-        if center_data.empty:
-            continue
-
         center_name = SHOPEE_CENTER_NAMES.get(center, center)
         flag = country_flags.get(center, "🏪")
 
         # 국가 헤더 표시
         st.markdown(f"#### {flag} {center_name}")
 
-        # 해당 국가의 카드들 생성
+        # 해당 국가의 카드들 생성 (선택된 모든 SKU에 대해)
         cards_html: list[str] = []
 
-        for row in center_data.itertuples(index=False):
-            sku = str(row.resource_code)
-            color = color_map.get(sku, "#4E79A7")
+        for sku in selected_skus:
+            sku_str = str(sku).strip()
+            color = color_map.get(sku_str, "#4E79A7")
+
+            # KPI 데이터 조회 (없으면 기본값 0)
+            key = (center, sku_str)
+            kpi_data = kpi_dict.get(
+                key,
+                {
+                    "stock_available": 0,
+                    "stock_readytoship": 0,
+                    "selling_speed": 0,
+                    "coverage_days": 0,
+                },
+            )
+
+            # 이전 스냅샷 데이터 조회 및 delta 계산
+            prev_data = prev_dict.get(key, {})
+            delta_available = None
+            delta_readytoship = None
+            delta_speed = None
+            delta_cover = None
+
+            if show_delta and prev_data:
+                delta_available = kpi_data["stock_available"] - int(
+                    prev_data.get("stock_available", 0)
+                )
+                delta_readytoship = kpi_data["stock_readytoship"] - int(
+                    prev_data.get("stock_readytoship", 0)
+                )
+                # selling_speed와 coverage_days는 0이 아닌 경우에만 delta 계산
+                if (
+                    kpi_data["selling_speed"] > 0
+                    or prev_data.get("selling_speed", 0) > 0
+                ):
+                    delta_speed = kpi_data["selling_speed"] - prev_data.get(
+                        "selling_speed", 0
+                    )
+                if (
+                    kpi_data["coverage_days"] > 0
+                    or prev_data.get("coverage_days", 0) > 0
+                ):
+                    delta_cover = kpi_data["coverage_days"] - prev_data.get(
+                        "coverage_days", 0
+                    )
 
             # 품명 조회
             resource_name = ""
             if resource_name_map is not None:
-                resource_name = str(resource_name_map.get(sku, "")).strip()
+                resource_name = str(resource_name_map.get(sku_str, "")).strip()
 
             # 헤더: 품명 + SKU (국가명은 이미 위에 표시했으므로 제거)
             if resource_name:
                 header_html = (
                     f"<h4><span class='color-dot' style='background-color:{color}'></span>"
                     f"{resource_name} "
-                    f"<span style='color: #666; font-size: 0.9em;'>[{sku}]</span></h4>"
+                    f"<span style='color: #666; font-size: 0.9em;'>[{sku_str}]</span></h4>"
                 )
             else:
                 header_html = (
                     f"<h4><span class='color-dot' style='background-color:{color}'></span>"
-                    f"{sku}</h4>"
+                    f"{sku_str}</h4>"
                 )
 
-            # 메트릭 구성
+            # 메트릭 구성 (delta 포함)
             metrics = [
                 (
                     "판매가능",
-                    _format_int(row.stock_available),
+                    _fmt_with_delta(kpi_data["stock_available"], delta_available),
                     "현재 판매 가능한 재고",
                 ),
                 (
                     "입고등록",
-                    _format_int(row.stock_readytoship),
+                    _fmt_with_delta(kpi_data["stock_readytoship"], delta_readytoship),
                     "입고 등록된 재고 (아직 판매 불가)",
                 ),
                 (
                     "판매속도",
-                    _format_selling_speed(row.selling_speed),
+                    _fmt_speed_with_delta(kpi_data["selling_speed"], delta_speed),
                     "일평균 판매 속도",
                 ),
                 (
                     "커버일수",
-                    _format_coverage_days(row.coverage_days),
+                    _fmt_cover_with_delta(kpi_data["coverage_days"], delta_cover),
                     "현재 재고로 판매 가능한 일수",
                 ),
             ]
@@ -381,16 +491,9 @@ def render_shopee_snapshot_kpis(
 
         # 마지막 국가가 아니면 구분선 추가
         if idx < len(SHOPEE_CENTERS) - 1:
-            # 다음 국가에 데이터가 있는지 확인
-            has_next = any(
-                not kpi_df[kpi_df["center"] == next_center].empty
-                for next_center in SHOPEE_CENTERS[idx + 1 :]
-            )
-            if has_next:
-                st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
 
     # 최신 스냅샷 시각 표시
-    latest_snap = kpi_df["snap_time"].max()
     if pd.notna(latest_snap):
         st.caption(f"{latest_snap:%Y-%m-%d %H:%M} 기준")
     else:

@@ -397,6 +397,52 @@ def _build_amazon_kpi_data(
     return kpi_df, previous_df
 
 
+def _build_shopee_kpi_data(
+    *,
+    snapshot_df: pd.DataFrame,
+    selected_skus: List[str],
+    shopee_centers: List[str],
+    show_delta: bool,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    SHOPEE KPI 데이터를 빌드합니다.
+
+    Args:
+        snapshot_df: 스냅샷 데이터
+        selected_skus: 선택된 SKU 목록
+        shopee_centers: SHOPEE 센터 목록
+        show_delta: 전 스냅샷 대비 델타 표시 여부
+
+    Returns:
+        (kpi_df, previous_df) 튜플
+    """
+    kpi_df = build_shopee_snapshot_kpis(
+        snapshot_df,
+        skus=selected_skus,
+        centers=shopee_centers,
+    )
+    previous_df = None
+    if show_delta and kpi_df is not None and not kpi_df.empty:
+        latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
+        if not pd.isna(latest_snap_ts):
+            # snap_time이 모두 null이면 date 컬럼 사용
+            time_col = (
+                "snap_time" if snapshot_df["snap_time"].notna().any() else "date"
+            )
+
+            # 이전 스냅샷 데이터 필터링
+            snap_prev_ts = pd.to_datetime(snapshot_df[time_col], errors="coerce")
+            snap_prev_mask = (snap_prev_ts.notna()) & (snap_prev_ts < latest_snap_ts)
+            snap_prev = snapshot_df[snap_prev_mask]
+            if not snap_prev.empty:
+                previous_df = build_shopee_snapshot_kpis(
+                    snap_prev,
+                    skus=selected_skus,
+                    centers=shopee_centers,
+                )
+    return kpi_df, previous_df
+
+
 def _render_amazon_section(
     *,
     selected_centers: List[str],
@@ -831,21 +877,27 @@ def main() -> None:
         with st.expander("🛍️ SHOPEE", expanded=True):
             st.subheader("SHOPEE 대시보드")
 
-            shopee_kpi_df = build_shopee_snapshot_kpis(
-                snapshot_df,
-                skus=selected_skus,
-                centers=shopee_centers,
+            # SHOPEE KPI 설정 토글
+            shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
+
+            # KPI 데이터 빌드 (현재 + 이전 스냅샷)
+            shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
+                snapshot_df=snapshot_df,
+                selected_skus=selected_skus,
+                shopee_centers=shopee_centers,
+                show_delta=shopee_show_delta,
             )
 
-            if shopee_kpi_df is not None and not shopee_kpi_df.empty:
-                render_shopee_snapshot_kpis(
-                    shopee_kpi_df,
-                    sku_colors=_sku_color_map(selected_skus),
-                    resource_name_map=resource_name_map,
-                    max_cols=4,
-                )
-            else:
-                st.info("선택된 SKU에 대한 SHOPEE 데이터가 없습니다.")
+            # KPI 카드 렌더링
+            render_shopee_snapshot_kpis(
+                shopee_kpi_df,
+                selected_skus=selected_skus,
+                sku_colors=_sku_color_map(selected_skus),
+                resource_name_map=resource_name_map,
+                show_delta=shopee_show_delta,
+                previous_df=shopee_previous_df,
+                max_cols=4,
+            )
 
     # ========================================
     # 15단계: 입고 예정 및 WIP 테이블
