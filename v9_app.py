@@ -945,6 +945,21 @@ def main() -> None:
             # 디버그: Delta 데이터 확인
             if shopee_show_delta:
                 with st.expander("🔍 디버그: Delta 데이터", expanded=False):
+                    st.write("**센터별 snap_time 상태 체크:**")
+                    for center in shopee_centers:
+                        center_data = snapshot_df[snapshot_df["center"] == center]
+                        total_rows = len(center_data)
+                        snap_time_valid = center_data["snap_time"].notna().sum()
+                        snap_time_null = center_data["snap_time"].isna().sum()
+                        st.write(f"{center}: 전체 {total_rows}행, snap_time 유효 {snap_time_valid}행, NaT {snap_time_null}행")
+                        if snap_time_valid > 0:
+                            sample = center_data[center_data["snap_time"].notna()][["resource_code", "date", "snap_time"]].head(3)
+                            st.dataframe(sample, use_container_width=True)
+                        else:
+                            st.warning(f"  → {center}는 snap_time이 모두 NaT!")
+
+                    st.divider()
+
                     st.write("**원본 snapshot_df의 SHOPEE 시간 정보 (date vs snap_time):**")
                     shopee_raw_times = snapshot_df[snapshot_df["center"].isin(shopee_centers)][
                         ["center", "resource_code", "date", "snap_time"]
