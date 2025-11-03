@@ -430,7 +430,7 @@ def _build_shopee_kpi_data(
         ].notna().any():
             time_col = "date"
 
-        # 센터별로 이전 스냅샷 찾기 (각 센터의 최신 시간 기준)
+        # 센터별로 이전 스냅샷 찾기 (각 센터의 2번째 최신 시간)
         prev_snapshots = []
         for center in shopee_centers:
             center_kpi = kpi_df[kpi_df["center"] == center]
@@ -442,15 +442,27 @@ def _build_shopee_kpi_data(
             if pd.isna(center_latest_ts):
                 continue
 
-            # 해당 센터의 이전 스냅샷 데이터 필터링
+            # 해당 센터의 모든 스냅샷 시간 가져오기
             center_mask = snapshot_df["center"] == center
-            snap_prev_ts = pd.to_datetime(snapshot_df[time_col], errors="coerce")
-            snap_prev_mask = (
-                center_mask & (snap_prev_ts.notna()) & (snap_prev_ts < center_latest_ts)
+            snap_times = pd.to_datetime(snapshot_df[time_col], errors="coerce")
+            center_times = snapshot_df[center_mask & snap_times.notna()][
+                time_col
+            ].unique()
+            center_times_sorted = sorted(
+                [pd.to_datetime(t) for t in center_times], reverse=True
             )
-            center_prev = snapshot_df[snap_prev_mask]
-            if not center_prev.empty:
-                prev_snapshots.append(center_prev)
+
+            # 2번째 최신 시간 찾기 (현재 최신 제외)
+            prev_times = [t for t in center_times_sorted if t < center_latest_ts]
+            if prev_times:
+                prev_latest_ts = prev_times[0]  # 바로 이전 스냅샷
+                # 정확히 그 시간의 데이터만 선택
+                prev_mask = (
+                    center_mask & (snap_times == prev_latest_ts)
+                )
+                center_prev = snapshot_df[prev_mask]
+                if not center_prev.empty:
+                    prev_snapshots.append(center_prev)
 
         # 모든 센터의 이전 스냅샷 합치기
         if prev_snapshots:
