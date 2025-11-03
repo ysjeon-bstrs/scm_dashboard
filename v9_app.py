@@ -828,7 +828,9 @@ def main() -> None:
     if has_shopee_data:
         st.divider()
         # st.expander로 토글 가능하게 만들기 (기본값: 열림)
-        with st.expander("🛍️ SHOPEE 대시보드", expanded=True):
+        with st.expander("🛍️ SHOPEE", expanded=True):
+            st.subheader("SHOPEE 대시보드")
+
             shopee_kpi_df = build_shopee_snapshot_kpis(
                 snapshot_df,
                 skus=selected_skus,
