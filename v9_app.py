@@ -890,6 +890,25 @@ def main() -> None:
                 show_delta=shopee_show_delta,
             )
 
+            # 디버그: Delta 데이터 확인
+            if shopee_show_delta:
+                with st.expander("🔍 디버그: Delta 데이터", expanded=False):
+                    st.write("**현재 스냅샷 KPI:**")
+                    if shopee_kpi_df is not None and not shopee_kpi_df.empty:
+                        st.write(f"총 {len(shopee_kpi_df)}개 행")
+                        st.write(f"국가별 개수: {shopee_kpi_df['center'].value_counts().to_dict()}")
+                        st.dataframe(shopee_kpi_df[['center', 'resource_code', 'selling_speed', 'coverage_days', 'snap_time']], use_container_width=True)
+                    else:
+                        st.warning("현재 KPI 데이터 없음")
+
+                    st.write("**이전 스냅샷 KPI:**")
+                    if shopee_previous_df is not None and not shopee_previous_df.empty:
+                        st.write(f"총 {len(shopee_previous_df)}개 행")
+                        st.write(f"국가별 개수: {shopee_previous_df['center'].value_counts().to_dict()}")
+                        st.dataframe(shopee_previous_df[['center', 'resource_code', 'selling_speed', 'coverage_days', 'snap_time']], use_container_width=True)
+                    else:
+                        st.warning("이전 KPI 데이터 없음 (Delta 계산 불가)")
+
             # KPI 카드 렌더링
             render_shopee_snapshot_kpis(
                 shopee_kpi_df,
