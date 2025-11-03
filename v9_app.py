@@ -889,26 +889,10 @@ def main() -> None:
             if not shopee_snapshot_debug.empty:
                 with st.expander("🔍 디버그: 원본 스냅샷 데이터 (SHOPEE)", expanded=False):
                     st.caption("build_shopee_snapshot_kpis()로 들어가기 전 원본 데이터")
-                    # selling_speed, coverage_days 관련 컬럼만 표시
-                    debug_cols = [
-                        "center",
-                        "resource_code",
-                        "stock_available",
-                        "stock_readytoship",
-                    ]
-                    # selling_speed와 coverage_days 관련 컬럼 찾기
-                    for col in snapshot_df.columns:
-                        col_lower = str(col).lower()
-                        if "selling" in col_lower or "speed" in col_lower:
-                            debug_cols.append(col)
-                        elif "coverage" in col_lower or "cover" in col_lower:
-                            debug_cols.append(col)
-                    # 중복 제거
-                    debug_cols = [
-                        c for c in debug_cols if c in shopee_snapshot_debug.columns
-                    ]
+                    st.write(f"**전체 컬럼 목록** ({len(shopee_snapshot_debug.columns)}개):")
+                    st.code(", ".join(list(shopee_snapshot_debug.columns)))
                     st.dataframe(
-                        shopee_snapshot_debug[debug_cols].head(20),
+                        shopee_snapshot_debug.head(20),
                         use_container_width=True,
                     )
 
