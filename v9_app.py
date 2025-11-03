@@ -432,14 +432,17 @@ def _build_shopee_kpi_data(
 
         # 센터별로 이전 스냅샷 찾기 (각 센터의 2번째 최신 시간)
         prev_snapshots = []
+        debug_info = []  # 디버그용
         for center in shopee_centers:
             center_kpi = kpi_df[kpi_df["center"] == center]
             if center_kpi.empty:
+                debug_info.append(f"{center}: KPI 데이터 없음")
                 continue
 
             # 해당 센터의 현재 최신 시간
             center_latest_ts = pd.to_datetime(center_kpi["snap_time"].max())
             if pd.isna(center_latest_ts):
+                debug_info.append(f"{center}: 최신 시간 없음")
                 continue
 
             # 해당 센터의 모든 스냅샷 시간 가져오기
@@ -454,8 +457,16 @@ def _build_shopee_kpi_data(
 
             # 2번째 최신 시간 찾기 (현재 최신 제외)
             prev_times = [t for t in center_times_sorted if t < center_latest_ts]
+
+            # 디버그 정보 수집
+            debug_info.append(
+                f"{center}: 최신={center_latest_ts:%Y-%m-%d %H:%M}, "
+                f"전체시간={len(center_times_sorted)}개, "
+                f"이전시간={len(prev_times)}개"
+            )
             if prev_times:
                 prev_latest_ts = prev_times[0]  # 바로 이전 스냅샷
+                debug_info.append(f"  → 이전={prev_latest_ts:%Y-%m-%d %H:%M}")
                 # 정확히 그 시간의 데이터만 선택
                 prev_mask = (
                     center_mask & (snap_times == prev_latest_ts)
@@ -463,6 +474,12 @@ def _build_shopee_kpi_data(
                 center_prev = snapshot_df[prev_mask]
                 if not center_prev.empty:
                     prev_snapshots.append(center_prev)
+                    debug_info.append(f"  → 데이터 {len(center_prev)}행 발견")
+                else:
+                    debug_info.append(f"  → 데이터 없음!")
+            else:
+                debug_info.append(f"  → 이전 스냅샷 시간 없음!")
+
 
         # 모든 센터의 이전 스냅샷 합치기
         if prev_snapshots:
@@ -472,6 +489,9 @@ def _build_shopee_kpi_data(
                 skus=selected_skus,
                 centers=shopee_centers,
             )
+
+        # 디버그 정보를 세션에 저장
+        st.session_state["_shopee_delta_debug"] = debug_info
     return kpi_df, previous_df
 
 
@@ -923,6 +943,16 @@ def main() -> None:
             # 디버그: Delta 데이터 확인
             if shopee_show_delta:
                 with st.expander("🔍 디버그: Delta 데이터", expanded=False):
+                    st.write("**센터별 이전 스냅샷 찾기 상세:**")
+                    debug_info = st.session_state.get("_shopee_delta_debug", [])
+                    if debug_info:
+                        for info in debug_info:
+                            st.text(info)
+                    else:
+                        st.warning("디버그 정보 없음")
+
+                    st.divider()
+
                     st.write("**현재 스냅샷 KPI:**")
                     if shopee_kpi_df is not None and not shopee_kpi_df.empty:
                         st.write(f"총 {len(shopee_kpi_df)}개 행")
