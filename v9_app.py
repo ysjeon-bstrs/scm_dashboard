@@ -943,6 +943,15 @@ def main() -> None:
             # 디버그: Delta 데이터 확인
             if shopee_show_delta:
                 with st.expander("🔍 디버그: Delta 데이터", expanded=False):
+                    st.write("**원본 snapshot_df의 SHOPEE 시간 정보 (date vs snap_time):**")
+                    shopee_raw_times = snapshot_df[snapshot_df["center"].isin(shopee_centers)][
+                        ["center", "resource_code", "date", "snap_time"]
+                    ].drop_duplicates(subset=["center", "snap_time"]).sort_values(["center", "snap_time"], ascending=[True, False])
+                    st.write(f"총 {len(shopee_raw_times)}개 고유 시간")
+                    st.dataframe(shopee_raw_times.head(30), use_container_width=True)
+
+                    st.divider()
+
                     st.write("**센터별 이전 스냅샷 찾기 상세:**")
                     debug_info = st.session_state.get("_shopee_delta_debug", [])
                     if debug_info:
