@@ -13,7 +13,9 @@ from .charts import (
 )
 from .kpi import (
     build_amazon_snapshot_kpis,
+    build_shopee_snapshot_kpis,
     render_amazon_snapshot_kpis,
+    render_shopee_snapshot_kpis,
     render_taekwang_stock_dashboard,
 )
 from .tables import (
@@ -29,8 +31,10 @@ __all__ = (
     "render_amazon_sales_vs_inventory",
     "render_sku_summary_cards",
     "render_amazon_snapshot_kpis",
+    "render_shopee_snapshot_kpis",
     "render_taekwang_stock_dashboard",
     "build_amazon_snapshot_kpis",
+    "build_shopee_snapshot_kpis",
     # Tables
     "render_inbound_and_wip_tables",
     "render_inventory_table",
