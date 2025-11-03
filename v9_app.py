@@ -425,10 +425,12 @@ def _build_shopee_kpi_data(
     if show_delta and kpi_df is not None and not kpi_df.empty:
         latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
         if not pd.isna(latest_snap_ts):
-            # snap_time이 모두 null이면 date 컬럼 사용
-            time_col = (
-                "snap_time" if snapshot_df["snap_time"].notna().any() else "date"
-            )
+            # snap_time 컬럼이 있고 유효한 값이 있으면 사용, 아니면 date 컬럼 사용
+            time_col = "snap_time"
+            if "snap_time" not in snapshot_df.columns or not snapshot_df[
+                "snap_time"
+            ].notna().any():
+                time_col = "date"
 
             # 이전 스냅샷 데이터 필터링
             snap_prev_ts = pd.to_datetime(snapshot_df[time_col], errors="coerce")
@@ -880,6 +882,36 @@ def main() -> None:
             # SHOPEE KPI 설정 토글
             shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
 
+            # 디버그: 원본 스냅샷 데이터 확인 (SHOPEE 센터만)
+            shopee_snapshot_debug = snapshot_df[
+                snapshot_df["center"].isin(shopee_centers)
+            ].copy()
+            if not shopee_snapshot_debug.empty:
+                with st.expander("🔍 디버그: 원본 스냅샷 데이터 (SHOPEE)", expanded=False):
+                    st.caption("build_shopee_snapshot_kpis()로 들어가기 전 원본 데이터")
+                    # selling_speed, coverage_days 관련 컬럼만 표시
+                    debug_cols = [
+                        "center",
+                        "resource_code",
+                        "stock_available",
+                        "stock_readytoship",
+                    ]
+                    # selling_speed와 coverage_days 관련 컬럼 찾기
+                    for col in snapshot_df.columns:
+                        col_lower = str(col).lower()
+                        if "selling" in col_lower or "speed" in col_lower:
+                            debug_cols.append(col)
+                        elif "coverage" in col_lower or "cover" in col_lower:
+                            debug_cols.append(col)
+                    # 중복 제거
+                    debug_cols = [
+                        c for c in debug_cols if c in shopee_snapshot_debug.columns
+                    ]
+                    st.dataframe(
+                        shopee_snapshot_debug[debug_cols].head(20),
+                        use_container_width=True,
+                    )
+
             # KPI 데이터 빌드 (현재 + 이전 스냅샷)
             shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
                 snapshot_df=snapshot_df,
@@ -898,6 +930,25 @@ def main() -> None:
                 previous_df=shopee_previous_df,
                 max_cols=4,
             )
+
+            # 디버그: KPI 데이터 확인
+            if shopee_kpi_df is not None and not shopee_kpi_df.empty:
+                with st.expander("🔍 디버그: SHOPEE KPI 데이터", expanded=False):
+                    st.caption("selling_speed와 coverage_days 값을 확인하세요")
+                    st.dataframe(
+                        shopee_kpi_df[
+                            [
+                                "center",
+                                "resource_code",
+                                "stock_available",
+                                "stock_readytoship",
+                                "selling_speed",
+                                "coverage_days",
+                                "snap_time",
+                            ]
+                        ],
+                        use_container_width=True,
+                    )
 
     # ========================================
     # 15단계: 입고 예정 및 WIP 테이블
