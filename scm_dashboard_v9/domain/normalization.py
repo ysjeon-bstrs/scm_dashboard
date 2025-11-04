@@ -455,13 +455,19 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .astype(float)
         )
     if "snap_time" in out.columns:
+        print("=" * 80)
+        print("[DEBUG] snap_time 변환 시작!")
+        print(f"[DEBUG] out.columns: {list(out.columns)}")
+        print(f"[DEBUG] 'snap_time' in out.columns: {'snap_time' in out.columns}")
+
         # 디버그: 변환 직전 snap_time 값 확인
         if "center" in out.columns:
             for center in ["SBSTH", "SBSPH"]:
                 center_data = out[out["center"] == center]
+                print(f"[DEBUG] {center} 데이터 행 수: {len(center_data)}")
                 if not center_data.empty and "snap_time" in center_data.columns:
                     sample_val = center_data["snap_time"].iloc[0]
-                    print(f"[normalize_snapshot 내부] {center} 첫 번째 snap_time:")
+                    print(f"[DEBUG] {center} 첫 번째 snap_time:")
                     print(f"  - 값: '{sample_val}'")
                     print(f"  - 타입: {type(sample_val).__name__}")
                     print(f"  - repr: {repr(sample_val)}")
@@ -470,8 +476,9 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
                         print(f"  - 바이트: {sample_val.encode('utf-8')}")
 
         snap_time_series = out.get("snap_time")
-        print(f"[snap_time_series type]: {type(snap_time_series)}")
-        print(f"[snap_time_series is None]: {snap_time_series is None}")
+        print(f"[DEBUG] snap_time_series type: {type(snap_time_series)}")
+        print(f"[DEBUG] snap_time_series is None: {snap_time_series is None}")
+        print("=" * 80)
 
         out["snap_time"] = pd.to_datetime(snap_time_series, errors="coerce")
 
@@ -483,7 +490,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
                     valid = center_data["snap_time"].notna().sum()
                     nat = center_data["snap_time"].isna().sum()
                     print(
-                        f"[normalize_snapshot 내부] {center} snap_time (변환 직후): 유효 {valid}, NaT {nat}"
+                        f"[DEBUG] {center} snap_time (변환 직후): 유효 {valid}, NaT {nat}"
                     )
 
     # SHOPEE 컬럼 타입 변환 (선택적)
