@@ -455,7 +455,29 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .astype(float)
         )
     if "snap_time" in out.columns:
+        # 디버그: 변환 직전 snap_time 값 확인
+        if "center" in out.columns:
+            for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+                center_data = out[out["center"] == center]
+                if not center_data.empty and "snap_time" in center_data.columns:
+                    sample = center_data["snap_time"].head(3).tolist()
+                    types = [type(v).__name__ for v in sample]
+                    print(
+                        f"[normalize_snapshot 내부] {center} snap_time (변환 직전): {list(zip(sample, types))}"
+                    )
+
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
+
+        # 디버그: 변환 직후 결과
+        if "center" in out.columns:
+            for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+                center_data = out[out["center"] == center]
+                if not center_data.empty:
+                    valid = center_data["snap_time"].notna().sum()
+                    nat = center_data["snap_time"].isna().sum()
+                    print(
+                        f"[normalize_snapshot 내부] {center} snap_time (변환 직후): 유효 {valid}, NaT {nat}"
+                    )
 
     # SHOPEE 컬럼 타입 변환 (선택적)
     if "selling_speed" in out.columns:
