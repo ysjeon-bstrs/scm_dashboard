@@ -325,11 +325,6 @@ def render_shopee_snapshot_kpis(
                 ),
             }
 
-    # 최신 스냅샷 시각
-    latest_snap = None
-    if kpi_df is not None and not kpi_df.empty:
-        latest_snap = kpi_df["snap_time"].max()
-
     # Delta 포맷팅 헬퍼 함수
     def _fmt_with_delta(value: int | float, delta: int | float | None) -> str:
         """정수 값을 delta와 함께 포맷팅합니다."""
@@ -371,6 +366,13 @@ def render_shopee_snapshot_kpis(
     for idx, center in enumerate(SHOPEE_CENTERS):
         center_name = SHOPEE_CENTER_NAMES.get(center, center)
         flag = country_flags.get(center, "🏪")
+
+        # 해당 국가의 최신 스냅샷 시각 추출
+        center_snap_time = None
+        if kpi_df is not None and not kpi_df.empty:
+            center_data = kpi_df[kpi_df["center"] == center]
+            if not center_data.empty:
+                center_snap_time = center_data["snap_time"].max()
 
         # 국가 헤더 표시
         st.markdown(f"#### {flag} {center_name}")
@@ -490,12 +492,12 @@ def render_shopee_snapshot_kpis(
             unsafe_allow_html=True,
         )
 
+        # 해당 국가의 스냅샷 기준 시간 표시
+        if pd.notna(center_snap_time):
+            st.caption(f"{center_snap_time:%Y-%m-%d %H:%M} 기준")
+        else:
+            st.caption("스냅샷 시각 정보를 확인할 수 없습니다.")
+
         # 마지막 국가가 아니면 구분선 추가
         if idx < len(SHOPEE_CENTERS) - 1:
             st.markdown("<br>", unsafe_allow_html=True)
-
-    # 최신 스냅샷 시각 표시
-    if pd.notna(latest_snap):
-        st.caption(f"{latest_snap:%Y-%m-%d %H:%M} 기준")
-    else:
-        st.caption("스냅샷 시각 정보를 확인할 수 없습니다.")
