@@ -457,16 +457,25 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     if "snap_time" in out.columns:
         # 디버그: 변환 직전 snap_time 값 확인
         if "center" in out.columns:
-            for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+            for center in ["SBSTH", "SBSPH"]:
                 center_data = out[out["center"] == center]
                 if not center_data.empty and "snap_time" in center_data.columns:
-                    sample = center_data["snap_time"].head(3).tolist()
-                    types = [type(v).__name__ for v in sample]
+                    sample_val = center_data["snap_time"].iloc[0]
                     print(
-                        f"[normalize_snapshot 내부] {center} snap_time (변환 직전): {list(zip(sample, types))}"
+                        f"[normalize_snapshot 내부] {center} 첫 번째 snap_time:"
                     )
+                    print(f"  - 값: '{sample_val}'")
+                    print(f"  - 타입: {type(sample_val).__name__}")
+                    print(f"  - repr: {repr(sample_val)}")
+                    if isinstance(sample_val, str):
+                        print(f"  - 길이: {len(sample_val)}")
+                        print(f"  - 바이트: {sample_val.encode('utf-8')}")
 
-        out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
+        snap_time_series = out.get("snap_time")
+        print(f"[snap_time_series type]: {type(snap_time_series)}")
+        print(f"[snap_time_series is None]: {snap_time_series is None}")
+
+        out["snap_time"] = pd.to_datetime(snap_time_series, errors="coerce")
 
         # 디버그: 변환 직후 결과
         if "center" in out.columns:
