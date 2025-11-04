@@ -476,15 +476,21 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
 
                     # 첫 번째 값 상세 분석
                     sample_val = center_data["snap_time"].iloc[0]
-                    print(f"  - 첫 값: '{sample_val}' (타입: {type(sample_val).__name__})")
+                    print(
+                        f"  - 첫 값: '{sample_val}' (타입: {type(sample_val).__name__})"
+                    )
 
                     # 단일 값 직접 변환 테스트
                     if isinstance(sample_val, str):
                         test_result = pd.to_datetime(sample_val, errors="coerce")
-                        print(f"  - 단일 값 변환 테스트: {test_result} (타입: {type(test_result).__name__})")
+                        print(
+                            f"  - 단일 값 변환 테스트: {test_result} (타입: {type(test_result).__name__})"
+                        )
 
                     # Series 전체 변환 테스트
-                    test_series = pd.to_datetime(center_data["snap_time"], errors="coerce")
+                    test_series = pd.to_datetime(
+                        center_data["snap_time"], errors="coerce"
+                    )
                     valid_count = test_series.notna().sum()
                     nat_count = test_series.isna().sum()
                     print(f"  - Series 변환 결과: 유효 {valid_count}, NaT {nat_count}")
