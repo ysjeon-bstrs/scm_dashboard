@@ -85,6 +85,18 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # 3단계: 데이터 정규화
     # ========================================
     logger.info("Normalizing snapshot and moves data")
+
+    # 디버그: normalize 전 snap_time 원본 값 확인
+    if "snap_time" in df_ref.columns:
+        st.write("### 🔍 DEBUG: normalize 전 snap_time 원본 값")
+        for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+            if "center" in df_ref.columns:
+                center_data = df_ref[df_ref["center"] == center]
+                if not center_data.empty:
+                    sample_values = center_data["snap_time"].head(3).tolist()
+                    sample_types = [type(v).__name__ for v in sample_values]
+                    st.write(f"**{center}**: {list(zip(sample_values, sample_types))}")
+
     with measure_time_context("Data normalization"):
         moves = normalize_moves(df_move)
         snapshot = normalize_refined_snapshot(df_ref)
