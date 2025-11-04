@@ -462,7 +462,9 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
                 if not center_data.empty:
                     sample_values = center_data["snap_time"].head(3).tolist()
                     sample_types = [type(v).__name__ for v in sample_values]
-                    print(f"[DEBUG] {center} snap_time 샘플: {list(zip(sample_values, sample_types))}")
+                    print(
+                        f"[DEBUG] {center} snap_time 샘플: {list(zip(sample_values, sample_types))}"
+                    )
 
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
