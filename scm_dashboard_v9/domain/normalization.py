@@ -455,11 +455,6 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .astype(float)
         )
     if "snap_time" in out.columns:
-        print("=" * 80)
-        print("[DEBUG] snap_time 변환 시작!")
-
-        # 센터별로 개별 변환 (index 충돌 방지)
-        print("[DEBUG] 센터별 개별 변환 방식 사용")
         if "center" in out.columns:
             for center in out["center"].unique():
                 center_mask = out["center"] == center
@@ -472,19 +467,6 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         else:
             # center 컬럼이 없으면 전체 변환
             out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
-
-        print("=" * 80)
-
-        # 디버그: 변환 직후 결과
-        if "center" in out.columns:
-            for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
-                center_data = out[out["center"] == center]
-                if not center_data.empty:
-                    valid = center_data["snap_time"].notna().sum()
-                    nat = center_data["snap_time"].isna().sum()
-                    print(
-                        f"[DEBUG] {center} snap_time (변환 직후): 유효 {valid}, NaT {nat}"
-                    )
 
     # SHOPEE 컬럼 타입 변환 (선택적)
     if "selling_speed" in out.columns:
