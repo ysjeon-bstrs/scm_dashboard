@@ -458,10 +458,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         print("=" * 80)
         print("[DEBUG] snap_time 변환 시작!")
 
-        # 방법 1: 전체 Series 변환 (현재 방식 - 실패)
-        # out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
-
-        # 방법 2: 센터별로 변환 (테스트)
+        # 센터별로 개별 변환 (index 충돌 방지)
         print("[DEBUG] 센터별 개별 변환 방식 사용")
         if "center" in out.columns:
             for center in out["center"].unique():
@@ -469,6 +466,9 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
                 out.loc[center_mask, "snap_time"] = pd.to_datetime(
                     out.loc[center_mask, "snap_time"], errors="coerce"
                 )
+            # 센터별 변환 후 전체 컬럼을 datetime64 타입으로 확정
+            # (object dtype에 Timestamp 객체들이 있는 상태를 datetime64로 변환)
+            out["snap_time"] = pd.to_datetime(out["snap_time"], errors="coerce")
         else:
             # center 컬럼이 없으면 전체 변환
             out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
