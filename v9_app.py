@@ -942,59 +942,6 @@ def main() -> None:
                 show_delta=shopee_show_delta,
             )
 
-            # 디버그: Delta 데이터 확인
-            if shopee_show_delta:
-                with st.expander("🔍 디버그: Delta 데이터", expanded=False):
-                    st.write("**센터별 snap_time 상태 체크:**")
-                    for center in shopee_centers:
-                        center_data = snapshot_df[snapshot_df["center"] == center]
-                        total_rows = len(center_data)
-                        snap_time_valid = center_data["snap_time"].notna().sum()
-                        snap_time_null = center_data["snap_time"].isna().sum()
-                        st.write(f"{center}: 전체 {total_rows}행, snap_time 유효 {snap_time_valid}행, NaT {snap_time_null}행")
-                        if snap_time_valid > 0:
-                            sample = center_data[center_data["snap_time"].notna()][["resource_code", "date", "snap_time"]].head(3)
-                            st.dataframe(sample, use_container_width=True)
-                        else:
-                            st.warning(f"  → {center}는 snap_time이 모두 NaT!")
-
-                    st.divider()
-
-                    st.write("**원본 snapshot_df의 SHOPEE 시간 정보 (date vs snap_time):**")
-                    shopee_raw_times = snapshot_df[snapshot_df["center"].isin(shopee_centers)][
-                        ["center", "resource_code", "date", "snap_time"]
-                    ].drop_duplicates(subset=["center", "snap_time"]).sort_values(["center", "snap_time"], ascending=[True, False])
-                    st.write(f"총 {len(shopee_raw_times)}개 고유 시간")
-                    st.dataframe(shopee_raw_times.head(30), use_container_width=True)
-
-                    st.divider()
-
-                    st.write("**센터별 이전 스냅샷 찾기 상세:**")
-                    debug_info = st.session_state.get("_shopee_delta_debug", [])
-                    if debug_info:
-                        for info in debug_info:
-                            st.text(info)
-                    else:
-                        st.warning("디버그 정보 없음")
-
-                    st.divider()
-
-                    st.write("**현재 스냅샷 KPI:**")
-                    if shopee_kpi_df is not None and not shopee_kpi_df.empty:
-                        st.write(f"총 {len(shopee_kpi_df)}개 행")
-                        st.write(f"국가별 개수: {shopee_kpi_df['center'].value_counts().to_dict()}")
-                        st.dataframe(shopee_kpi_df[['center', 'resource_code', 'selling_speed', 'coverage_days', 'snap_time']], use_container_width=True)
-                    else:
-                        st.warning("현재 KPI 데이터 없음")
-
-                    st.write("**이전 스냅샷 KPI:**")
-                    if shopee_previous_df is not None and not shopee_previous_df.empty:
-                        st.write(f"총 {len(shopee_previous_df)}개 행")
-                        st.write(f"국가별 개수: {shopee_previous_df['center'].value_counts().to_dict()}")
-                        st.dataframe(shopee_previous_df[['center', 'resource_code', 'selling_speed', 'coverage_days', 'snap_time']], use_container_width=True)
-                    else:
-                        st.warning("이전 KPI 데이터 없음 (Delta 계산 불가)")
-
             # KPI 카드 렌더링
             render_shopee_snapshot_kpis(
                 shopee_kpi_df,
