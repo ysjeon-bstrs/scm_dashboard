@@ -455,6 +455,15 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
             .astype(float)
         )
     if "snap_time" in out.columns:
+        # 디버그: snap_time 원본 값 확인
+        if "center" in out.columns:
+            for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+                center_data = out[out["center"] == center]
+                if not center_data.empty:
+                    sample_values = center_data["snap_time"].head(3).tolist()
+                    sample_types = [type(v).__name__ for v in sample_values]
+                    print(f"[DEBUG] {center} snap_time 샘플: {list(zip(sample_values, sample_types))}")
+
         out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
     # SHOPEE 컬럼 타입 변환 (선택적)
