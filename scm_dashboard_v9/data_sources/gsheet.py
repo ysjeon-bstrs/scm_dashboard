@@ -113,17 +113,27 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
                 empty_count = center_data["snap_time"].isna().sum()
                 zero_count = (center_data["snap_time"] == 0).sum()
                 empty_str_count = (center_data["snap_time"] == "").sum()
-                st.write(f"- NaN: {empty_count}개, 0: {zero_count}개, 빈문자열: {empty_str_count}개")
+                st.write(
+                    f"- NaN: {empty_count}개, 0: {zero_count}개, 빈문자열: {empty_str_count}개"
+                )
 
                 # 변환 테스트
-                test_converted = pd.to_datetime(center_data["snap_time"], errors="coerce")
+                test_converted = pd.to_datetime(
+                    center_data["snap_time"], errors="coerce"
+                )
                 nat_count = test_converted.isna().sum()
                 valid_count = test_converted.notna().sum()
-                st.write(f"- pd.to_datetime 변환 결과: 유효 {valid_count}개, NaT {nat_count}개")
+                st.write(
+                    f"- pd.to_datetime 변환 결과: 유효 {valid_count}개, NaT {nat_count}개"
+                )
 
                 # NaT가 되는 원본 값 샘플
                 if nat_count > 0:
-                    nat_originals = center_data[test_converted.isna()]["snap_time"].head(10).tolist()
+                    nat_originals = (
+                        center_data[test_converted.isna()]["snap_time"]
+                        .head(10)
+                        .tolist()
+                    )
                     st.write(f"- NaT가 되는 원본 값 샘플: {nat_originals}")
 
                 st.write("")
