@@ -458,48 +458,22 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
         print("=" * 80)
         print("[DEBUG] snap_time 변환 시작!")
 
-        # SBSTH/SBSPH만 집중 디버그
+        # 센터별로 개별 변환 (index 충돌 방지)
+        print("[DEBUG] 센터별 개별 변환 방식 사용")
         if "center" in out.columns:
-            for center in ["SBSTH", "SBSPH"]:
-                center_data = out[out["center"] == center]
-                if not center_data.empty and "snap_time" in center_data.columns:
-                    print(f"\n[DEBUG] {center} 상세 분석:")
-                    print(f"  - 총 행 수: {len(center_data)}")
+            for center in out["center"].unique():
+                center_mask = out["center"] == center
+                out.loc[center_mask, "snap_time"] = pd.to_datetime(
+                    out.loc[center_mask, "snap_time"], errors="coerce"
+                )
+            # 센터별 변환 후 전체 컬럼을 datetime64 타입으로 확정
+            # (object dtype에 Timestamp 객체들이 있는 상태를 datetime64로 변환)
+            out["snap_time"] = pd.to_datetime(out["snap_time"], errors="coerce")
+        else:
+            # center 컬럼이 없으면 전체 변환
+            out["snap_time"] = pd.to_datetime(out.get("snap_time"), errors="coerce")
 
-                    # dtype 확인
-                    print(f"  - snap_time dtype: {center_data['snap_time'].dtype}")
-
-                    # unique 값 개수
-                    unique_vals = center_data["snap_time"].unique()
-                    print(f"  - 고유값 개수: {len(unique_vals)}")
-                    print(f"  - 고유값 샘플 (최대 3개): {list(unique_vals[:3])}")
-
-                    # 첫 번째 값 상세 분석
-                    sample_val = center_data["snap_time"].iloc[0]
-                    print(
-                        f"  - 첫 값: '{sample_val}' (타입: {type(sample_val).__name__})"
-                    )
-
-                    # 단일 값 직접 변환 테스트
-                    if isinstance(sample_val, str):
-                        test_result = pd.to_datetime(sample_val, errors="coerce")
-                        print(
-                            f"  - 단일 값 변환 테스트: {test_result} (타입: {type(test_result).__name__})"
-                        )
-
-                    # Series 전체 변환 테스트
-                    test_series = pd.to_datetime(
-                        center_data["snap_time"], errors="coerce"
-                    )
-                    valid_count = test_series.notna().sum()
-                    nat_count = test_series.isna().sum()
-                    print(f"  - Series 변환 결과: 유효 {valid_count}, NaT {nat_count}")
-
-        snap_time_series = out.get("snap_time")
-        print(f"\n[DEBUG] 전체 snap_time Series dtype: {snap_time_series.dtype}")
         print("=" * 80)
-
-        out["snap_time"] = pd.to_datetime(snap_time_series, errors="coerce")
 
         # 디버그: 변환 직후 결과
         if "center" in out.columns:
