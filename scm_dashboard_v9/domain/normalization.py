@@ -461,9 +461,7 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
                 center_data = out[out["center"] == center]
                 if not center_data.empty and "snap_time" in center_data.columns:
                     sample_val = center_data["snap_time"].iloc[0]
-                    print(
-                        f"[normalize_snapshot 내부] {center} 첫 번째 snap_time:"
-                    )
+                    print(f"[normalize_snapshot 내부] {center} 첫 번째 snap_time:")
                     print(f"  - 값: '{sample_val}'")
                     print(f"  - 타입: {type(sample_val).__name__}")
                     print(f"  - repr: {repr(sample_val)}")
