@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-import pandas as pd
 import streamlit as st
 
 from scm_dashboard_v9.common.performance import measure_time_context
@@ -86,74 +85,10 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     # ========================================
     logger.info("Normalizing snapshot and moves data")
 
-    # 디버그: normalize 전 snap_time 원본 값 확인
-    if "snap_time" in df_ref.columns and "center" in df_ref.columns:
-        st.write("### 🔍 DEBUG: normalize 전 snap_time 원본 값")
-        for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
-            center_data = df_ref[df_ref["center"] == center]
-            if not center_data.empty:
-                st.write(f"#### {center} (총 {len(center_data)}행)")
-
-                # 고유값 확인
-                unique_vals = center_data["snap_time"].unique()
-                st.write(f"- 고유 snap_time 값: {len(unique_vals)}개")
-
-                # 타입별 분포
-                type_counts = {}
-                for val in center_data["snap_time"]:
-                    t = type(val).__name__
-                    type_counts[t] = type_counts.get(t, 0) + 1
-                st.write(f"- 타입 분포: {type_counts}")
-
-                # 샘플 값
-                sample_values = center_data["snap_time"].head(5).tolist()
-                st.write(f"- 샘플 (처음 5개): {sample_values}")
-
-                # 빈 값/이상한 값 체크
-                empty_count = center_data["snap_time"].isna().sum()
-                zero_count = (center_data["snap_time"] == 0).sum()
-                empty_str_count = (center_data["snap_time"] == "").sum()
-                st.write(
-                    f"- NaN: {empty_count}개, 0: {zero_count}개, 빈문자열: {empty_str_count}개"
-                )
-
-                # 변환 테스트
-                test_converted = pd.to_datetime(
-                    center_data["snap_time"], errors="coerce"
-                )
-                nat_count = test_converted.isna().sum()
-                valid_count = test_converted.notna().sum()
-                st.write(
-                    f"- pd.to_datetime 변환 결과: 유효 {valid_count}개, NaT {nat_count}개"
-                )
-
-                # NaT가 되는 원본 값 샘플
-                if nat_count > 0:
-                    nat_originals = (
-                        center_data[test_converted.isna()]["snap_time"]
-                        .head(10)
-                        .tolist()
-                    )
-                    st.write(f"- NaT가 되는 원본 값 샘플: {nat_originals}")
-
-                st.write("")
-
     with measure_time_context("Data normalization"):
         moves = normalize_moves(df_move)
         snapshot = normalize_refined_snapshot(df_ref)
         logger.debug(f"Normalized: {len(moves)} moves, {len(snapshot)} snapshots")
-
-    # 디버그: normalize 후 snap_time 결과 확인
-    if "snap_time" in snapshot.columns and "center" in snapshot.columns:
-        st.write("### 🔍 DEBUG: normalize 후 snap_time 결과")
-        for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
-            center_data = snapshot[snapshot["center"] == center]
-            if not center_data.empty:
-                total = len(center_data)
-                valid = center_data["snap_time"].notna().sum()
-                nat = center_data["snap_time"].isna().sum()
-                st.write(f"**{center}**: 총 {total}행, 유효 {valid}개, NaT {nat}개")
-        st.write("")
 
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
