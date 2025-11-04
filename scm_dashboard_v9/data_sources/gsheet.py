@@ -143,6 +143,18 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
         snapshot = normalize_refined_snapshot(df_ref)
         logger.debug(f"Normalized: {len(moves)} moves, {len(snapshot)} snapshots")
 
+    # 디버그: normalize 후 snap_time 결과 확인
+    if "snap_time" in snapshot.columns and "center" in snapshot.columns:
+        st.write("### 🔍 DEBUG: normalize 후 snap_time 결과")
+        for center in ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]:
+            center_data = snapshot[snapshot["center"] == center]
+            if not center_data.empty:
+                total = len(center_data)
+                valid = center_data["snap_time"].notna().sum()
+                nat = center_data["snap_time"].isna().sum()
+                st.write(f"**{center}**: 총 {total}행, 유효 {valid}개, NaT {nat}개")
+        st.write("")
+
     # ========================================
     # 4단계: WIP 데이터 병합 (있는 경우)
     # ========================================
