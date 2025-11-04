@@ -457,27 +457,46 @@ def normalize_snapshot(frame: pd.DataFrame) -> pd.DataFrame:
     if "snap_time" in out.columns:
         print("=" * 80)
         print("[DEBUG] snap_time 변환 시작!")
-        print(f"[DEBUG] out.columns: {list(out.columns)}")
-        print(f"[DEBUG] 'snap_time' in out.columns: {'snap_time' in out.columns}")
 
-        # 디버그: 변환 직전 snap_time 값 확인
+        # SBSTH/SBSPH만 집중 디버그
         if "center" in out.columns:
             for center in ["SBSTH", "SBSPH"]:
                 center_data = out[out["center"] == center]
-                print(f"[DEBUG] {center} 데이터 행 수: {len(center_data)}")
                 if not center_data.empty and "snap_time" in center_data.columns:
+                    print(f"\n[DEBUG] {center} 상세 분석:")
+                    print(f"  - 총 행 수: {len(center_data)}")
+
+                    # dtype 확인
+                    print(f"  - snap_time dtype: {center_data['snap_time'].dtype}")
+
+                    # unique 값 개수
+                    unique_vals = center_data["snap_time"].unique()
+                    print(f"  - 고유값 개수: {len(unique_vals)}")
+                    print(f"  - 고유값 샘플 (최대 3개): {list(unique_vals[:3])}")
+
+                    # 첫 번째 값 상세 분석
                     sample_val = center_data["snap_time"].iloc[0]
-                    print(f"[DEBUG] {center} 첫 번째 snap_time:")
-                    print(f"  - 값: '{sample_val}'")
-                    print(f"  - 타입: {type(sample_val).__name__}")
-                    print(f"  - repr: {repr(sample_val)}")
+                    print(
+                        f"  - 첫 값: '{sample_val}' (타입: {type(sample_val).__name__})"
+                    )
+
+                    # 단일 값 직접 변환 테스트
                     if isinstance(sample_val, str):
-                        print(f"  - 길이: {len(sample_val)}")
-                        print(f"  - 바이트: {sample_val.encode('utf-8')}")
+                        test_result = pd.to_datetime(sample_val, errors="coerce")
+                        print(
+                            f"  - 단일 값 변환 테스트: {test_result} (타입: {type(test_result).__name__})"
+                        )
+
+                    # Series 전체 변환 테스트
+                    test_series = pd.to_datetime(
+                        center_data["snap_time"], errors="coerce"
+                    )
+                    valid_count = test_series.notna().sum()
+                    nat_count = test_series.isna().sum()
+                    print(f"  - Series 변환 결과: 유효 {valid_count}, NaT {nat_count}")
 
         snap_time_series = out.get("snap_time")
-        print(f"[DEBUG] snap_time_series type: {type(snap_time_series)}")
-        print(f"[DEBUG] snap_time_series is None: {snap_time_series is None}")
+        print(f"\n[DEBUG] 전체 snap_time Series dtype: {snap_time_series.dtype}")
         print("=" * 80)
 
         out["snap_time"] = pd.to_datetime(snap_time_series, errors="coerce")
