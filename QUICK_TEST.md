@@ -41,7 +41,7 @@ code .streamlit/secrets.toml  # 또는 nano, vim 등
 ```toml
 [gemini]
 api_key = "YOUR_ACTUAL_GEMINI_KEY"  # Google AI Studio에서 발급
-generation_model = "gemini-1.5-flash"
+generation_model = "gemini-2.0-flash-exp"  # 또는 "gemini-1.5-flash"
 embedding_model = "text-embedding-004"
 
 [chroma]
