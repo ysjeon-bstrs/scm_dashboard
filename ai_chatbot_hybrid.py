@@ -50,14 +50,10 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
 
         # 비교
         "많은", "적은", "높은", "낮은",
-    ]
 
-    # 탐색형 키워드 (벡터 검색 필요)
-    exploratory_keywords = [
-        "어디", "어느", "무엇", "언제", "어떤",
-        "where", "what", "when", "which",
-        "목록", "리스트", "list",
-        "보유", "있는", "존재",
+        # 위치 질문 (특정 센터/SKU 찾기)
+        "어느 센터", "어디에", "어디 있", "어느 창고", "어떤 센터",
+        "where", "which center", "which warehouse",
     ]
 
     # 비즈니스형 키워드 (향후 2단계)
@@ -67,7 +63,15 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
         "insufficient", "enough", "recommend", "risk",
     ]
 
-    # 키워드 매칭
+    # 탐색형 키워드 (벡터 검색 필요)
+    exploratory_keywords = [
+        "무엇", "언제", "어떤",
+        "what", "when",
+        "목록", "리스트", "list",
+        "보유", "존재",
+    ]
+
+    # 키워드 매칭 (순서 중요: 정량형을 먼저 체크)
     if any(kw in q for kw in quantitative_keywords):
         return "quantitative"
     elif any(kw in q for kw in business_keywords):
@@ -75,8 +79,8 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
     elif any(kw in q for kw in exploratory_keywords):
         return "exploratory"
     else:
-        # 기본값: 탐색형 (벡터 검색이 더 안전)
-        return "exploratory"
+        # 기본값: 정량형 (간단한 필터링이 더 정확)
+        return "quantitative"
 
 
 def extract_entities(question: str, available_centers: List[str], available_skus: List[str]) -> Dict[str, List[str]]:
@@ -152,6 +156,52 @@ def calculate_quantitative(
 
     # 재고 수량 숫자 변환
     df["stock_qty"] = pd.to_numeric(df.get("stock_qty", 0), errors="coerce").fillna(0)
+
+    # 0. 위치 찾기 (어느 센터에 있나요?)
+    if any(kw in q for kw in ["어디", "어느", "where", "which"]):
+        # SKU가 질문에 명시되어 있는 경우
+        if len(entities["skus"]) < len(snapshot_df["resource_code"].unique()):
+            # 특정 SKU를 찾는 경우
+            centers_with_stock = df[df["stock_qty"] > 0].groupby("center")["stock_qty"].sum().sort_values(ascending=False)
+
+            if centers_with_stock.empty:
+                return {
+                    "type": "location",
+                    "result": [],
+                    "description": f"**{', '.join(entities['skus'])}**는 현재 어느 센터에도 재고가 없습니다."
+                }
+
+            lines = [f"- **{center}**: {qty:,.0f}개" for center, qty in centers_with_stock.items()]
+            sku_names = ', '.join(entities['skus'][:3])
+            if len(entities['skus']) > 3:
+                sku_names += f" 외 {len(entities['skus']) - 3}개"
+
+            return {
+                "type": "location",
+                "result": centers_with_stock.to_dict(),
+                "description": f"**{sku_names}**는 다음 센터에 있습니다:\n" + "\n".join(lines)
+            }
+
+        # 센터가 질문에 명시되어 있는 경우 (어떤 SKU가 있나요?)
+        elif len(entities["centers"]) < len(snapshot_df["center"].unique()):
+            skus_with_stock = df[df["stock_qty"] > 0].groupby("resource_code")["stock_qty"].sum().sort_values(ascending=False)
+
+            if skus_with_stock.empty:
+                return {
+                    "type": "location",
+                    "result": [],
+                    "description": f"**{', '.join(entities['centers'])}**에는 현재 재고가 없습니다."
+                }
+
+            lines = [f"- **{sku}**: {qty:,.0f}개" for sku, qty in skus_with_stock.head(10).items()]
+            if len(skus_with_stock) > 10:
+                lines.append(f"... 외 {len(skus_with_stock) - 10}개 SKU")
+
+            return {
+                "type": "location",
+                "result": skus_with_stock.to_dict(),
+                "description": f"**{', '.join(entities['centers'])}**에는 다음 SKU가 있습니다:\n" + "\n".join(lines)
+            }
 
     # 1. 총 재고 / 합계
     if any(kw in q for kw in ["총", "전체", "합계", "총합", "total", "sum"]):
@@ -479,10 +529,36 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
 
 
 def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> List[str]:
-    """벡터 검색"""
+    """벡터 검색 (명시적 쿼리 임베딩 생성)"""
     try:
-        res = col.query(query_texts=[question], n_results=k)
-        return res.get("documents", [[]])[0]
+        # 쿼리 임베딩 생성 (컬렉션에 embedding_function이 없으므로 명시적으로 생성)
+        genai.configure(api_key=st.secrets["gemini"]["api_key"])
+        model = st.secrets["gemini"].get("embedding_model", "text-embedding-004")
+
+        try:
+            # Gemini API로 쿼리 임베딩 생성
+            res = genai.embed_content(
+                model=model,
+                content=[question],
+                task_type="retrieval_query"  # 검색용 임베딩
+            )
+
+            # 임베딩 추출
+            if hasattr(res, "embeddings"):
+                query_emb = [res.embeddings[0].values]
+            elif isinstance(res, dict) and "embeddings" in res:
+                query_emb = [res["embeddings"][0]["embedding"]]
+            else:
+                query_emb = [res["embedding"]]
+
+        except Exception as e:
+            st.error(f"쿼리 임베딩 생성 실패: {e}")
+            return []
+
+        # 임베딩으로 검색
+        search_res = col.query(query_embeddings=query_emb, n_results=k)
+        return search_res.get("documents", [[]])[0]
+
     except Exception as e:
         import traceback
         st.error(f"검색 실패: {e}")
@@ -783,15 +859,16 @@ def render_hybrid_chatbot_tab(
 
     col1, col2 = st.columns(2)
     with col1:
-        st.caption("**정량 계산형**")
+        st.caption("**정량 계산형 (빠른 데이터 조회)**")
         st.caption("• 총 재고는?")
         st.caption("• 센터별 재고는?")
         st.caption("• 재고가 가장 많은 센터는?")
-        st.caption("• SKU 개수는?")
+        st.caption("• BA00021은 어느 센터에 있나요?")
+        st.caption("• 태광KR에는 어떤 SKU가 있나요?")
 
     with col2:
-        st.caption("**탐색형**")
-        st.caption("• REVVN에는 어떤 SKU가 있나요?")
-        st.caption("• BA00021은 어느 센터에 있나요?")
+        st.caption("**탐색형 (AI 검색, 느림)**")
         st.caption("• 최근 스냅샷 날짜는?")
-        st.caption("• 태광KR의 재고 현황은?")
+        st.caption("• 재고 관리 정책은?")
+        st.caption("• 특이사항이 있나요?")
+        st.caption("• 데이터 품질은 어떤가요?")
