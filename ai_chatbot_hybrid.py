@@ -84,7 +84,7 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
         return "quantitative"
 
 
-def extract_entities(question: str, available_centers: List[str], available_skus: List[str]) -> Dict[str, List[str]]:
+def extract_entities(question: str, available_centers: List[str], available_skus: List[str]) -> Dict[str, any]:
     """
     질문에서 센터/SKU 개체명 추출
 
@@ -94,19 +94,26 @@ def extract_entities(question: str, available_centers: List[str], available_skus
         available_skus: 현재 필터의 SKU 목록
 
     Returns:
-        {"centers": [...], "skus": [...]}
+        {
+            "centers": [...],
+            "skus": [...],
+            "has_specific_center": bool,  # 질문에 센터가 명시적으로 언급됨
+            "has_specific_sku": bool,     # 질문에 SKU가 명시적으로 언급됨
+        }
     """
     q = question.upper()
 
     # 센터 추출
-    centers = [c for c in available_centers if c.upper() in q]
+    centers_found = [c for c in available_centers if c.upper() in q]
 
     # SKU 추출
-    skus = [s for s in available_skus if s.upper() in q]
+    skus_found = [s for s in available_skus if s.upper() in q]
 
     return {
-        "centers": centers if centers else available_centers,  # 없으면 전체
-        "skus": skus if skus else available_skus,
+        "centers": centers_found if centers_found else available_centers,  # 없으면 전체
+        "skus": skus_found if skus_found else available_skus,
+        "has_specific_center": bool(centers_found),  # 명시적 언급 여부
+        "has_specific_sku": bool(skus_found),        # 명시적 언급 여부
     }
 
 
@@ -160,9 +167,10 @@ def calculate_quantitative(
 
     # 0. 위치 찾기 (어느 센터에 있나요?)
     if any(kw in q for kw in ["어디", "어느", "where", "which"]):
-        # SKU가 질문에 명시되어 있는 경우
-        if len(entities["skus"]) < len(snapshot_df["resource_code"].unique()):
-            # 특정 SKU를 찾는 경우
+        # SKU가 질문에 명시적으로 언급된 경우
+        # 필터 상태와 무관하게, 질문 자체에 특정 SKU가 언급되었는지를 기준으로 판단
+        if entities.get("has_specific_sku"):
+            # 특정 SKU의 위치를 찾는 경우
             centers_with_stock = df[df["stock_qty"] > 0].groupby("center")["stock_qty"].sum().sort_values(ascending=False)
 
             if centers_with_stock.empty:
@@ -183,8 +191,10 @@ def calculate_quantitative(
                 "description": f"**{sku_names}**는 다음 센터에 있습니다:\n" + "\n".join(lines)
             }
 
-        # 센터가 질문에 명시되어 있는 경우 (어떤 SKU가 있나요?)
-        elif len(entities["centers"]) < len(snapshot_df["center"].unique()):
+        # 센터가 질문에 명시적으로 언급된 경우
+        # 필터 상태와 무관하게, 질문 자체에 특정 센터가 언급되었는지를 기준으로 판단
+        elif entities.get("has_specific_center"):
+            # 특정 센터의 내용을 찾는 경우
             skus_with_stock = df[df["stock_qty"] > 0].groupby("resource_code")["stock_qty"].sum().sort_values(ascending=False)
 
             if skus_with_stock.empty:
