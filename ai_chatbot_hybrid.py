@@ -266,12 +266,12 @@ def _get_filter_hash(centers: list, skus: list) -> str:
 
 
 def _build_session_collection_name() -> str:
-    """세션 컬렉션명 (v2: doc_type 메타데이터 사용)"""
+    """세션 컬렉션명 (v3: 완전히 새로운 컬렉션)"""
     sid = st.session_state.get("_ai_session_id")
     if not sid:
         sid = st.session_state["_ai_session_id"] = uuid.uuid4().hex[:8]
-    # v2 suffix to avoid old collections with 'type' metadata error
-    return f"scm_v2_{sid}"
+    # v3: 완전히 새로운 네이밍으로 깨끗하게 시작
+    return f"scm_v3_{sid}"
 
 
 def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[float]], list[int]]:
@@ -403,16 +403,30 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     except Exception as e:
         st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
 
-    # 새 컬렉션 생성 (get_or_create로 안전하게)
+    # 새 컬렉션 생성 (메타데이터 명시)
     try:
-        col = client.get_or_create_collection(col_name)
+        # Chroma에 임베딩을 직접 전달하므로 embedding_function 불필요
+        # 코사인 유사도를 명시적으로 설정
+        col = client.get_or_create_collection(
+            name=col_name,
+            metadata={"hnsw:space": "cosine"}
+        )
         # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
         if col.count() > 0:
             st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
             client.delete_collection(col_name)
-            col = client.create_collection(col_name)
+            col = client.create_collection(
+                name=col_name,
+                metadata={"hnsw:space": "cosine"}
+            )
     except Exception as e:
+        import traceback
         st.error(f"컬렉션 생성 실패: {e}")
+        st.error(f"에러 타입: {type(e).__name__}")
+        if hasattr(e, 'args') and e.args:
+            st.caption(f"에러 상세: {e.args}")
+        st.text("Traceback:")
+        st.text(traceback.format_exc())
         return None, 0
 
     docs, metas, ids = _documents_from_snapshot(snap_filtered, max_rows)
@@ -472,7 +486,13 @@ def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> Lis
         res = col.query(query_texts=[question], n_results=k)
         return res.get("documents", [[]])[0]
     except Exception as e:
+        import traceback
         st.error(f"검색 실패: {e}")
+        st.error(f"에러 타입: {type(e).__name__}")
+        if hasattr(e, 'args') and e.args:
+            st.caption(f"에러 상세: {e.args}")
+        st.text("Traceback:")
+        st.text(traceback.format_exc())
         return []
 
 
