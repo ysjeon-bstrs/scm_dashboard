@@ -309,9 +309,19 @@ def _documents_from_snapshot(snap: pd.DataFrame, max_rows: int = 2000) -> Tuple[
     use = snap.head(max_rows)
 
     for i, r in use.iterrows():
+        # 날짜를 안전하게 문자열로 변환
+        date_val = r.get('date')
+        if pd.isna(date_val):
+            date_str = "N/A"
+        else:
+            try:
+                date_str = pd.to_datetime(date_val).strftime('%Y-%m-%d')
+            except:
+                date_str = str(date_val)
+
         doc = (
             f"[SNAPSHOT] "
-            f"날짜:{r.get('date')} "
+            f"날짜:{date_str} "
             f"센터:{r.get('center')} "
             f"SKU:{r.get('resource_code')} "
             f"재고:{r.get('stock_qty')}개"
@@ -320,11 +330,12 @@ def _documents_from_snapshot(snap: pd.DataFrame, max_rows: int = 2000) -> Tuple[
             doc += f" ({r.get('resource_name')})"
 
         docs.append(doc)
+        # "type" 키워드는 Chroma 내부 예약어이므로 "doc_type"으로 변경
         metas.append({
-            "type": "snapshot",
-            "center": str(r.get("center", "")),
-            "sku": str(r.get("resource_code", "")),
-            "date": str(r.get("date", "")),
+            "doc_type": "snapshot",
+            "center": str(r.get("center", "")) if pd.notna(r.get("center")) else "",
+            "sku": str(r.get("resource_code", "")) if pd.notna(r.get("resource_code")) else "",
+            "date": date_str,
         })
         ids.append(f"snap-{i}")
 
