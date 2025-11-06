@@ -371,16 +371,27 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
         try:
             col = client.get_collection(col_name)
             return col, col.count()
-        except:
-            pass
+        except Exception as e:
+            # 컬렉션이 없거나 에러 발생 시 재생성
+            st.caption(f"캐시된 컬렉션 로드 실패: {e}, 재생성 중...")
 
-    # 새 인덱싱
+    # 기존 컬렉션 강제 삭제 (모든 가능한 에러 처리)
     try:
-        client.delete_collection(col_name)
-    except:
-        pass
+        existing_collections = client.list_collections()
+        for col_info in existing_collections:
+            if col_info.name == col_name:
+                st.caption(f"🗑️ 기존 컬렉션 '{col_name}' 삭제 중...")
+                client.delete_collection(col_name)
+                break
+    except Exception as e:
+        st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
 
-    col = client.create_collection(col_name)
+    # 새 컬렉션 생성
+    try:
+        col = client.create_collection(col_name)
+    except Exception as e:
+        st.error(f"컬렉션 생성 실패: {e}")
+        return None, 0
 
     docs, metas, ids = _documents_from_snapshot(snap_filtered, max_rows)
     if not docs:
@@ -411,7 +422,14 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
         ids = ids[:min_len]
 
     if embs:
-        col.add(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
+        try:
+            col.add(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
+        except Exception as e:
+            st.error(f"문서 추가 실패: {e}")
+            # 메타데이터 샘플 출력 (디버깅용)
+            if metas:
+                st.caption(f"첫 메타데이터 샘플: {metas[0]}")
+            return col, 0
 
     st.session_state["_last_filter_hash"] = filter_hash
     return col, len(docs)
@@ -546,6 +564,20 @@ def render_hybrid_chatbot_tab(
         st.warning("선택된 필터에 데이터가 없습니다")
         return
 
+    # 데이터 품질 확인 및 중복 제거
+    st.caption(f"🔍 필터링 전: {len(snapshot_df):,}행 → 필터링 후: {len(snap):,}행")
+
+    # 중복 데이터 확인 (같은 날짜-센터-SKU 조합)
+    if 'date' in snap.columns:
+        snap_dedup_cols = ['date', 'center', 'resource_code']
+        duplicates = snap[snap_dedup_cols].duplicated().sum()
+        if duplicates > 0:
+            st.warning(f"⚠️ 중복 데이터 {duplicates:,}건 발견 - 최신 데이터만 사용합니다")
+            # 각 (센터, SKU) 조합의 최신 날짜 데이터만 사용
+            snap['date'] = pd.to_datetime(snap['date'], errors='coerce')
+            snap = snap.sort_values('date').groupby(['center', 'resource_code'], as_index=False).last()
+            st.caption(f"✅ 중복 제거 후: {len(snap):,}행")
+
     # 세션 요약 (NaT 안전하게 처리)
     latest_date = pd.to_datetime(snap.get('date'), errors='coerce').max()
     if pd.isna(latest_date):
@@ -553,8 +585,21 @@ def render_hybrid_chatbot_tab(
     else:
         latest_date_str = latest_date.strftime('%Y-%m-%d')
 
+    # 재고 계산 (디버깅 정보 포함)
+    stock_values = pd.to_numeric(snap.get('stock_qty'), errors='coerce').fillna(0)
+    total_stock = stock_values.sum()
+
+    # 비정상적으로 큰 값 경고
+    if total_stock > 1000000:  # 100만개 이상이면 경고
+        st.warning(f"⚠️ 비정상적으로 큰 재고 수량: {total_stock:,.0f}개")
+        st.caption(f"평균 재고: {stock_values.mean():,.0f}개, 최대: {stock_values.max():,.0f}개")
+        # 상위 10개 행 확인
+        top_stocks = snap.nlargest(10, 'stock_qty')[['center', 'resource_code', 'stock_qty', 'date']]
+        with st.expander("🔍 재고 상위 10개 확인"):
+            st.dataframe(top_stocks)
+
     session_digest = (
-        f"총 재고={pd.to_numeric(snap.get('stock_qty'), errors='coerce').fillna(0).sum():,.0f}개 / "
+        f"총 재고={total_stock:,.0f}개 / "
         f"센터 {snap.get('center', pd.Series([], dtype=str)).nunique()}곳 / "
         f"SKU {snap.get('resource_code', pd.Series([], dtype=str)).nunique()}개 / "
         f"최신일={latest_date_str}"
