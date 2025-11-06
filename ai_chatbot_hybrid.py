@@ -385,6 +385,10 @@ def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[flo
     genai.configure(api_key=st.secrets["gemini"]["api_key"])
     model = st.secrets["gemini"].get("embedding_model", "models/text-embedding-004")
 
+    # Gemini API는 모델명에 'models/' 또는 'tunedModels/' 접두사 필요
+    if not model.startswith(("models/", "tunedModels/")):
+        model = f"models/{model}"
+
     all_embeddings = []
     failed_indices = []
 
@@ -587,6 +591,10 @@ def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> Lis
         # 쿼리 임베딩 생성 (컬렉션에 embedding_function이 없으므로 명시적으로 생성)
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
         model = st.secrets["gemini"].get("embedding_model", "models/text-embedding-004")
+
+        # Gemini API는 모델명에 'models/' 또는 'tunedModels/' 접두사 필요
+        if not model.startswith(("models/", "tunedModels/")):
+            model = f"models/{model}"
 
         try:
             # Gemini API로 쿼리 임베딩 생성
