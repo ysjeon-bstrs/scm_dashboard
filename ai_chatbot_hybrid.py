@@ -64,12 +64,14 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
         "insufficient", "enough", "recommend", "risk",
     ]
 
-    # 탐색형 키워드 (벡터 검색 필요 - 우선순위 높음)
-    exploratory_keywords = [
-        # 날짜/시간 질문 (우선순위 높음)
+    # 날짜/시간 키워드 (최우선 - 명확하게 탐색형)
+    date_keywords = [
         "날짜", "최근", "언제", "시점", "기준일",
         "date", "when", "recent", "latest",
+    ]
 
+    # 탐색형 키워드 (벡터 검색 필요)
+    exploratory_keywords = [
         # 일반 탐색
         "무엇", "어떤",
         "what",
@@ -77,14 +79,20 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
         "보유", "존재",
     ]
 
-    # 키워드 매칭 (순서 중요: 탐색형을 먼저 체크)
-    # 날짜 질문 등은 명확하게 탐색형이므로 우선 처리
-    if any(kw in q for kw in exploratory_keywords):
+    # 키워드 매칭 (순서 중요)
+    # 1. 날짜 질문은 명확하게 탐색형이므로 최우선 처리
+    if any(kw in q for kw in date_keywords):
         return "exploratory"
-    elif any(kw in q for kw in quantitative_keywords):
-        return "quantitative"
+    # 2. 비즈니스 의도 체크 (구체적이므로 우선)
+    #    예: "부족한 SKU는 무엇인가요?" → business (무엇보다 부족이 더 중요)
     elif any(kw in q for kw in business_keywords):
         return "business"
+    # 3. 정량 계산 체크
+    elif any(kw in q for kw in quantitative_keywords):
+        return "quantitative"
+    # 4. 일반 탐색 체크
+    elif any(kw in q for kw in exploratory_keywords):
+        return "exploratory"
     else:
         # 기본값: 정량형 (간단한 필터링이 더 정확)
         return "quantitative"
