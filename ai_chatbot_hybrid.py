@@ -348,12 +348,21 @@ def _documents_from_snapshot(snap: pd.DataFrame, max_rows: int = 2000) -> Tuple[
 
         docs.append(doc)
         # "type" 키워드는 Chroma 내부 예약어이므로 "doc_type"으로 변경
-        metas.append({
-            "doc_type": "snapshot",
-            "center": str(r.get("center", "")) if pd.notna(r.get("center")) else "",
-            "sku": str(r.get("resource_code", "")) if pd.notna(r.get("resource_code")) else "",
-            "date": date_str,
-        })
+        # 빈 문자열이나 None 값은 제외 (Chroma 호환성)
+        meta = {"doc_type": "snapshot"}
+
+        center_val = r.get("center")
+        if pd.notna(center_val) and str(center_val).strip():
+            meta["center"] = str(center_val)
+
+        sku_val = r.get("resource_code")
+        if pd.notna(sku_val) and str(sku_val).strip():
+            meta["sku"] = str(sku_val)
+
+        if date_str and date_str != "N/A":
+            meta["date"] = date_str
+
+        metas.append(meta)
         ids.append(f"snap-{i}")
 
     return docs, metas, ids
@@ -370,26 +379,38 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     # 캐싱: 같은 필터면 재사용
     if st.session_state.get("_last_filter_hash") == filter_hash:
         try:
-            col = client.get_collection(col_name)
-            return col, col.count()
+            col = client.get_or_create_collection(col_name)
+            if col.count() > 0:
+                st.caption(f"♻️ 기존 인덱스 재사용 ({col.count():,}개 문서)")
+                return col, col.count()
+            else:
+                st.caption("캐시된 컬렉션이 비어있음, 재생성 중...")
         except Exception as e:
             # 컬렉션이 없거나 에러 발생 시 재생성
             st.caption(f"캐시된 컬렉션 로드 실패: {e}, 재생성 중...")
 
-    # 기존 컬렉션 강제 삭제 (모든 가능한 에러 처리)
+    # 필터가 변경되었거나 컬렉션이 비어있음 → 재생성 필요
+    # 기존 컬렉션 강제 삭제
     try:
-        existing_collections = client.list_collections()
-        for col_info in existing_collections:
-            if col_info.name == col_name:
-                st.caption(f"🗑️ 기존 컬렉션 '{col_name}' 삭제 중...")
-                client.delete_collection(col_name)
-                break
+        # 먼저 존재 여부 확인
+        try:
+            existing = client.get_collection(col_name)
+            st.caption(f"🗑️ 기존 컬렉션 '{col_name}' 삭제 중... (문서 {existing.count():,}개)")
+            client.delete_collection(col_name)
+        except Exception:
+            # 컬렉션이 없으면 무시
+            pass
     except Exception as e:
         st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
 
-    # 새 컬렉션 생성
+    # 새 컬렉션 생성 (get_or_create로 안전하게)
     try:
-        col = client.create_collection(col_name)
+        col = client.get_or_create_collection(col_name)
+        # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
+        if col.count() > 0:
+            st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
+            client.delete_collection(col_name)
+            col = client.create_collection(col_name)
     except Exception as e:
         st.error(f"컬렉션 생성 실패: {e}")
         return None, 0
@@ -426,10 +447,19 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
         try:
             col.add(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
         except Exception as e:
+            import traceback
             st.error(f"문서 추가 실패: {e}")
+            st.error(f"에러 타입: {type(e).__name__}")
+            # 전체 에러 메시지 출력
+            error_detail = str(e)
+            if hasattr(e, 'args') and e.args:
+                st.caption(f"상세 에러: {e.args}")
             # 메타데이터 샘플 출력 (디버깅용)
             if metas:
                 st.caption(f"첫 메타데이터 샘플: {metas[0]}")
+                st.caption(f"메타데이터 키들: {list(metas[0].keys())}")
+            # traceback 출력
+            st.text(traceback.format_exc())
             return col, 0
 
     st.session_state["_last_filter_hash"] = filter_hash
