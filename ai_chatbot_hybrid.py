@@ -266,11 +266,12 @@ def _get_filter_hash(centers: list, skus: list) -> str:
 
 
 def _build_session_collection_name() -> str:
-    """세션 컬렉션명"""
+    """세션 컬렉션명 (v2: doc_type 메타데이터 사용)"""
     sid = st.session_state.get("_ai_session_id")
     if not sid:
         sid = st.session_state["_ai_session_id"] = uuid.uuid4().hex[:8]
-    return f"scm_session_{sid}"
+    # v2 suffix to avoid old collections with 'type' metadata error
+    return f"scm_v2_{sid}"
 
 
 def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[float]], list[int]]:
@@ -567,20 +568,30 @@ def render_hybrid_chatbot_tab(
     # 데이터 품질 확인 및 중복 제거
     st.caption(f"🔍 필터링 전: {len(snapshot_df):,}행 → 필터링 후: {len(snap):,}행")
 
-    # 중복 데이터 확인 (같은 날짜-센터-SKU 조합)
+    # 날짜별 스냅샷 데이터 정규화: 각 (센터, SKU)의 최신 날짜만 유지
     # 필요한 모든 컬럼이 있는지 확인
     required_cols = ['date', 'center', 'resource_code']
     if all(col in snap.columns for col in required_cols):
-        duplicates = snap[required_cols].duplicated().sum()
-        if duplicates > 0:
-            st.warning(f"⚠️ 중복 데이터 {duplicates:,}건 발견 - 최신 데이터만 사용합니다")
-            # 각 (센터, SKU) 조합의 최신 날짜 데이터만 사용
-            snap['date'] = pd.to_datetime(snap['date'], errors='coerce')
+        # 날짜별로 여러 스냅샷이 있을 수 있으므로 최신 날짜만 유지
+        snap['date'] = pd.to_datetime(snap['date'], errors='coerce')
+
+        # 각 (센터, SKU) 조합이 여러 날짜에 걸쳐 있는지 확인
+        group_counts = snap.groupby(['center', 'resource_code']).size()
+        multi_date_groups = (group_counts > 1).sum()
+
+        if multi_date_groups > 0:
+            total_rows_before = len(snap)
+            st.warning(f"⚠️ {multi_date_groups:,}개 (센터, SKU) 조합이 여러 날짜에 존재 - 최신 데이터만 사용합니다")
+
+            # 최신 날짜만 유지 (각 센터-SKU 조합별로)
             snap = snap.sort_values('date').groupby(['center', 'resource_code'], as_index=False).last()
-            st.caption(f"✅ 중복 제거 후: {len(snap):,}행")
+
+            st.caption(f"✅ {total_rows_before:,}행 → {len(snap):,}행 (날짜별 스냅샷 정규화)")
+        else:
+            st.caption(f"✅ 각 (센터, SKU)가 단일 날짜만 존재 (정규화 불필요)")
     else:
         missing = [col for col in required_cols if col not in snap.columns]
-        st.caption(f"ℹ️ 중복 제거 스킵 (컬럼 누락: {', '.join(missing)})")
+        st.caption(f"ℹ️ 날짜별 정규화 스킵 (컬럼 누락: {', '.join(missing)})")
 
     # 세션 요약 (NaT 안전하게 처리)
     latest_date = pd.to_datetime(snap.get('date'), errors='coerce').max()
