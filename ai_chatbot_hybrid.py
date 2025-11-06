@@ -16,6 +16,7 @@ import uuid
 import hashlib
 from typing import Tuple, List, Dict, Optional, Literal
 import re
+import numpy as np
 
 
 # ============================================================================
@@ -324,12 +325,35 @@ def _build_session_collection_name() -> str:
     return f"scm_v3_{sid}"
 
 
+def _normalize_embeddings(embeddings: List[List[float]]) -> List[List[float]]:
+    """
+    임베딩을 L2 정규화 (단위 벡터로 변환)
+
+    정규화된 임베딩에서는 L2 거리와 코사인 유사도가 수학적으로 동등:
+    - L2 distance² = 2 - 2*cosine_similarity
+    - 따라서 L2 거리 최소화 = 코사인 유사도 최대화
+
+    이렇게 하면 Chroma Cloud의 기본 메트릭(L2)을 사용하면서도
+    코사인 유사도와 동일한 검색 결과를 얻을 수 있습니다.
+    """
+    normalized = []
+    for emb in embeddings:
+        emb_array = np.array(emb)
+        norm = np.linalg.norm(emb_array)
+        if norm > 0:
+            normalized.append((emb_array / norm).tolist())
+        else:
+            # 제로 벡터는 그대로 (발생하지 않아야 함)
+            normalized.append(emb)
+    return normalized
+
+
 def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[float]], list[int]]:
     """
-    Gemini 임베딩 (배치 처리)
+    Gemini 임베딩 (배치 처리) + L2 정규화
 
     Returns:
-        (embeddings, failed_indices): 임베딩 리스트와 실패한 문서 인덱스
+        (embeddings, failed_indices): 정규화된 임베딩 리스트와 실패한 문서 인덱스
     """
     if not texts:
         return [], []
@@ -358,6 +382,9 @@ def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[flo
                 batch_embeddings = [r["embedding"] for r in res["embeddings"]]
             else:
                 batch_embeddings = [res["embedding"]]
+
+            # L2 정규화: L2 거리를 코사인 유사도와 동등하게 만듦
+            batch_embeddings = _normalize_embeddings(batch_embeddings)
 
             all_embeddings.extend(batch_embeddings)
 
@@ -463,9 +490,11 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
                 st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
                 client.delete_collection(col_name)
                 # 메타데이터 없이 생성 (Chroma Cloud 호환성 문제 회피)
+                # 기본 메트릭은 L2이지만, 임베딩을 정규화하여 코사인 유사도와 동등하게 동작
                 col = client.create_collection(name=col_name)
         except Exception:
             # 컬렉션이 없으면 생성 (메타데이터 없이)
+            # 기본 메트릭은 L2이지만, 임베딩을 정규화하여 코사인 유사도와 동등하게 동작
             col = client.create_collection(name=col_name)
     except Exception as e:
         import traceback
@@ -529,7 +558,7 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
 
 
 def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> List[str]:
-    """벡터 검색 (명시적 쿼리 임베딩 생성)"""
+    """벡터 검색 (명시적 쿼리 임베딩 생성 + L2 정규화)"""
     try:
         # 쿼리 임베딩 생성 (컬렉션에 embedding_function이 없으므로 명시적으로 생성)
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
@@ -545,11 +574,14 @@ def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> Lis
 
             # 임베딩 추출
             if hasattr(res, "embeddings"):
-                query_emb = [res.embeddings[0].values]
+                query_emb_raw = [res.embeddings[0].values]
             elif isinstance(res, dict) and "embeddings" in res:
-                query_emb = [res["embeddings"][0]["embedding"]]
+                query_emb_raw = [res["embeddings"][0]["embedding"]]
             else:
-                query_emb = [res["embedding"]]
+                query_emb_raw = [res["embedding"]]
+
+            # L2 정규화: 문서 임베딩과 동일하게 정규화하여 코사인 유사도 보장
+            query_emb = _normalize_embeddings(query_emb_raw)
 
         except Exception as e:
             st.error(f"쿼리 임베딩 생성 실패: {e}")
