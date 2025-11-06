@@ -232,18 +232,29 @@ def _ensure_session_index(
     except Exception as e:
         st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
 
-    # 새 컬렉션 생성 (get_or_create로 안전하게)
+    # 새 컬렉션 생성 (메타데이터 명시)
     try:
-        col = client.get_or_create_collection(col_name)
+        # Chroma에 임베딩을 직접 전달하므로 embedding_function 불필요
+        # 코사인 유사도를 명시적으로 설정
+        col = client.get_or_create_collection(
+            name=col_name,
+            metadata={"hnsw:space": "cosine"}
+        )
         # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
         if col.count() > 0:
             st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
             client.delete_collection(col_name)
-            col = client.create_collection(col_name)
+            col = client.create_collection(
+                name=col_name,
+                metadata={"hnsw:space": "cosine"}
+            )
     except Exception as e:
         import traceback
         st.error(f"컬렉션 생성 실패: {e}")
         st.error(f"에러 타입: {type(e).__name__}")
+        if hasattr(e, 'args') and e.args:
+            st.caption(f"에러 상세: {e.args}")
+        st.text("Traceback:")
         st.text(traceback.format_exc())
         return None, 0
 
@@ -315,7 +326,13 @@ def _query_session(col: chromadb.Collection, question: str, k: int = 5) -> List[
         res = col.query(query_texts=[question], n_results=k)
         return res.get("documents", [[]])[0]
     except Exception as e:
+        import traceback
         st.error(f"검색 실패: {e}")
+        st.error(f"에러 타입: {type(e).__name__}")
+        if hasattr(e, 'args') and e.args:
+            st.caption(f"에러 상세: {e.args}")
+        st.text("Traceback:")
+        st.text(traceback.format_exc())
         return []
 
 
