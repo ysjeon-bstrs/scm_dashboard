@@ -568,15 +568,19 @@ def render_hybrid_chatbot_tab(
     st.caption(f"🔍 필터링 전: {len(snapshot_df):,}행 → 필터링 후: {len(snap):,}행")
 
     # 중복 데이터 확인 (같은 날짜-센터-SKU 조합)
-    if 'date' in snap.columns:
-        snap_dedup_cols = ['date', 'center', 'resource_code']
-        duplicates = snap[snap_dedup_cols].duplicated().sum()
+    # 필요한 모든 컬럼이 있는지 확인
+    required_cols = ['date', 'center', 'resource_code']
+    if all(col in snap.columns for col in required_cols):
+        duplicates = snap[required_cols].duplicated().sum()
         if duplicates > 0:
             st.warning(f"⚠️ 중복 데이터 {duplicates:,}건 발견 - 최신 데이터만 사용합니다")
             # 각 (센터, SKU) 조합의 최신 날짜 데이터만 사용
             snap['date'] = pd.to_datetime(snap['date'], errors='coerce')
             snap = snap.sort_values('date').groupby(['center', 'resource_code'], as_index=False).last()
             st.caption(f"✅ 중복 제거 후: {len(snap):,}행")
+    else:
+        missing = [col for col in required_cols if col not in snap.columns]
+        st.caption(f"ℹ️ 중복 제거 스킵 (컬럼 누락: {', '.join(missing)})")
 
     # 세션 요약 (NaT 안전하게 처리)
     latest_date = pd.to_datetime(snap.get('date'), errors='coerce').max()
