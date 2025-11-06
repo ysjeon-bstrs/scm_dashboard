@@ -64,19 +64,33 @@ def classify_question(question: str) -> Literal["quantitative", "exploratory", "
         "insufficient", "enough", "recommend", "risk",
     ]
 
+    # 날짜/시간 키워드 (최우선 - 명확하게 탐색형)
+    date_keywords = [
+        "날짜", "최근", "언제", "시점", "기준일",
+        "date", "when", "recent", "latest",
+    ]
+
     # 탐색형 키워드 (벡터 검색 필요)
     exploratory_keywords = [
-        "무엇", "언제", "어떤",
-        "what", "when",
+        # 일반 탐색
+        "무엇", "어떤",
+        "what",
         "목록", "리스트", "list",
         "보유", "존재",
     ]
 
-    # 키워드 매칭 (순서 중요: 정량형을 먼저 체크)
-    if any(kw in q for kw in quantitative_keywords):
-        return "quantitative"
+    # 키워드 매칭 (순서 중요)
+    # 1. 날짜 질문은 명확하게 탐색형이므로 최우선 처리
+    if any(kw in q for kw in date_keywords):
+        return "exploratory"
+    # 2. 비즈니스 의도 체크 (구체적이므로 우선)
+    #    예: "부족한 SKU는 무엇인가요?" → business (무엇보다 부족이 더 중요)
     elif any(kw in q for kw in business_keywords):
         return "business"
+    # 3. 정량 계산 체크
+    elif any(kw in q for kw in quantitative_keywords):
+        return "quantitative"
+    # 4. 일반 탐색 체크
     elif any(kw in q for kw in exploratory_keywords):
         return "exploratory"
     else:
@@ -369,7 +383,7 @@ def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[flo
         return [], []
 
     genai.configure(api_key=st.secrets["gemini"]["api_key"])
-    model = st.secrets["gemini"].get("embedding_model", "text-embedding-004")
+    model = st.secrets["gemini"].get("embedding_model", "models/text-embedding-004")
 
     all_embeddings = []
     failed_indices = []
@@ -572,7 +586,7 @@ def search_documents(col: chromadb.Collection, question: str, k: int = 5) -> Lis
     try:
         # 쿼리 임베딩 생성 (컬렉션에 embedding_function이 없으므로 명시적으로 생성)
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        model = st.secrets["gemini"].get("embedding_model", "text-embedding-004")
+        model = st.secrets["gemini"].get("embedding_model", "models/text-embedding-004")
 
         try:
             # Gemini API로 쿼리 임베딩 생성
