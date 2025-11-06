@@ -273,34 +273,50 @@ def _build_session_collection_name() -> str:
     return f"scm_session_{sid}"
 
 
-def _embed_batch(texts: list[str], batch_size: int = 100) -> list[list[float]]:
-    """Gemini 임베딩 (배치 처리)"""
+def _embed_batch(texts: list[str], batch_size: int = 100) -> Tuple[list[list[float]], list[int]]:
+    """
+    Gemini 임베딩 (배치 처리)
+
+    Returns:
+        (embeddings, failed_indices): 임베딩 리스트와 실패한 문서 인덱스
+    """
     if not texts:
-        return []
+        return [], []
 
     genai.configure(api_key=st.secrets["gemini"]["api_key"])
     model = st.secrets["gemini"].get("embedding_model", "text-embedding-004")
 
     all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+    failed_indices = []
+
+    for batch_start in range(0, len(texts), batch_size):
+        batch_end = min(batch_start + batch_size, len(texts))
+        batch = texts[batch_start:batch_end]
+
         try:
             res = genai.embed_content(
                 model=model,
                 content=batch,
                 task_type="retrieval_document"
             )
+
+            # 임베딩 추출
             if hasattr(res, "embeddings"):
-                all_embeddings.extend([e.values for e in res.embeddings])
+                batch_embeddings = [e.values for e in res.embeddings]
             elif isinstance(res, dict) and "embeddings" in res:
-                all_embeddings.extend([r["embedding"] for r in res["embeddings"]])
+                batch_embeddings = [r["embedding"] for r in res["embeddings"]]
             else:
-                all_embeddings.append(res["embedding"])
+                batch_embeddings = [res["embedding"]]
+
+            all_embeddings.extend(batch_embeddings)
+
         except Exception as e:
-            st.warning(f"임베딩 배치 {i//batch_size + 1} 실패: {e}")
+            st.warning(f"임베딩 배치 {batch_start//batch_size + 1} 실패: {e}")
+            # 실패한 배치의 모든 인덱스 기록
+            failed_indices.extend(range(batch_start, batch_end))
             continue
 
-    return all_embeddings
+    return all_embeddings, failed_indices
 
 
 def _documents_from_snapshot(snap: pd.DataFrame, max_rows: int = 2000) -> Tuple[List[str], List[Dict], List[str]]:
@@ -370,11 +386,29 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     if not docs:
         return col, 0
 
-    embs = _embed_batch(docs, batch_size=100)
+    # 임베딩 생성 (실패한 인덱스 추적)
+    embs, failed_indices = _embed_batch(docs, batch_size=100)
+
+    # 실패한 배치의 문서를 제거 (정렬을 유지하기 위해)
+    if failed_indices:
+        st.warning(f"⚠️ {len(failed_indices)}개 문서 임베딩 실패 (제외됨)")
+        # 실패하지 않은 인덱스만 유지
+        failed_set = set(failed_indices)
+        valid_indices = [i for i in range(len(docs)) if i not in failed_set]
+
+        docs = [docs[i] for i in valid_indices]
+        metas = [metas[i] for i in valid_indices]
+        ids = [ids[i] for i in valid_indices]
+
+    # 최종 검증: 임베딩과 문서 개수 일치 확인
     if len(embs) != len(docs):
-        docs = docs[:len(embs)]
-        metas = metas[:len(embs)]
-        ids = ids[:len(embs)]
+        st.error(f"❌ 임베딩({len(embs)})과 문서({len(docs)}) 개수 불일치!")
+        # 안전하게 짧은 쪽에 맞춤
+        min_len = min(len(embs), len(docs))
+        embs = embs[:min_len]
+        docs = docs[:min_len]
+        metas = metas[:min_len]
+        ids = ids[:min_len]
 
     if embs:
         col.add(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
@@ -512,12 +546,18 @@ def render_hybrid_chatbot_tab(
         st.warning("선택된 필터에 데이터가 없습니다")
         return
 
-    # 세션 요약
+    # 세션 요약 (NaT 안전하게 처리)
+    latest_date = pd.to_datetime(snap.get('date'), errors='coerce').max()
+    if pd.isna(latest_date):
+        latest_date_str = "미정"
+    else:
+        latest_date_str = latest_date.strftime('%Y-%m-%d')
+
     session_digest = (
         f"총 재고={pd.to_numeric(snap.get('stock_qty'), errors='coerce').fillna(0).sum():,.0f}개 / "
         f"센터 {snap.get('center', pd.Series([], dtype=str)).nunique()}곳 / "
         f"SKU {snap.get('resource_code', pd.Series([], dtype=str)).nunique()}개 / "
-        f"최신일={pd.to_datetime(snap.get('date'), errors='coerce').max():%Y-%m-%d}"
+        f"최신일={latest_date_str}"
     )
 
     # 필터 해시
