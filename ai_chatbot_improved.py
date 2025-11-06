@@ -134,10 +134,20 @@ def _documents_from_snapshot(
     use = snap.head(max_rows)
 
     for i, r in use.iterrows():
+        # 날짜를 안전하게 문자열로 변환
+        date_val = r.get('date')
+        if pd.isna(date_val):
+            date_str = "N/A"
+        else:
+            try:
+                date_str = pd.to_datetime(date_val).strftime('%Y-%m-%d')
+            except:
+                date_str = str(date_val)
+
         # 문서 텍스트: 간결하고 검색 가능한 형태
         doc = (
             f"[SNAPSHOT] "
-            f"날짜:{r.get('date')} "
+            f"날짜:{date_str} "
             f"센터:{r.get('center')} "
             f"SKU:{r.get('resource_code')} "
             f"재고:{r.get('stock_qty')}개"
@@ -148,12 +158,22 @@ def _documents_from_snapshot(
             doc += f" ({r.get('resource_name')})"
 
         docs.append(doc)
-        metas.append({
-            "type": "snapshot",
-            "center": str(r.get("center", "")),
-            "sku": str(r.get("resource_code", "")),
-            "date": str(r.get("date", "")),
-        })
+        # "type"은 Chroma 내부 예약어와 충돌 → "doc_type" 사용
+        # 빈 문자열이나 None 값은 제외 (Chroma 호환성)
+        meta = {"doc_type": "snapshot"}
+
+        center_val = r.get("center")
+        if pd.notna(center_val) and str(center_val).strip():
+            meta["center"] = str(center_val)
+
+        sku_val = r.get("resource_code")
+        if pd.notna(sku_val) and str(sku_val).strip():
+            meta["sku"] = str(sku_val)
+
+        if date_str and date_str != "N/A":
+            meta["date"] = date_str
+
+        metas.append(meta)
         ids.append(f"snap-{i}")
 
     return docs, metas, ids
@@ -188,26 +208,43 @@ def _ensure_session_index(
     # 캐싱: 이미 같은 필터로 인덱싱했으면 재사용
     if st.session_state.get("_last_filter_hash") == filter_hash:
         try:
-            col = client.get_collection(col_name)
+            col = client.get_or_create_collection(col_name)
             count = col.count()
             if count > 0:
+                st.caption(f"♻️ 기존 인덱스 재사용 ({count:,}개 문서)")
                 return col, count
-        except Exception:
-            pass  # 컬렉션이 없으면 아래에서 새로 생성
+            else:
+                st.caption("캐시된 컬렉션이 비어있음, 재생성 중...")
+        except Exception as e:
+            st.caption(f"캐시된 컬렉션 로드 실패: {e}, 재생성 중...")
 
-    # 새 인덱싱 필요
+    # 필터가 변경되었거나 컬렉션이 비어있음 → 재생성 필요
+    # 기존 컬렉션 강제 삭제
     try:
-        # 기존 컬렉션 삭제 (올바른 메서드 사용)
+        # 먼저 존재 여부 확인
         try:
+            existing = client.get_collection(col_name)
+            st.caption(f"🗑️ 기존 컬렉션 '{col_name}' 삭제 중... (문서 {existing.count():,}개)")
             client.delete_collection(col_name)
         except Exception:
+            # 컬렉션이 없으면 무시
             pass
-
-        # 새 컬렉션 생성
-        col = client.create_collection(col_name)
-
     except Exception as e:
+        st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
+
+    # 새 컬렉션 생성 (get_or_create로 안전하게)
+    try:
+        col = client.get_or_create_collection(col_name)
+        # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
+        if col.count() > 0:
+            st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
+            client.delete_collection(col_name)
+            col = client.create_collection(col_name)
+    except Exception as e:
+        import traceback
         st.error(f"컬렉션 생성 실패: {e}")
+        st.error(f"에러 타입: {type(e).__name__}")
+        st.text(traceback.format_exc())
         return None, 0
 
     # 문서 생성
@@ -240,7 +277,16 @@ def _ensure_session_index(
             embeddings=embs
         )
     except Exception as e:
+        import traceback
         st.error(f"문서 추가 실패: {e}")
+        st.error(f"에러 타입: {type(e).__name__}")
+        if hasattr(e, 'args') and e.args:
+            st.caption(f"상세 에러: {e.args}")
+        # 메타데이터 샘플 출력 (디버깅용)
+        if metas:
+            st.caption(f"첫 메타데이터 샘플: {metas[0]}")
+            st.caption(f"메타데이터 키들: {list(metas[0].keys())}")
+        st.text(traceback.format_exc())
         return col, 0
 
     # 캐싱: 이번 필터 해시 저장
