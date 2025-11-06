@@ -403,10 +403,8 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     except Exception as e:
         st.caption(f"컬렉션 삭제 시도 중 에러 (무시): {e}")
 
-    # 새 컬렉션 생성 (메타데이터 명시)
+    # 새 컬렉션 생성
     try:
-        # Chroma에 임베딩을 직접 전달하므로 embedding_function 불필요
-        # 코사인 유사도를 명시적으로 설정
         # get_or_create_collection은 _type 에러를 유발하므로 명시적으로 분리
         try:
             col = client.get_collection(name=col_name)
@@ -414,16 +412,11 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
             if col.count() > 0:
                 st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
                 client.delete_collection(col_name)
-                col = client.create_collection(
-                    name=col_name,
-                    metadata={"hnsw:space": "cosine"}
-                )
+                # 메타데이터 없이 생성 (Chroma Cloud 호환성 문제 회피)
+                col = client.create_collection(name=col_name)
         except Exception:
-            # 컬렉션이 없으면 생성
-            col = client.create_collection(
-                name=col_name,
-                metadata={"hnsw:space": "cosine"}
-            )
+            # 컬렉션이 없으면 생성 (메타데이터 없이)
+            col = client.create_collection(name=col_name)
     except Exception as e:
         import traceback
         st.error(f"컬렉션 생성 실패: {e}")
