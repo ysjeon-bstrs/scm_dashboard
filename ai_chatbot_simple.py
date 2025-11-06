@@ -82,8 +82,8 @@ def ask_ai(question: str, data_context: str) -> str:
     """
     try:
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        # Generation 모델: 접두사 없이, -latest suffix 사용
-        model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        # Gemini 2.0 모델 사용 (최신 버전)
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
 
         prompt = f"""당신은 SCM 재고 관리 전문가입니다.
 
