@@ -379,7 +379,7 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     # 캐싱: 같은 필터면 재사용
     if st.session_state.get("_last_filter_hash") == filter_hash:
         try:
-            col = client.get_or_create_collection(col_name)
+            col = client.get_collection(name=col_name)
             if col.count() > 0:
                 st.caption(f"♻️ 기존 인덱스 재사용 ({col.count():,}개 문서)")
                 return col, col.count()
@@ -407,14 +407,19 @@ def _ensure_session_index(snap_filtered: pd.DataFrame, filter_hash: str, max_row
     try:
         # Chroma에 임베딩을 직접 전달하므로 embedding_function 불필요
         # 코사인 유사도를 명시적으로 설정
-        col = client.get_or_create_collection(
-            name=col_name,
-            metadata={"hnsw:space": "cosine"}
-        )
-        # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
-        if col.count() > 0:
-            st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
-            client.delete_collection(col_name)
+        # get_or_create_collection은 _type 에러를 유발하므로 명시적으로 분리
+        try:
+            col = client.get_collection(name=col_name)
+            # 혹시 이미 존재하고 데이터가 있으면 삭제 후 재생성
+            if col.count() > 0:
+                st.caption(f"⚠️ 컬렉션이 여전히 데이터 포함 ({col.count():,}개), 강제 재생성...")
+                client.delete_collection(col_name)
+                col = client.create_collection(
+                    name=col_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+        except Exception:
+            # 컬렉션이 없으면 생성
             col = client.create_collection(
                 name=col_name,
                 metadata={"hnsw:space": "cosine"}
