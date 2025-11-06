@@ -572,8 +572,19 @@ def render_hybrid_chatbot_tab(
     # 필요한 모든 컬럼이 있는지 확인
     required_cols = ['date', 'center', 'resource_code']
     if all(col in snap.columns for col in required_cols):
-        # 날짜별로 여러 스냅샷이 있을 수 있으므로 최신 날짜만 유지
+        # 날짜 변환
         snap['date'] = pd.to_datetime(snap['date'], errors='coerce')
+
+        # NaT 행 제거 (잘못된 날짜 또는 누락된 날짜)
+        # NaT는 sort 시 마지막으로 가서 "최신"으로 잘못 선택되는 문제 방지
+        nat_count = snap['date'].isna().sum()
+        if nat_count > 0:
+            st.caption(f"ℹ️ 날짜 누락/오류 {nat_count:,}행 제거 (NaT)")
+            snap = snap.dropna(subset=['date'])
+
+        if snap.empty:
+            st.warning("유효한 날짜가 있는 데이터가 없습니다")
+            return
 
         # 각 (센터, SKU) 조합이 여러 날짜에 걸쳐 있는지 확인
         group_counts = snap.groupby(['center', 'resource_code']).size()
@@ -584,6 +595,7 @@ def render_hybrid_chatbot_tab(
             st.warning(f"⚠️ {multi_date_groups:,}개 (센터, SKU) 조합이 여러 날짜에 존재 - 최신 데이터만 사용합니다")
 
             # 최신 날짜만 유지 (각 센터-SKU 조합별로)
+            # NaT가 이미 제거되었으므로 안전하게 sort 가능
             snap = snap.sort_values('date').groupby(['center', 'resource_code'], as_index=False).last()
 
             st.caption(f"✅ {total_rows_before:,}행 → {len(snap):,}행 (날짜별 스냅샷 정규화)")
