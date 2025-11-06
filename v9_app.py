@@ -1012,18 +1012,18 @@ def main() -> None:
     st.header("🤖 AI 어시스턴트")
 
     try:
-        from ai_chatbot_hybrid import render_hybrid_chatbot_tab
-        render_hybrid_chatbot_tab(
+        from ai_chatbot_simple import render_simple_chatbot_tab
+        render_simple_chatbot_tab(
             snapshot_df=snapshot_df,
             selected_centers=selected_centers,
             selected_skus=selected_skus
         )
     except ImportError as e:
         st.warning(f"AI 어시스턴트 모듈을 찾을 수 없습니다: {e}")
-        st.info("ai_chatbot_hybrid.py 파일이 있는지 확인하세요.")
+        st.info("ai_chatbot_simple.py 파일이 있는지 확인하세요.")
     except Exception as e:
         st.error(f"AI 어시스턴트 로드 실패: {e}")
-        st.caption("secrets.toml에 Gemini/Chroma API 키가 설정되어 있는지 확인하세요.")
+        st.caption("secrets.toml에 Gemini API 키가 설정되어 있는지 확인하세요.")
 
 
 if __name__ == "__main__":
