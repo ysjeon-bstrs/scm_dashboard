@@ -199,15 +199,12 @@ def _render_sidebar_filters(
     # 사이드바 필터 렌더링
     with st.sidebar:
         # 데이터 새로고침 버튼
-        if st.button("🔄 Google Sheets 데이터 새로고침", key="sidebar_gsheet_refresh", use_container_width=True):
+        if st.button("🔄 시트 새로고침", key="sidebar_gsheet_refresh", use_container_width=True):
             st.session_state["_trigger_refresh"] = True
             st.rerun()
 
         st.divider()
         st.header("필터")
-        st.caption(
-            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022·BA00047 / 기간 오늘−20일 ~ +30일."
-        )
 
         preset_centers = ["태광KR", "AMZUS"]
         default_centers = [c for c in preset_centers if c in centers]
@@ -234,6 +231,9 @@ def _render_sidebar_filters(
         start_ts = pd.Timestamp(date_range_value[0]).normalize()
         end_ts = pd.Timestamp(date_range_value[1]).normalize()
         st.session_state.date_range = (start_ts, end_ts)
+        st.caption(
+            "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022·BA00047 / 기간 오늘−20일 ~ +30일"
+        )
 
         st.divider()
         st.header("표시 옵션")
