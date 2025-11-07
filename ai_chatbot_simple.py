@@ -113,6 +113,10 @@ def prepare_data_context(
 
                             # 날짜별 + move_type별로 그룹화
                             for date, date_group in sku_data_sorted.groupby("date"):
+                                # NaT 체크
+                                if pd.isna(date):
+                                    continue
+
                                 date_str = date.strftime('%Y-%m-%d')
 
                                 # 센터별/타입별 세분화
@@ -137,14 +141,20 @@ def prepare_data_context(
                 forecast_data = timeline[timeline["is_forecast"] == True]
 
                 if not actual_data.empty:
-                    actual_min = actual_data["date"].min().strftime('%Y-%m-%d')
-                    actual_max = actual_data["date"].max().strftime('%Y-%m-%d')
-                    stats += f"- 📊 실제 데이터 기간: {actual_min} ~ {actual_max}\n"
+                    actual_min = actual_data["date"].min()
+                    actual_max = actual_data["date"].max()
+                    if pd.notna(actual_min) and pd.notna(actual_max):
+                        actual_min_str = actual_min.strftime('%Y-%m-%d')
+                        actual_max_str = actual_max.strftime('%Y-%m-%d')
+                        stats += f"- 📊 실제 데이터 기간: {actual_min_str} ~ {actual_max_str}\n"
 
                 if not forecast_data.empty:
-                    forecast_min = forecast_data["date"].min().strftime('%Y-%m-%d')
-                    forecast_max = forecast_data["date"].max().strftime('%Y-%m-%d')
-                    stats += f"- 🔮 예측 데이터 기간: {forecast_min} ~ {forecast_max}\n"
+                    forecast_min = forecast_data["date"].min()
+                    forecast_max = forecast_data["date"].max()
+                    if pd.notna(forecast_min) and pd.notna(forecast_max):
+                        forecast_min_str = forecast_min.strftime('%Y-%m-%d')
+                        forecast_max_str = forecast_max.strftime('%Y-%m-%d')
+                        stats += f"- 🔮 예측 데이터 기간: {forecast_min_str} ~ {forecast_max_str}\n"
             else:
                 # is_forecast 컬럼이 없으면 전체 범위만 표시
                 date_min = timeline["date"].min().strftime('%Y-%m-%d') if pd.notna(timeline["date"].min()) else 'N/A'
@@ -196,8 +206,10 @@ def prepare_data_context(
                         sku_forecast = forecast_data[forecast_data["resource_code"] == sku]
                         if not sku_forecast.empty:
                             final_forecast = sku_forecast.iloc[-1]["stock_qty"]
-                            final_date = sku_forecast.iloc[-1]["date"].strftime('%Y-%m-%d')
-                            stats += f"- {sku}: {final_forecast:,.0f}개 (예측일: {final_date})\n"
+                            final_date_val = sku_forecast.iloc[-1]["date"]
+                            if pd.notna(final_date_val):
+                                final_date = final_date_val.strftime('%Y-%m-%d')
+                                stats += f"- {sku}: {final_forecast:,.0f}개 (예측일: {final_date})\n"
 
     # 샘플 데이터 (상위 N개)
     stats += f"\n📋 재고 상세 데이터 (상위 {min(max_rows, len(df))}개):\n"
