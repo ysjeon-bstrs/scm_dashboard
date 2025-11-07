@@ -79,8 +79,9 @@ def prepare_data_context(
                 skus_in_snapshot = df["resource_code"].unique()
                 moves_recent = moves_recent[moves_recent["resource_code"].isin(skus_in_snapshot)]
 
-            # 판매/입고 집계
+            # 판매/입고 집계 (30일 전체)
             if "quantity" in moves_recent.columns:
+                stats += "전체 집계 (30일):\n"
                 # move_type별 집계
                 if "move_type" in moves_recent.columns:
                     for move_type, group in moves_recent.groupby("move_type")["quantity"].sum().items():
@@ -91,6 +92,35 @@ def prepare_data_context(
                 sku_moves = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(5)
                 for sku, qty in sku_moves.items():
                     stats += f"- {sku}: {qty:,.0f}개\n"
+
+                # 최근 7일 일별 상세 데이터 추가!
+                latest_date = moves_recent["date"].max()
+                moves_last_7days = moves_recent[moves_recent["date"] >= latest_date - pd.Timedelta(days=7)]
+
+                if not moves_last_7days.empty:
+                    stats += f"\n📅 최근 7일 일별 상세 (상위 3개 SKU):\n"
+
+                    # 상위 3개 SKU만
+                    top_skus = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(3).index
+
+                    for sku in top_skus:
+                        sku_data = moves_last_7days[moves_last_7days["resource_code"] == sku]
+                        if not sku_data.empty:
+                            stats += f"\n{sku}:\n"
+
+                            # 날짜별로 정렬
+                            sku_data_sorted = sku_data.sort_values("date", ascending=False)
+
+                            # 날짜별 + move_type별로 그룹화
+                            for date, date_group in sku_data_sorted.groupby("date"):
+                                date_str = date.strftime('%Y-%m-%d')
+
+                                # 센터별/타입별 세분화
+                                for idx, row in date_group.iterrows():
+                                    center = row.get("center", "N/A")
+                                    move_type = row.get("move_type", "N/A")
+                                    qty = row.get("quantity", 0)
+                                    stats += f"  · {date_str} | {center} | {move_type}: {qty:,.0f}개\n"
 
     # 30일 시계열 + 예측 데이터 추가!
     if timeline_df is not None and not timeline_df.empty:
