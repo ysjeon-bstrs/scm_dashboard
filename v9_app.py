@@ -786,36 +786,15 @@ def main() -> None:
     events = list(cons_params.get("events", []))
 
     # ========================================
-    # 9단계: KPI 요약 카드 렌더링
+    # 9단계: 타임라인 빌드 (입력 검증)
     # ========================================
-    st.subheader("요약 KPI")
+    # 도메인 예외를 UI 에러 메시지로 변환
     today_norm = pd.Timestamp.today().normalize()
     if latest_snapshot_dt is not None:
         proj_days_for_build = max(0, int((end_ts - latest_snapshot_dt).days))
     else:
         proj_days_for_build = max(0, int((end_ts - start_ts).days))
 
-    render_sku_summary_cards(
-        snapshot_df,
-        data.moves,
-        centers=selected_centers,
-        skus=selected_skus,
-        today=today_norm,
-        latest_snapshot=latest_dt,
-        lag_days=int(lag_days),
-        start=start_ts,
-        end=end_ts,
-        lookback_days=lookback_days,
-        horizon_pad_days=CONFIG.timeline.horizon_pad_days,
-        events=events,
-    )
-
-    st.divider()
-
-    # ========================================
-    # 10단계: 타임라인 빌드 (입력 검증)
-    # ========================================
-    # 도메인 예외를 UI 에러 메시지로 변환
     logger.info("타임라인 빌드 시작")
     with handle_domain_errors():
         validate_timeline_inputs(snapshot_df, data.moves, start_ts, end_ts)
@@ -839,7 +818,7 @@ def main() -> None:
     logger.info(f"타임라인 빌드 완료: {len(timeline_actual)}행")
 
     # ========================================
-    # 11단계: 소비 예측 적용
+    # 10단계: 소비 예측 적용
     # ========================================
     cons_start = None
     if latest_snapshot_dt is not None:
@@ -864,151 +843,182 @@ def main() -> None:
     timeline_for_chart = timeline_forecast if use_cons_forecast else timeline_actual
 
     # ========================================
-    # 12단계: 계단식 차트 렌더링
+    # 11단계: 탭 구조로 대시보드 렌더링
     # ========================================
-    render_step_chart(
-        timeline_for_chart,
-        start=start_ts,
-        end=end_ts,
-        centers=selected_centers,
-        skus=selected_skus,
-        show_production=show_prod,
-        show_in_transit=show_transit,
-        today=today_norm,
-        snapshot=snapshot_df,
-    )
+    tab1, tab2 = st.tabs(["📊 재고 대시보드", "🏢 센터별 대시보드"])
 
-    # 태광KR 가상창고(운영/키핑) 배분 데이터를 구버전 세션에서도 안전하게 조회
-    taekwang_stock_df = getattr(data, "tk_stock_distrib", None)
+    with tab1:
+        # ========================================
+        # 재고 대시보드: 요약 KPI
+        # ========================================
+        st.subheader("요약 KPI")
+        render_sku_summary_cards(
+            snapshot_df,
+            data.moves,
+            centers=selected_centers,
+            skus=selected_skus,
+            today=today_norm,
+            latest_snapshot=latest_dt,
+            lag_days=int(lag_days),
+            start=start_ts,
+            end=end_ts,
+            lookback_days=lookback_days,
+            horizon_pad_days=CONFIG.timeline.horizon_pad_days,
+            events=events,
+        )
 
-    if taekwang_stock_df is not None:
-        # Amazon 대시보드 전에 태광KR 가상창고 배분 현황을 노출
         st.divider()
-        render_taekwang_stock_dashboard(
-            taekwang_stock_df,
+
+        # ========================================
+        # 재고 대시보드: 계단식 차트
+        # ========================================
+        render_step_chart(
+            timeline_for_chart,
+            start=start_ts,
+            end=end_ts,
+            centers=selected_centers,
+            skus=selected_skus,
+            show_production=show_prod,
+            show_in_transit=show_transit,
+            today=today_norm,
+            snapshot=snapshot_df,
+        )
+
+        st.divider()
+
+        # ========================================
+        # 재고 대시보드: 입고 예정 및 WIP 테이블
+        # ========================================
+        render_inbound_and_wip_tables(
+            moves=data.moves,
+            snapshot=snapshot_df,
+            selected_centers=selected_centers,
             selected_skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+            lag_days=lag_days,
+            today=today_norm,
+        )
+
+        # ========================================
+        # 재고 대시보드: 재고 현황 테이블
+        # ========================================
+        display_df = render_inventory_table(
+            snapshot=snapshot_df,
+            selected_centers=selected_centers,
+            latest_dt=latest_dt,
             resource_name_map=resource_name_map,
-            sku_colors=_sku_color_map(selected_skus),
-            inbound_moves=data.moves,
-        )
-    else:
-        logger.warning(
-            "tk_stock_distrib 속성이 없습니다. "
-            "Google Sheets에 'tk_stock_distrib' 시트가 있는지 확인하거나, "
-            "Streamlit 세션을 새로고침(Ctrl+R)해주세요."
         )
 
-    # ========================================
-    # 13단계: Amazon US 판매 vs 재고 차트
-    # ========================================
-    _render_amazon_section(
-        selected_centers=selected_centers,
-        snapshot_df=snapshot_df,
-        selected_skus=selected_skus,
-        timeline_for_chart=timeline_for_chart,
-        start_ts=start_ts,
-        end_ts=end_ts,
-        today_norm=today_norm,
-        moves_df=data.moves,
-        lookback_days=lookback_days,
-        events=events,
-        use_cons_forecast=use_cons_forecast,
-        lag_days=int(lag_days),
-        horizon_days=int(proj_days_for_build),
-        latest_snapshot_dt=latest_snapshot_dt,
-    )
+        # ========================================
+        # 재고 대시보드: 로트 상세
+        # ========================================
+        # center_latest_dates 계산
+        center_latest_series = (
+            filter_by_centers(snapshot_df, selected_centers).groupby("center")["date"].max()
+        )
+        center_latest_dates = {
+            center: ts.normalize()
+            for center, ts in center_latest_series.items()
+            if pd.notna(ts)
+        }
 
-    # ========================================
-    # 14단계: SHOPEE 대시보드
-    # ========================================
-    # SHOPEE 센터 목록 (필터와 무관)
-    shopee_centers = ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]
+        visible_skus = (
+            display_df.get("SKU", pd.Series(dtype=str))
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
 
-    # 스냅샷에 SHOPEE 센터 데이터가 있는지 확인
-    has_shopee_data = False
-    if not snapshot_df.empty and "center" in snapshot_df.columns:
-        snapshot_centers = snapshot_df["center"].dropna().astype(str).str.strip().unique()
-        has_shopee_data = any(c in shopee_centers for c in snapshot_centers)
+        render_lot_details(
+            visible_skus=visible_skus,
+            selected_centers=selected_centers,
+            center_latest_dates=center_latest_dates,
+            latest_dt=latest_dt,
+        )
 
-    if has_shopee_data:
-        st.divider()
-        # st.expander로 토글 가능하게 만들기 (기본값: 열림)
-        with st.expander("🛍️ SHOPEE", expanded=True):
-            st.subheader("SHOPEE 대시보드")
+    with tab2:
+        # ========================================
+        # 센터별 대시보드: 태광KR 가상창고
+        # ========================================
+        # 태광KR 가상창고(운영/키핑) 배분 데이터를 구버전 세션에서도 안전하게 조회
+        taekwang_stock_df = getattr(data, "tk_stock_distrib", None)
 
-            # SHOPEE KPI 설정 토글
-            shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
-
-            # KPI 데이터 빌드 (현재 + 이전 스냅샷)
-            shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
-                snapshot_df=snapshot_df,
+        if taekwang_stock_df is not None:
+            render_taekwang_stock_dashboard(
+                taekwang_stock_df,
                 selected_skus=selected_skus,
-                shopee_centers=shopee_centers,
-                show_delta=shopee_show_delta,
-            )
-
-            # KPI 카드 렌더링
-            render_shopee_snapshot_kpis(
-                shopee_kpi_df,
-                selected_skus=selected_skus,
-                sku_colors=_sku_color_map(selected_skus),
                 resource_name_map=resource_name_map,
-                show_delta=shopee_show_delta,
-                previous_df=shopee_previous_df,
-                max_cols=4,
+                sku_colors=_sku_color_map(selected_skus),
+                inbound_moves=data.moves,
+            )
+        else:
+            logger.warning(
+                "tk_stock_distrib 속성이 없습니다. "
+                "Google Sheets에 'tk_stock_distrib' 시트가 있는지 확인하거나, "
+                "Streamlit 세션을 새로고침(Ctrl+R)해주세요."
             )
 
-    # ========================================
-    # 15단계: 입고 예정 및 WIP 테이블
-    # ========================================
-    render_inbound_and_wip_tables(
-        moves=data.moves,
-        snapshot=snapshot_df,
-        selected_centers=selected_centers,
-        selected_skus=selected_skus,
-        start=start_ts,
-        end=end_ts,
-        lag_days=lag_days,
-        today=today_norm,
-    )
+        # ========================================
+        # 센터별 대시보드: Amazon US
+        # ========================================
+        _render_amazon_section(
+            selected_centers=selected_centers,
+            snapshot_df=snapshot_df,
+            selected_skus=selected_skus,
+            timeline_for_chart=timeline_for_chart,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            today_norm=today_norm,
+            moves_df=data.moves,
+            lookback_days=lookback_days,
+            events=events,
+            use_cons_forecast=use_cons_forecast,
+            lag_days=int(lag_days),
+            horizon_days=int(proj_days_for_build),
+            latest_snapshot_dt=latest_snapshot_dt,
+        )
 
-    # ========================================
-    # 16단계: 재고 현황 테이블
-    # ========================================
-    display_df = render_inventory_table(
-        snapshot=snapshot_df,
-        selected_centers=selected_centers,
-        latest_dt=latest_dt,
-        resource_name_map=resource_name_map,
-    )
+        # ========================================
+        # 센터별 대시보드: SHOPEE
+        # ========================================
+        # SHOPEE 센터 목록 (필터와 무관)
+        shopee_centers = ["SBSMY", "SBSSG", "SBSTH", "SBSPH"]
 
-    # ========================================
-    # 17단계: 로트 상세 (단일 SKU 선택 시)
-    # ========================================
-    # center_latest_dates 계산 (재고 테이블 함수 내부에서 이미 계산됨)
-    center_latest_series = (
-        filter_by_centers(snapshot_df, selected_centers).groupby("center")["date"].max()
-    )
-    center_latest_dates = {
-        center: ts.normalize()
-        for center, ts in center_latest_series.items()
-        if pd.notna(ts)
-    }
+        # 스냅샷에 SHOPEE 센터 데이터가 있는지 확인
+        has_shopee_data = False
+        if not snapshot_df.empty and "center" in snapshot_df.columns:
+            snapshot_centers = snapshot_df["center"].dropna().astype(str).str.strip().unique()
+            has_shopee_data = any(c in shopee_centers for c in snapshot_centers)
 
-    visible_skus = (
-        display_df.get("SKU", pd.Series(dtype=str))
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
+        if has_shopee_data:
+            st.divider()
+            # st.expander로 토글 가능하게 만들기 (기본값: 열림)
+            with st.expander("🛍️ SHOPEE", expanded=True):
+                st.subheader("SHOPEE 대시보드")
 
-    render_lot_details(
-        visible_skus=visible_skus,
-        selected_centers=selected_centers,
-        center_latest_dates=center_latest_dates,
-        latest_dt=latest_dt,
-    )
+                # SHOPEE KPI 설정 토글
+                shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
+
+                # KPI 데이터 빌드 (현재 + 이전 스냅샷)
+                shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
+                    snapshot_df=snapshot_df,
+                    selected_skus=selected_skus,
+                    shopee_centers=shopee_centers,
+                    show_delta=shopee_show_delta,
+                )
+
+                # KPI 카드 렌더링
+                render_shopee_snapshot_kpis(
+                    shopee_kpi_df,
+                    selected_skus=selected_skus,
+                    sku_colors=_sku_color_map(selected_skus),
+                    resource_name_map=resource_name_map,
+                    show_delta=shopee_show_delta,
+                    previous_df=shopee_previous_df,
+                    max_cols=4,
+                )
 
     # ========================================
     # 18단계: AI 어시스턴트 (1.5단계 하이브리드)
