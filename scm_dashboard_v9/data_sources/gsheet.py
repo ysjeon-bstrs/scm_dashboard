@@ -99,17 +99,15 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
 
         if wip_df is not None and not wip_df.empty:
             logger.info(f"WIP data merged: {len(wip_df)} rows")
-            st.success(f"WIP {len(wip_df)}건 반영 완료")
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
         logger.warning(f"Failed to load WIP data: {exc}", exc_info=True)
         st.warning(f"WIP 불러오기 실패: {exc}")
 
     # ========================================
-    # 5단계: 성공 메시지 표시
+    # 5단계: 로드 완료 로깅
     # ========================================
     logger.info("Google Sheets data loaded successfully")
-    st.success("Google Sheets 데이터가 업데이트되었습니다.")
 
     # 태광KR 가상창고 배분 시트를 정규화하여 대시보드에서 사용할 수 있도록 저장
     tk_stock_distrib = normalize_tk_stock_distrib(df_tk_stock)

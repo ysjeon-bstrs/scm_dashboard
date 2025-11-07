@@ -198,6 +198,12 @@ def _render_sidebar_filters(
 
     # 사이드바 필터 렌더링
     with st.sidebar:
+        # 데이터 새로고침 버튼
+        if st.button("🔄 Google Sheets 데이터 새로고침", key="sidebar_gsheet_refresh", use_container_width=True):
+            st.session_state["_trigger_refresh"] = True
+            st.rerun()
+
+        st.divider()
         st.header("필터")
         st.caption(
             "기본값: 센터 태광KR·AMZUS / SKU BA00021·BA00022·BA00047 / 기간 오늘−20일 ~ +30일."
@@ -664,7 +670,6 @@ def main() -> None:
     # ========================================
     st.set_page_config(page_title="SCM Dashboard v9", layout="wide")
     st.title("SCM Dashboard v9")
-    st.caption("v5를 기반으로 모듈화를 강화한 버전")
 
     # ========================================
     # 2단계: 데이터 로드 (세션 관리)
