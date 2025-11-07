@@ -229,6 +229,245 @@ def prepare_data_context(
     return stats
 
 
+def detect_stockout_risks(
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame,
+    timeline_df: pd.DataFrame = None,
+    days_threshold: int = 7
+) -> list[dict]:
+    """
+    품절 임박 SKU 감지
+
+    Args:
+        snapshot_df: 현재 재고 데이터
+        moves_df: 판매 데이터
+        timeline_df: 예측 데이터 (옵션)
+        days_threshold: 품절 임박 기준 (일)
+
+    Returns:
+        품절 임박 SKU 리스트
+    """
+    risks = []
+
+    if snapshot_df.empty or moves_df is None or moves_df.empty:
+        return risks
+
+    try:
+        # 최근 7일 평균 판매량 계산
+        moves_recent = moves_df.copy()
+        if "date" in moves_recent.columns:
+            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
+            cutoff_date = moves_recent["date"].max() - pd.Timedelta(days=7)
+            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+
+            # 판매만 필터 (CustomerShipment 등)
+            if "move_type" in moves_recent.columns:
+                sales_types = ["CustomerShipment", "출고", "판매"]
+                moves_recent = moves_recent[moves_recent["move_type"].isin(sales_types)]
+
+            # SKU별 일평균 판매량
+            if "resource_code" in moves_recent.columns and "quantity" in moves_recent.columns:
+                daily_sales = moves_recent.groupby("resource_code")["quantity"].sum() / 7
+
+                # 현재 재고와 비교
+                for sku in daily_sales.index:
+                    if daily_sales[sku] <= 0:
+                        continue
+
+                    current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
+                    days_left = current_stock / daily_sales[sku]
+
+                    if 0 < days_left <= days_threshold:
+                        risks.append({
+                            "sku": sku,
+                            "current_stock": current_stock,
+                            "daily_sales": daily_sales[sku],
+                            "days_left": days_left,
+                            "severity": "high" if days_left <= 3 else "medium"
+                        })
+
+        # 심각도 순으로 정렬
+        risks.sort(key=lambda x: x["days_left"])
+
+    except Exception as e:
+        st.warning(f"품절 위험 감지 오류: {e}")
+
+    return risks[:5]  # 상위 5개만
+
+
+def detect_anomalies(
+    snapshot_df: pd.DataFrame,
+    timeline_df: pd.DataFrame = None,
+    threshold: float = 0.5
+) -> list[dict]:
+    """
+    재고 이상치 감지 (급증/급감)
+
+    Args:
+        snapshot_df: 현재 재고
+        timeline_df: 시계열 데이터
+        threshold: 변화율 임계값 (50% = 0.5)
+
+    Returns:
+        이상치 SKU 리스트
+    """
+    anomalies = []
+
+    if timeline_df is None or timeline_df.empty:
+        return anomalies
+
+    try:
+        timeline = timeline_df.copy()
+        if "date" in timeline.columns and "resource_code" in timeline.columns:
+            timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce")
+
+            # 실제 데이터만
+            if "is_forecast" in timeline.columns:
+                timeline = timeline[timeline["is_forecast"] == False]
+
+            # SKU별 최근 7일 vs 이전 7일 비교
+            latest_date = timeline["date"].max()
+            recent_7days = timeline[timeline["date"] >= latest_date - pd.Timedelta(days=7)]
+            prev_7days = timeline[
+                (timeline["date"] >= latest_date - pd.Timedelta(days=14)) &
+                (timeline["date"] < latest_date - pd.Timedelta(days=7))
+            ]
+
+            for sku in timeline["resource_code"].unique():
+                recent_avg = recent_7days[recent_7days["resource_code"] == sku]["stock_qty"].mean()
+                prev_avg = prev_7days[prev_7days["resource_code"] == sku]["stock_qty"].mean()
+
+                if pd.notna(recent_avg) and pd.notna(prev_avg) and prev_avg > 0:
+                    change_rate = (recent_avg - prev_avg) / prev_avg
+
+                    if abs(change_rate) >= threshold:
+                        anomalies.append({
+                            "sku": sku,
+                            "recent_avg": recent_avg,
+                            "prev_avg": prev_avg,
+                            "change_rate": change_rate,
+                            "type": "급증" if change_rate > 0 else "급감"
+                        })
+
+            # 변화율 절댓값 순으로 정렬
+            anomalies.sort(key=lambda x: abs(x["change_rate"]), reverse=True)
+
+    except Exception as e:
+        st.warning(f"이상치 감지 오류: {e}")
+
+    return anomalies[:3]  # 상위 3개만
+
+
+def check_data_quality(
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame = None,
+    timeline_df: pd.DataFrame = None
+) -> list[dict]:
+    """
+    데이터 품질 이슈 감지
+
+    Returns:
+        품질 이슈 리스트
+    """
+    issues = []
+
+    try:
+        # 1. 음수 재고 체크
+        if "stock_qty" in snapshot_df.columns:
+            negative_stock = snapshot_df[snapshot_df["stock_qty"] < 0]
+            if not negative_stock.empty:
+                issues.append({
+                    "type": "negative_stock",
+                    "severity": "high",
+                    "message": f"⚠️ 음수 재고 발견: {len(negative_stock)}개 SKU",
+                    "details": negative_stock[["resource_code", "center", "stock_qty"]].head(3).to_dict("records")
+                })
+
+        # 2. 날짜 누락 체크 (moves_df)
+        if moves_df is not None and not moves_df.empty and "date" in moves_df.columns:
+            moves_df_copy = moves_df.copy()
+            moves_df_copy["date"] = pd.to_datetime(moves_df_copy["date"], errors="coerce")
+            null_dates = moves_df_copy["date"].isna().sum()
+            if null_dates > 0:
+                issues.append({
+                    "type": "missing_dates",
+                    "severity": "medium",
+                    "message": f"⚠️ 판매 데이터 날짜 누락: {null_dates}건",
+                    "details": None
+                })
+
+        # 3. 최신 데이터 확인
+        if "date" in snapshot_df.columns:
+            snapshot_df_copy = snapshot_df.copy()
+            snapshot_df_copy["date"] = pd.to_datetime(snapshot_df_copy["date"], errors="coerce")
+            latest_date = snapshot_df_copy["date"].max()
+            if pd.notna(latest_date):
+                from datetime import datetime, timedelta
+                days_old = (datetime.now() - latest_date).days
+                if days_old > 1:
+                    issues.append({
+                        "type": "stale_data",
+                        "severity": "low",
+                        "message": f"ℹ️ 재고 데이터가 {days_old}일 전입니다 (최신: {latest_date.strftime('%Y-%m-%d')})",
+                        "details": None
+                    })
+
+    except Exception as e:
+        st.warning(f"데이터 품질 체크 오류: {e}")
+
+    return issues
+
+
+def render_proactive_insights(
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame,
+    timeline_df: pd.DataFrame
+):
+    """
+    프로액티브 인사이트 UI 렌더링
+    """
+    # 인사이트 감지
+    stockout_risks = detect_stockout_risks(snapshot_df, moves_df, timeline_df)
+    anomalies = detect_anomalies(snapshot_df, timeline_df)
+    quality_issues = check_data_quality(snapshot_df, moves_df, timeline_df)
+
+    # 인사이트가 하나라도 있으면 표시
+    if stockout_risks or anomalies or quality_issues:
+        with st.expander("🔔 주목할 이슈", expanded=True):
+            col1, col2, col3 = st.columns(3)
+
+            # 품절 위험
+            with col1:
+                if stockout_risks:
+                    st.markdown("**⚠️ 품절 임박**")
+                    for risk in stockout_risks[:3]:
+                        severity_icon = "🔴" if risk["severity"] == "high" else "🟡"
+                        st.caption(
+                            f"{severity_icon} {risk['sku']}: "
+                            f"{risk['days_left']:.1f}일 남음 "
+                            f"(재고 {risk['current_stock']:.0f}개)"
+                        )
+
+            # 이상치
+            with col2:
+                if anomalies:
+                    st.markdown("**📊 급격한 변화**")
+                    for anomaly in anomalies[:3]:
+                        icon = "📈" if anomaly["type"] == "급증" else "📉"
+                        st.caption(
+                            f"{icon} {anomaly['sku']}: "
+                            f"{anomaly['type']} {abs(anomaly['change_rate'])*100:.0f}% "
+                            f"({anomaly['prev_avg']:.0f}→{anomaly['recent_avg']:.0f})"
+                        )
+
+            # 데이터 품질
+            with col3:
+                if quality_issues:
+                    st.markdown("**🔍 데이터 이슈**")
+                    for issue in quality_issues[:3]:
+                        st.caption(issue["message"])
+
+
 def ask_ai(question: str, data_context: str) -> str:
     """
     Gemini에게 질문하기
@@ -278,6 +517,64 @@ def ask_ai(question: str, data_context: str) -> str:
         return f"⚠️ 오류 발생: {e}\n\n제공된 데이터:\n{data_context}"
 
 
+def suggest_followup_questions(question: str, answer: str, data_context: str) -> list[str]:
+    """
+    답변을 기반으로 후속 질문 제안
+
+    Args:
+        question: 원래 질문
+        answer: AI 답변
+        data_context: 데이터 컨텍스트 (간략 버전)
+
+    Returns:
+        후속 질문 3개
+    """
+    try:
+        genai.configure(api_key=st.secrets["gemini"]["api_key"])
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+        # 데이터 컨텍스트 요약 (토큰 절약)
+        context_summary = data_context[:500] + "..." if len(data_context) > 500 else data_context
+
+        prompt = f"""당신은 SCM 재고 관리 전문가입니다.
+
+사용자가 다음 질문을 했고, 답변을 받았습니다:
+
+[질문] {question}
+[답변] {answer}
+
+[이용 가능한 데이터]
+{context_summary}
+
+이제 사용자가 궁금해할 만한 **후속 질문 3개**를 제안하세요.
+
+**규칙:**
+1. 원래 질문과 관련되고 자연스럽게 이어지는 질문
+2. 제공된 데이터로 답변 가능한 질문만 제안
+3. 각 질문은 15자 이내로 간결하게
+4. 구체적인 SKU/센터/날짜가 있으면 포함
+5. 한 줄에 하나씩, 번호 없이 작성
+
+예시:
+BA00021의 판매 추세는?
+다음주 예상 재고는?
+어느 센터가 재고가 부족한가요?
+
+후속 질문:"""
+
+        response = model.generate_content(prompt)
+        questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
+        return questions[:3]  # 상위 3개만
+
+    except Exception as e:
+        # 실패 시 기본 질문 반환
+        return [
+            "센터별 재고 분포는?",
+            "재고가 부족한 SKU는?",
+            "최근 판매 추세는?"
+        ]
+
+
 def render_simple_chatbot_tab(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame,
@@ -310,12 +607,31 @@ def render_simple_chatbot_tab(
 
     st.caption(f"📊 필터링된 데이터: {len(snap):,}행 (센터 {snap['center'].nunique()}곳, SKU {snap['resource_code'].nunique()}개)")
 
+    # 프로액티브 인사이트 표시
+    render_proactive_insights(snap, moves_df, timeline_df)
+
+    st.divider()
+
+    # 세션 상태 초기화
+    if "last_question" not in st.session_state:
+        st.session_state.last_question = ""
+    if "last_answer" not in st.session_state:
+        st.session_state.last_answer = ""
+    if "last_context" not in st.session_state:
+        st.session_state.last_context = ""
+
     # 질문 입력
     question = st.text_input(
         "질문을 입력하세요",
         placeholder="예: 총 재고는? / BA00021은 어느 센터에? / 재고가 가장 많은 센터는?",
-        key="simple_q"
+        key="simple_q",
+        value=st.session_state.get("pending_question", "")
     )
+
+    # pending_question이 있으면 자동 실행 후 클리어
+    if "pending_question" in st.session_state and st.session_state.pending_question:
+        st.session_state.pop("pending_question")
+        st.rerun()
 
     if st.button("💬 질문하기", type="primary", key="simple_ask") and question:
         with st.spinner("🤔 생각 중..."):
@@ -325,13 +641,36 @@ def render_simple_chatbot_tab(
             # AI에게 질문
             answer = ask_ai(question, context)
 
-            # 답변 표시
-            st.markdown("### 📊 답변")
-            st.markdown(answer)
+            # 세션에 저장
+            st.session_state.last_question = question
+            st.session_state.last_answer = answer
+            st.session_state.last_context = context
 
-            # 컨텍스트 확인 (디버깅용)
-            with st.expander("🔍 AI가 본 데이터"):
-                st.text(context)
+    # 답변 표시 (세션에서 로드)
+    if st.session_state.last_answer:
+        st.markdown("### 📊 답변")
+        st.markdown(st.session_state.last_answer)
+
+        # 후속 질문 제안
+        with st.spinner("💡 후속 질문 제안 중..."):
+            followup_questions = suggest_followup_questions(
+                st.session_state.last_question,
+                st.session_state.last_answer,
+                st.session_state.last_context
+            )
+
+        if followup_questions:
+            st.caption("**💬 이런 것도 궁금하신가요?**")
+            cols = st.columns(3)
+            for i, fq in enumerate(followup_questions):
+                with cols[i]:
+                    if st.button(fq, key=f"followup_{i}"):
+                        st.session_state.pending_question = fq
+                        st.rerun()
+
+        # 컨텍스트 확인 (디버깅용)
+        with st.expander("🔍 AI가 본 데이터"):
+            st.text(st.session_state.last_context)
 
     # 예시 질문
     st.divider()
