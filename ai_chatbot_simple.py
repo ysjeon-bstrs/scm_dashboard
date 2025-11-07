@@ -577,6 +577,78 @@ BA00021의 판매 추세는?
         ]
 
 
+def extract_entities_from_question(question: str, snapshot_df: pd.DataFrame, moves_df: pd.DataFrame = None) -> dict:
+    """
+    질문에서 엔티티 추출 (SKU, 센터, 날짜 등)
+
+    Returns:
+        {"skus": [list], "centers": [list], "date_range": tuple or None}
+    """
+    import re
+    from datetime import datetime, timedelta
+
+    entities = {
+        "skus": [],
+        "centers": [],
+        "date_range": None
+    }
+
+    # 1. SKU 추출 (BA00021 형식)
+    sku_pattern = r'\b[A-Z]{2}\d{5}\b'
+    found_skus = re.findall(sku_pattern, question)
+    if found_skus and "resource_code" in snapshot_df.columns:
+        # 실제 존재하는 SKU만
+        valid_skus = snapshot_df["resource_code"].unique()
+        entities["skus"] = [sku for sku in found_skus if sku in valid_skus]
+
+    # 2. 센터 추출
+    question_upper = question.upper()
+    if "center" in snapshot_df.columns:
+        all_centers = snapshot_df["center"].unique()
+        for center in all_centers:
+            if center in question_upper or center.lower() in question.lower():
+                entities["centers"].append(center)
+
+    # AMZUS, KR01 등 흔한 패턴
+    center_patterns = [r'\bAMZUS\b', r'\bAMZKR\b', r'\bKR0[1-9]\b']
+    for pattern in center_patterns:
+        matches = re.findall(pattern, question_upper)
+        entities["centers"].extend(matches)
+
+    entities["centers"] = list(set(entities["centers"]))  # 중복 제거
+
+    # 3. 날짜 추출 (상대적 표현)
+    today = datetime.now()
+    question_lower = question.lower()
+
+    if "오늘" in question_lower:
+        entities["date_range"] = (today, today)
+    elif "어제" in question_lower:
+        yesterday = today - timedelta(days=1)
+        entities["date_range"] = (yesterday, yesterday)
+    elif "최근 7일" in question_lower or "지난 일주일" in question_lower:
+        entities["date_range"] = (today - timedelta(days=7), today)
+    elif "최근 30일" in question_lower or "지난 한달" in question_lower:
+        entities["date_range"] = (today - timedelta(days=30), today)
+    elif "이번주" in question_lower:
+        # 이번 주 월요일부터
+        weekday = today.weekday()
+        monday = today - timedelta(days=weekday)
+        entities["date_range"] = (monday, today)
+
+    # 절대 날짜 패턴 (YYYY-MM-DD)
+    date_pattern = r'\d{4}-\d{2}-\d{2}'
+    date_matches = re.findall(date_pattern, question)
+    if date_matches:
+        try:
+            date_obj = datetime.strptime(date_matches[0], '%Y-%m-%d')
+            entities["date_range"] = (date_obj, date_obj)
+        except:
+            pass
+
+    return entities
+
+
 def analyze_question_for_chart(question: str) -> dict:
     """
     질문을 분석해서 차트 필요 여부 및 타입 판단
@@ -818,28 +890,74 @@ def render_simple_chatbot_tab(
 
     if st.button("💬 질문하기", type="primary", key="simple_ask") and question:
         with st.spinner("🤔 생각 중..."):
-            # 데이터 컨텍스트 준비 (판매/입고 + 시계열 예측 데이터 포함!)
-            context = prepare_data_context(snap, moves_df, timeline_df, max_rows=50)
+            # 질문에서 엔티티 추출 (SKU, 센터, 날짜)
+            entities = extract_entities_from_question(question, snap, moves_df)
+
+            # 자동 필터링
+            filtered_snap = snap.copy()
+            filtered_moves = moves_df.copy() if moves_df is not None else None
+            filtered_timeline = timeline_df.copy() if timeline_df is not None else None
+
+            filter_applied = False
+            filter_msg = ""
+
+            if entities["skus"]:
+                filtered_snap = filtered_snap[filtered_snap["resource_code"].isin(entities["skus"])]
+                if filtered_timeline is not None and "resource_code" in filtered_timeline.columns:
+                    filtered_timeline = filtered_timeline[filtered_timeline["resource_code"].isin(entities["skus"])]
+                filter_msg += f"SKU: {', '.join(entities['skus'])} "
+                filter_applied = True
+
+            if entities["centers"]:
+                filtered_snap = filtered_snap[filtered_snap["center"].isin(entities["centers"])]
+                if filtered_moves is not None and "center" in filtered_moves.columns:
+                    filtered_moves = filtered_moves[filtered_moves["center"].isin(entities["centers"])]
+                if filtered_timeline is not None and "center" in filtered_timeline.columns:
+                    filtered_timeline = filtered_timeline[filtered_timeline["center"].isin(entities["centers"])]
+                filter_msg += f"센터: {', '.join(entities['centers'])} "
+                filter_applied = True
+
+            if entities["date_range"] and filtered_moves is not None:
+                start_date, end_date = entities["date_range"]
+                if "date" in filtered_moves.columns:
+                    filtered_moves["date"] = pd.to_datetime(filtered_moves["date"], errors="coerce")
+                    filtered_moves = filtered_moves[
+                        (filtered_moves["date"] >= start_date) &
+                        (filtered_moves["date"] <= end_date)
+                    ]
+                filter_msg += f"기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+                filter_applied = True
+
+            if filter_applied:
+                st.info(f"🎯 자동 필터 적용: {filter_msg}")
+
+            # 데이터 컨텍스트 준비 (필터링된 데이터 사용!)
+            context = prepare_data_context(filtered_snap, filtered_moves, filtered_timeline, max_rows=50)
 
             # AI에게 질문
             answer = ask_ai(question, context)
 
-            # 세션에 저장
+            # 세션에 저장 (필터링된 데이터도 함께)
             st.session_state.last_question = question
             st.session_state.last_answer = answer
             st.session_state.last_context = context
+            st.session_state.last_filtered_snap = filtered_snap
+            st.session_state.last_filtered_timeline = filtered_timeline
 
     # 답변 표시 (세션에서 로드)
     if st.session_state.last_answer:
         st.markdown("### 📊 답변")
         st.markdown(st.session_state.last_answer)
 
-        # 차트 자동 생성
+        # 차트 자동 생성 (필터링된 데이터 사용)
+        chart_snap = st.session_state.get("last_filtered_snap", snap)
+        chart_timeline = st.session_state.get("last_filtered_timeline", timeline_df)
+
         chart_fig = generate_chart(
             st.session_state.last_question,
-            snap,
+            chart_snap,
             moves_df,
-            timeline_df
+            chart_timeline
         )
         if chart_fig:
             st.plotly_chart(chart_fig, use_container_width=True)
