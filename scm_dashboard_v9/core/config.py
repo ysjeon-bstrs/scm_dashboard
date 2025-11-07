@@ -25,8 +25,39 @@ except ImportError:
 # Google Sheets 설정
 # ============================================================
 
-# Google Sheets 문서 ID (환경변수 우선, 없으면 기본값)
-GSHEET_ID = os.getenv("GSHEET_ID", "1RYjKW2UDJ2kWJLAqQH26eqx2-r9Xb0_qE_hfwu9WIj8")
+# Google Sheets 문서 ID
+# 환경변수 또는 Streamlit secrets에서 로드 (기본값 없음)
+def _get_gsheet_id() -> str:
+    """Google Sheets ID를 환경변수 또는 Streamlit secrets에서 로드합니다.
+
+    Returns:
+        str: Google Sheets 문서 ID
+
+    Raises:
+        ValueError: GSHEET_ID가 설정되지 않은 경우
+    """
+    # 1. Streamlit secrets 시도
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "GSHEET_ID" in st.secrets:
+            return st.secrets["GSHEET_ID"]
+    except (ImportError, FileNotFoundError, KeyError):
+        pass
+
+    # 2. 환경변수 확인
+    gsheet_id = os.getenv("GSHEET_ID")
+    if gsheet_id:
+        return gsheet_id
+
+    # 3. 설정되지 않은 경우 에러
+    raise ValueError(
+        "GSHEET_ID가 설정되지 않았습니다. "
+        "다음 중 하나를 설정해주세요:\n"
+        "  1. 환경변수: export GSHEET_ID='your-sheet-id' 또는 .env 파일에 추가\n"
+        "  2. Streamlit secrets: .streamlit/secrets.toml에 GSHEET_ID 추가"
+    )
+
+GSHEET_ID = _get_gsheet_id()
 
 
 # ============================================================
