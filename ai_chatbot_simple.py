@@ -8,6 +8,8 @@ AI 챗봇 단순 버전: 벡터 검색 없이 직접 데이터 전달
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
+import plotly.express as px
+import plotly.graph_objects as go
 
 
 def prepare_data_context(
@@ -575,6 +577,187 @@ BA00021의 판매 추세는?
         ]
 
 
+def analyze_question_for_chart(question: str) -> dict:
+    """
+    질문을 분석해서 차트 필요 여부 및 타입 판단
+
+    Returns:
+        {"need_chart": bool, "chart_type": str, "entities": dict}
+    """
+    question_lower = question.lower()
+
+    # 차트가 필요한 키워드
+    chart_keywords = ["추세", "변화", "비교", "분포", "그래프", "차트", "시각화", "트렌드"]
+    need_chart = any(kw in question_lower for kw in chart_keywords)
+
+    # 차트 타입 판단
+    chart_type = None
+    if "추세" in question_lower or "변화" in question_lower or "트렌드" in question_lower:
+        chart_type = "line"  # 시계열
+    elif "비교" in question_lower or "분포" in question_lower or "센터별" in question_lower or "sku별" in question_lower:
+        chart_type = "bar"  # 바 차트
+    elif "비율" in question_lower or "점유" in question_lower:
+        chart_type = "pie"  # 파이 차트
+
+    # 엔티티 추출 (간단 버전)
+    entities = {
+        "has_sku": bool([s for s in question if s.isupper() and len(s) >= 6]),  # BA00021 같은 패턴
+        "has_center": any(c in question_lower for c in ["amz", "kr0", "센터"]),
+        "time_related": any(t in question_lower for t in ["일", "주", "월", "날짜", "기간", "어제", "오늘"])
+    }
+
+    return {
+        "need_chart": need_chart or chart_type is not None,
+        "chart_type": chart_type,
+        "entities": entities
+    }
+
+
+def generate_chart(
+    question: str,
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame = None,
+    timeline_df: pd.DataFrame = None
+):
+    """
+    질문에 맞는 차트 자동 생성
+
+    Returns:
+        plotly figure 또는 None
+    """
+    try:
+        analysis = analyze_question_for_chart(question)
+
+        if not analysis["need_chart"]:
+            return None
+
+        chart_type = analysis["chart_type"]
+        entities = analysis["entities"]
+
+        # 1. 시계열 차트 (추세, 변화)
+        if chart_type == "line" and timeline_df is not None and not timeline_df.empty:
+            timeline = timeline_df.copy()
+            if "date" in timeline.columns and "stock_qty" in timeline.columns:
+                timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce")
+                timeline = timeline.sort_values("date")
+
+                # 특정 SKU가 언급되었으면 그것만
+                if entities["has_sku"] and "resource_code" in timeline.columns:
+                    # 질문에서 SKU 추출 (간단 버전)
+                    import re
+                    sku_pattern = r'\b[A-Z]{2}\d{5}\b'
+                    skus = re.findall(sku_pattern, question)
+                    if skus:
+                        timeline = timeline[timeline["resource_code"].isin(skus)]
+
+                # 실제 vs 예측 구분
+                if "is_forecast" in timeline.columns:
+                    fig = go.Figure()
+
+                    actual = timeline[timeline["is_forecast"] == False]
+                    forecast = timeline[timeline["is_forecast"] == True]
+
+                    if "resource_code" in timeline.columns:
+                        for sku in timeline["resource_code"].unique()[:3]:  # 최대 3개
+                            sku_actual = actual[actual["resource_code"] == sku]
+                            sku_forecast = forecast[forecast["resource_code"] == sku]
+
+                            if not sku_actual.empty:
+                                fig.add_trace(go.Scatter(
+                                    x=sku_actual["date"],
+                                    y=sku_actual["stock_qty"],
+                                    name=f"{sku} (실제)",
+                                    mode="lines+markers"
+                                ))
+
+                            if not sku_forecast.empty:
+                                fig.add_trace(go.Scatter(
+                                    x=sku_forecast["date"],
+                                    y=sku_forecast["stock_qty"],
+                                    name=f"{sku} (예측)",
+                                    mode="lines",
+                                    line=dict(dash="dash")
+                                ))
+                    else:
+                        fig.add_trace(go.Scatter(x=actual["date"], y=actual["stock_qty"], name="실제"))
+                        if not forecast.empty:
+                            fig.add_trace(go.Scatter(
+                                x=forecast["date"],
+                                y=forecast["stock_qty"],
+                                name="예측",
+                                line=dict(dash="dash")
+                            ))
+
+                    fig.update_layout(
+                        title="재고 추세",
+                        xaxis_title="날짜",
+                        yaxis_title="재고량",
+                        height=400
+                    )
+                    return fig
+
+                else:
+                    fig = px.line(
+                        timeline,
+                        x="date",
+                        y="stock_qty",
+                        color="resource_code" if "resource_code" in timeline.columns else None,
+                        title="재고 추세"
+                    )
+                    fig.update_layout(height=400)
+                    return fig
+
+        # 2. 바 차트 (센터별, SKU별 비교)
+        elif chart_type == "bar":
+            if "센터" in question or "center" in question.lower():
+                # 센터별 재고
+                center_stock = snapshot_df.groupby("center")["stock_qty"].sum().reset_index()
+                center_stock = center_stock.sort_values("stock_qty", ascending=False)
+
+                fig = px.bar(
+                    center_stock,
+                    x="center",
+                    y="stock_qty",
+                    title="센터별 재고",
+                    labels={"center": "센터", "stock_qty": "재고량"}
+                )
+                fig.update_layout(height=400)
+                return fig
+
+            elif "sku" in question.lower() or entities["has_sku"]:
+                # SKU별 재고 (상위 10개)
+                sku_stock = snapshot_df.groupby("resource_code")["stock_qty"].sum().reset_index()
+                sku_stock = sku_stock.sort_values("stock_qty", ascending=False).head(10)
+
+                fig = px.bar(
+                    sku_stock,
+                    x="resource_code",
+                    y="stock_qty",
+                    title="SKU별 재고 (상위 10개)",
+                    labels={"resource_code": "SKU", "stock_qty": "재고량"}
+                )
+                fig.update_layout(height=400)
+                return fig
+
+        # 3. 파이 차트 (비율, 점유율)
+        elif chart_type == "pie":
+            center_stock = snapshot_df.groupby("center")["stock_qty"].sum().reset_index()
+
+            fig = px.pie(
+                center_stock,
+                names="center",
+                values="stock_qty",
+                title="센터별 재고 비율"
+            )
+            fig.update_layout(height=400)
+            return fig
+
+    except Exception as e:
+        st.warning(f"차트 생성 오류: {e}")
+
+    return None
+
+
 def render_simple_chatbot_tab(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame,
@@ -650,6 +833,16 @@ def render_simple_chatbot_tab(
     if st.session_state.last_answer:
         st.markdown("### 📊 답변")
         st.markdown(st.session_state.last_answer)
+
+        # 차트 자동 생성
+        chart_fig = generate_chart(
+            st.session_state.last_question,
+            snap,
+            moves_df,
+            timeline_df
+        )
+        if chart_fig:
+            st.plotly_chart(chart_fig, use_container_width=True)
 
         # 후속 질문 제안
         with st.spinner("💡 후속 질문 제안 중..."):
