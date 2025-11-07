@@ -854,21 +854,21 @@ def main() -> None:
         # ========================================
         # 재고 대시보드: 요약 KPI
         # ========================================
-        st.subheader("요약 KPI")
-        render_sku_summary_cards(
-            snapshot_df,
-            data.moves,
-            centers=selected_centers,
-            skus=selected_skus,
-            today=today_norm,
-            latest_snapshot=latest_dt,
-            lag_days=int(lag_days),
-            start=start_ts,
-            end=end_ts,
-            lookback_days=lookback_days,
-            horizon_pad_days=CONFIG.timeline.horizon_pad_days,
-            events=events,
-        )
+        with st.expander("📊 요약 KPI", expanded=True):
+            render_sku_summary_cards(
+                snapshot_df,
+                data.moves,
+                centers=selected_centers,
+                skus=selected_skus,
+                today=today_norm,
+                latest_snapshot=latest_dt,
+                lag_days=int(lag_days),
+                start=start_ts,
+                end=end_ts,
+                lookback_days=lookback_days,
+                horizon_pad_days=CONFIG.timeline.horizon_pad_days,
+                events=events,
+            )
 
         st.divider()
 
