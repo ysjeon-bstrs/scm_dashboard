@@ -42,24 +42,10 @@ def ensure_data() -> Optional[LoadedData]:
     # ========================================
     # 2단계: 데이터 소스 UI 렌더링
     # ========================================
-    st.markdown("### 데이터 소스")
-    st.caption("대시보드 진입 시 Google Sheets 데이터를 자동으로 불러옵니다.")
-
-    # 현재 소스 표시
-    source_label = st.session_state.get("_v5_source")
-    source_display = {
-        "gsheet": "Google Sheets",
-        "excel": "엑셀 업로드",
-    }.get(source_label, "없음")
-
-    source_caption = st.empty()
-
-    # ========================================
-    # 3단계: Google Sheets 새로 고침
-    # ========================================
-    refresh_clicked = st.button(
-        "Google Sheets 데이터 새로 고침", key="v5_gsheet_refresh"
-    )
+    # Google Sheets 새로 고침 버튼은 사이드바로 이동됨
+    refresh_clicked = st.session_state.get("_trigger_refresh", False)
+    if refresh_clicked:
+        st.session_state["_trigger_refresh"] = False
 
     # 데이터가 없거나 새로 고침 버튼이 클릭된 경우 Google Sheets에서 로드
     should_load_gsheet = data is None or refresh_clicked
@@ -77,34 +63,9 @@ def ensure_data() -> Optional[LoadedData]:
             st.session_state["_v5_source"] = "gsheet"
             st.session_state["v5_data"] = gsheet_data
             data = gsheet_data
-            source_display = "Google Sheets"
-        elif data is None:
-            source_display = "없음"
 
     # ========================================
-    # 4단계: 엑셀 파일 업로드 (선택적)
-    # ========================================
-    with st.expander("엑셀 파일 업로드 (선택)", expanded=False):
-        st.caption(
-            "필요할 때만 수동으로 엑셀 파일을 업로드하여 데이터를 교체할 수 있습니다."
-        )
-
-        excel_data = load_from_excel_uploader()
-
-        if excel_data is not None:
-            st.session_state["_v5_source"] = "excel"
-            st.session_state["v5_data"] = excel_data
-            st.success("엑셀 데이터가 로드되었습니다.")
-            data = excel_data
-            source_display = "엑셀 업로드"
-
-    # ========================================
-    # 5단계: 현재 소스 표시
-    # ========================================
-    source_caption.caption(f"현재 데이터 소스: **{source_display}**")
-
-    # ========================================
-    # 6단계: 데이터 반환
+    # 4단계: 데이터 반환
     # ========================================
     if data is None:
         return None
