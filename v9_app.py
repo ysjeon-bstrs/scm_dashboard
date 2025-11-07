@@ -1036,7 +1036,8 @@ def main() -> None:
         from ai_chatbot_simple import render_simple_chatbot_tab
         render_simple_chatbot_tab(
             snapshot_df=snapshot_df,
-            moves_df=data.moves,  # 판매/입고 데이터 추가!
+            moves_df=data.moves,
+            timeline_df=timeline_for_chart,  # 🆕 30일치 시계열 + 예측!
             selected_centers=selected_centers,
             selected_skus=selected_skus
         )

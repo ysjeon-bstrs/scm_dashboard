@@ -13,6 +13,7 @@ import google.generativeai as genai
 def prepare_data_context(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame = None,
+    timeline_df: pd.DataFrame = None,
     max_rows: int = 50
 ) -> str:
     """
@@ -21,6 +22,7 @@ def prepare_data_context(
     Args:
         snapshot_df: 필터링된 스냅샷 데이터
         moves_df: 판매/입고 이동 데이터 (옵션)
+        timeline_df: 30일 시계열 + 예측 데이터 (옵션)
         max_rows: 최대 포함할 행 수 (토큰 제한 고려)
 
     Returns:
@@ -90,6 +92,66 @@ def prepare_data_context(
                 for sku, qty in sku_moves.items():
                     stats += f"- {sku}: {qty:,.0f}개\n"
 
+    # 30일 시계열 + 예측 데이터 추가!
+    if timeline_df is not None and not timeline_df.empty:
+        stats += f"\n📈 30일 재고 추세 및 예측:\n"
+
+        timeline = timeline_df.copy()
+        if "date" in timeline.columns:
+            timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce")
+            timeline = timeline.sort_values("date")
+
+            # 날짜 범위
+            date_min = timeline["date"].min().strftime('%Y-%m-%d') if pd.notna(timeline["date"].min()) else 'N/A'
+            date_max = timeline["date"].max().strftime('%Y-%m-%d') if pd.notna(timeline["date"].max()) else 'N/A'
+            stats += f"- 기간: {date_min} ~ {date_max}\n"
+
+            # 센터/SKU 필터 (선택된 것만)
+            if "center" in timeline.columns and "center" in df.columns:
+                centers_in_snapshot = df["center"].unique()
+                timeline = timeline[timeline["center"].isin(centers_in_snapshot)]
+            if "resource_code" in timeline.columns:
+                skus_in_snapshot = df["resource_code"].unique()
+                timeline = timeline[timeline["resource_code"].isin(skus_in_snapshot)]
+
+            # SKU별 추세 분석 (상위 5개)
+            if "resource_code" in timeline.columns and "stock_qty" in timeline.columns:
+                stats += f"\nSKU별 재고 추세 (상위 5개):\n"
+
+                # 각 SKU의 최근 추세 계산
+                for sku in skus_in_snapshot[:5]:  # 상위 5개만
+                    sku_timeline = timeline[timeline["resource_code"] == sku].sort_values("date")
+                    if len(sku_timeline) >= 2:
+                        # 최신 vs 최초
+                        first_qty = sku_timeline.iloc[0]["stock_qty"]
+                        last_qty = sku_timeline.iloc[-1]["stock_qty"]
+                        change = last_qty - first_qty
+                        trend = "↗️ 증가" if change > 0 else "↘️ 감소" if change < 0 else "→ 유지"
+
+                        # 평균 재고
+                        avg_qty = sku_timeline["stock_qty"].mean()
+
+                        stats += f"- {sku}: {first_qty:,.0f}개 → {last_qty:,.0f}개 ({trend}, 평균 {avg_qty:,.0f}개)\n"
+
+            # 예측 데이터 여부 확인
+            if "is_forecast" in timeline.columns:
+                forecast_data = timeline[timeline["is_forecast"] == True]
+                if not forecast_data.empty:
+                    stats += f"\n🔮 미래 예측 ({len(forecast_data)}일치):\n"
+
+                    # 예측 날짜 범위
+                    forecast_min = forecast_data["date"].min().strftime('%Y-%m-%d')
+                    forecast_max = forecast_data["date"].max().strftime('%Y-%m-%d')
+                    stats += f"- 예측 기간: {forecast_min} ~ {forecast_max}\n"
+
+                    # SKU별 예측 재고 (상위 3개)
+                    if "resource_code" in forecast_data.columns:
+                        for sku in skus_in_snapshot[:3]:
+                            sku_forecast = forecast_data[forecast_data["resource_code"] == sku]
+                            if not sku_forecast.empty:
+                                final_forecast = sku_forecast.iloc[-1]["stock_qty"]
+                                stats += f"- {sku} 최종 예측: {final_forecast:,.0f}개\n"
+
     # 샘플 데이터 (상위 N개)
     stats += f"\n📋 재고 상세 데이터 (상위 {min(max_rows, len(df))}개):\n"
     for idx, row in sample.iterrows():
@@ -153,6 +215,7 @@ def ask_ai(question: str, data_context: str) -> str:
 def render_simple_chatbot_tab(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame,
+    timeline_df: pd.DataFrame,
     selected_centers: list[str],
     selected_skus: list[str]
 ):
@@ -162,10 +225,11 @@ def render_simple_chatbot_tab(
     Args:
         snapshot_df: 전체 스냅샷 데이터
         moves_df: 판매/입고 이동 데이터
+        timeline_df: 30일 시계열 + 예측 데이터
         selected_centers: 선택된 센터
         selected_skus: 선택된 SKU
     """
-    st.subheader("🤖 AI 어시스턴트 (판매 데이터 포함)")
+    st.subheader("🤖 AI 어시스턴트 (30일 추세 + 예측 포함)")
 
     # 필터링
     snap = snapshot_df.copy()
@@ -189,8 +253,8 @@ def render_simple_chatbot_tab(
 
     if st.button("💬 질문하기", type="primary", key="simple_ask") and question:
         with st.spinner("🤔 생각 중..."):
-            # 데이터 컨텍스트 준비 (판매/입고 데이터 포함!)
-            context = prepare_data_context(snap, moves_df, max_rows=50)
+            # 데이터 컨텍스트 준비 (판매/입고 + 시계열 예측 데이터 포함!)
+            context = prepare_data_context(snap, moves_df, timeline_df, max_rows=50)
 
             # AI에게 질문
             answer = ask_ai(question, context)
@@ -215,7 +279,7 @@ def render_simple_chatbot_tab(
         st.caption("• BA00021은 어느 센터에 있나요?")
 
     with col2:
-        st.caption("**판매/입고 분석 🆕**")
-        st.caption("• BA00021의 최근 판매량은?")
-        st.caption("• 최근 30일 입고량은?")
-        st.caption("• 어느 SKU가 가장 많이 팔렸나요?")
+        st.caption("**추세/예측 분석 🆕**")
+        st.caption("• BA00021의 재고 추세는?")
+        st.caption("• 다음주 예상 재고는?")
+        st.caption("• 어느 SKU가 재고가 증가하고 있나요?")
