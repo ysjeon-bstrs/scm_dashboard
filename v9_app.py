@@ -848,6 +848,34 @@ def main() -> None:
     # ========================================
     # 11단계: 탭 구조로 대시보드 렌더링
     # ========================================
+    # 탭 가시성 개선을 위한 CSS 스타일
+    st.markdown("""
+        <style>
+        /* 탭 버튼 스타일 개선 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            height: 60px;
+            padding: 12px 24px;
+            background-color: #f0f2f6;
+            border-radius: 8px 8px 0 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .stTabs [aria-selected="true"] {
+            background-color: #ffffff;
+            border-bottom: 3px solid #1f77b4;
+        }
+
+        .stTabs [data-baseweb="tab"]:hover {
+            background-color: #e0e2e6;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     tab1, tab2 = st.tabs(["📊 재고 대시보드", "🏢 센터별 대시보드"])
 
     with tab1:
