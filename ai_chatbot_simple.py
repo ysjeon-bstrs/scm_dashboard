@@ -470,13 +470,143 @@ def render_proactive_insights(
                         st.caption(issue["message"])
 
 
-def ask_ai(question: str, data_context: str) -> str:
+def calculate_kpi(
+    function_name: str,
+    snapshot_df: pd.DataFrame,
+    moves_df: pd.DataFrame = None,
+    **kwargs
+) -> dict:
     """
-    Gemini에게 질문하기
+    KPI 계산 함수 (Function calling용)
+
+    Args:
+        function_name: 호출할 함수 이름
+        snapshot_df: 재고 데이터
+        moves_df: 판매 데이터
+        **kwargs: 추가 파라미터
+
+    Returns:
+        계산 결과 dict
+    """
+    try:
+        if function_name == "calculate_total_stock":
+            total = snapshot_df["stock_qty"].sum()
+            return {"total_stock": float(total), "unit": "개"}
+
+        elif function_name == "get_stock_by_center":
+            center_stock = snapshot_df.groupby("center")["stock_qty"].sum().to_dict()
+            return {"center_stock": {k: float(v) for k, v in center_stock.items()}, "unit": "개"}
+
+        elif function_name == "get_stock_by_sku":
+            sku = kwargs.get("sku")
+            if sku:
+                sku_data = snapshot_df[snapshot_df["resource_code"] == sku]
+                if not sku_data.empty:
+                    total = sku_data["stock_qty"].sum()
+                    by_center = sku_data.groupby("center")["stock_qty"].sum().to_dict()
+                    return {
+                        "sku": sku,
+                        "total_stock": float(total),
+                        "by_center": {k: float(v) for k, v in by_center.items()},
+                        "unit": "개"
+                    }
+            return {"error": "SKU not found"}
+
+        elif function_name == "calculate_stockout_days":
+            sku = kwargs.get("sku")
+            if sku and moves_df is not None:
+                # 최근 7일 평균 판매량
+                moves_recent = moves_df.copy()
+                moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
+                cutoff_date = moves_recent["date"].max() - pd.Timedelta(days=7)
+                moves_recent = moves_recent[
+                    (moves_recent["date"] >= cutoff_date) &
+                    (moves_recent["resource_code"] == sku)
+                ]
+
+                if not moves_recent.empty:
+                    daily_sales = moves_recent["quantity"].sum() / 7
+                    current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
+
+                    if daily_sales > 0:
+                        days_left = current_stock / daily_sales
+                        return {
+                            "sku": sku,
+                            "current_stock": float(current_stock),
+                            "daily_sales_avg": float(daily_sales),
+                            "days_until_stockout": float(days_left),
+                            "status": "urgent" if days_left < 3 else "warning" if days_left < 7 else "ok"
+                        }
+
+            return {"error": "Cannot calculate stockout days"}
+
+        elif function_name == "get_top_selling_skus":
+            limit = kwargs.get("limit", 5)
+            if moves_df is not None:
+                moves_recent = moves_df.copy()
+                moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
+                cutoff_date = moves_recent["date"].max() - pd.Timedelta(days=30)
+                moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+
+                top_skus = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(limit)
+                return {
+                    "top_skus": {k: float(v) for k, v in top_skus.items()},
+                    "period": "last_30_days",
+                    "unit": "개"
+                }
+
+            return {"error": "No sales data available"}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    return {"error": "Unknown function"}
+
+
+def detect_kpi_need(question: str) -> tuple[bool, str, dict]:
+    """
+    질문에서 KPI 계산 필요 여부 감지
+
+    Returns:
+        (need_kpi, function_name, kwargs)
+    """
+    question_lower = question.lower()
+
+    # 총 재고
+    if "총 재고" in question_lower or "전체 재고" in question_lower:
+        return (True, "calculate_total_stock", {})
+
+    # 센터별 재고
+    if ("센터별" in question_lower or "center" in question_lower) and "재고" in question_lower:
+        return (True, "get_stock_by_center", {})
+
+    # SKU별 재고
+    import re
+    sku_pattern = r'\b[A-Z]{2}\d{5}\b'
+    skus = re.findall(sku_pattern, question)
+    if skus and "재고" in question_lower:
+        return (True, "get_stock_by_sku", {"sku": skus[0]})
+
+    # 품절 임박
+    if skus and ("품절" in question_lower or "소진" in question_lower or "남은" in question_lower):
+        return (True, "calculate_stockout_days", {"sku": skus[0]})
+
+    # 상위 판매
+    if "상위" in question_lower and ("판매" in question_lower or "판매량" in question_lower):
+        return (True, "get_top_selling_skus", {"limit": 5})
+
+    return (False, None, {})
+
+
+def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, moves_df: pd.DataFrame = None) -> str:
+    """
+    Gemini에게 질문하기 (Function calling 통합)
 
     Args:
         question: 사용자 질문
         data_context: 데이터 컨텍스트
+        snapshot_df: 재고 데이터 (KPI 계산용)
+        moves_df: 판매 데이터 (KPI 계산용)
 
     Returns:
         AI 답변
@@ -485,9 +615,27 @@ def ask_ai(question: str, data_context: str) -> str:
         from datetime import datetime
         today = datetime.now().strftime('%Y-%m-%d')
 
+        # 1. KPI 계산 필요 여부 감지
+        need_kpi, func_name, kwargs = detect_kpi_need(question)
+
+        kpi_result = None
+        if need_kpi and snapshot_df is not None:
+            kpi_result = calculate_kpi(func_name, snapshot_df, moves_df, **kwargs)
+
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
         # Gemini 2.0 모델 사용 (최신 버전)
         model = genai.GenerativeModel("gemini-2.0-flash-exp")
+
+        # 2. KPI 결과가 있으면 프롬프트에 추가
+        kpi_section = ""
+        if kpi_result:
+            import json
+            kpi_section = f"""
+
+[정확한 계산 결과]
+{json.dumps(kpi_result, ensure_ascii=False, indent=2)}
+
+**중요:** 위 계산 결과는 코드로 정확하게 계산된 값입니다. 반드시 이 숫자를 사용하세요."""
 
         prompt = f"""당신은 SCM 재고 관리 전문가입니다.
 
@@ -496,14 +644,14 @@ def ask_ai(question: str, data_context: str) -> str:
 아래 재고 데이터를 참고해서 사용자 질문에 답변하세요.
 
 [재고 데이터]
-{data_context}
+{data_context}{kpi_section}
 
 [사용자 질문]
 {question}
 
 **답변 규칙:**
-1. 위 데이터에 있는 정보만 사용하세요
-2. 숫자는 정확하게 인용하세요
+1. [정확한 계산 결과]가 있으면 반드시 그 숫자를 사용하세요 (텍스트 데이터 대신)
+2. 숫자는 쉼표로 포맷팅하세요 (예: 1,234개)
 3. 2-4문장으로 간결하게 작성하세요
 4. 데이터에 없는 내용은 "데이터에서 확인할 수 없습니다"라고 답변하세요
 5. 날짜를 언급할 때는 현재 날짜({today})를 기준으로 과거/미래를 명확히 구분하세요
@@ -934,8 +1082,8 @@ def render_simple_chatbot_tab(
             # 데이터 컨텍스트 준비 (필터링된 데이터 사용!)
             context = prepare_data_context(filtered_snap, filtered_moves, filtered_timeline, max_rows=50)
 
-            # AI에게 질문
-            answer = ask_ai(question, context)
+            # AI에게 질문 (KPI 계산 지원)
+            answer = ask_ai(question, context, filtered_snap, filtered_moves)
 
             # 세션에 저장 (필터링된 데이터도 함께)
             st.session_state.last_question = question
