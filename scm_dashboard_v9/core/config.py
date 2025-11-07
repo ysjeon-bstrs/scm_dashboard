@@ -25,6 +25,7 @@ except ImportError:
 # Google Sheets 설정
 # ============================================================
 
+
 # Google Sheets 문서 ID
 # 환경변수 또는 Streamlit secrets에서 로드 (기본값 없음)
 def _get_gsheet_id() -> str:
@@ -39,6 +40,7 @@ def _get_gsheet_id() -> str:
     # 1. Streamlit secrets 시도
     try:
         import streamlit as st
+
         if hasattr(st, "secrets") and "GSHEET_ID" in st.secrets:
             return st.secrets["GSHEET_ID"]
     except (ImportError, FileNotFoundError, KeyError):
@@ -56,6 +58,7 @@ def _get_gsheet_id() -> str:
         "  1. 환경변수: export GSHEET_ID='your-sheet-id' 또는 .env 파일에 추가\n"
         "  2. Streamlit secrets: .streamlit/secrets.toml에 GSHEET_ID 추가"
     )
+
 
 GSHEET_ID = _get_gsheet_id()
 
