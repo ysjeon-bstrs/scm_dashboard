@@ -811,36 +811,39 @@ def main() -> None:
         horizon_days=int(proj_days_for_build),
     )
 
-    if timeline_actual is None or timeline_actual.empty:
-        logger.warning("타임라인 데이터가 비어있음")
-        st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다.")
-        return
-    logger.info(f"타임라인 빌드 완료: {len(timeline_actual)}행")
+    # 타임라인이 비어있어도 스냅샷 기반 데이터는 표시되어야 하므로 return하지 않음
+    has_timeline_data = timeline_actual is not None and not timeline_actual.empty
+    if not has_timeline_data:
+        logger.warning("타임라인 데이터가 비어있음 - 스냅샷 기반 데이터만 표시")
+    else:
+        logger.info(f"타임라인 빌드 완료: {len(timeline_actual)}행")
 
     # ========================================
-    # 10단계: 소비 예측 적용
+    # 10단계: 소비 예측 적용 (타임라인이 있는 경우에만)
     # ========================================
-    cons_start = None
-    if latest_snapshot_dt is not None:
-        cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
+    timeline_for_chart = None
+    if has_timeline_data:
+        cons_start = None
+        if latest_snapshot_dt is not None:
+            cons_start = (latest_snapshot_dt + pd.Timedelta(days=1)).normalize()
 
-    timeline_forecast = apply_consumption_with_events(
-        timeline_actual,
-        snapshot_df,
-        centers=selected_centers,
-        skus=selected_skus,
-        start=start_ts,
-        end=end_ts,
-        lookback_days=lookback_days,
-        events=events,
-        cons_start=cons_start,
-    )
+        timeline_forecast = apply_consumption_with_events(
+            timeline_actual,
+            snapshot_df,
+            centers=selected_centers,
+            skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+            lookback_days=lookback_days,
+            events=events,
+            cons_start=cons_start,
+        )
 
-    # 성능 최적화: 불필요한 copy 제거
-    if timeline_forecast is None or timeline_forecast.empty:
-        timeline_forecast = timeline_actual
+        # 성능 최적화: 불필요한 copy 제거
+        if timeline_forecast is None or timeline_forecast.empty:
+            timeline_forecast = timeline_actual
 
-    timeline_for_chart = timeline_forecast if use_cons_forecast else timeline_actual
+        timeline_for_chart = timeline_forecast if use_cons_forecast else timeline_actual
 
     # ========================================
     # 11단계: 탭 구조로 대시보드 렌더링
@@ -872,17 +875,20 @@ def main() -> None:
         # ========================================
         # 재고 대시보드: 계단식 차트
         # ========================================
-        render_step_chart(
-            timeline_for_chart,
-            start=start_ts,
-            end=end_ts,
-            centers=selected_centers,
-            skus=selected_skus,
-            show_production=show_prod,
-            show_in_transit=show_transit,
-            today=today_norm,
-            snapshot=snapshot_df,
-        )
+        if has_timeline_data and timeline_for_chart is not None:
+            render_step_chart(
+                timeline_for_chart,
+                start=start_ts,
+                end=end_ts,
+                centers=selected_centers,
+                skus=selected_skus,
+                show_production=show_prod,
+                show_in_transit=show_transit,
+                today=today_norm,
+                snapshot=snapshot_df,
+            )
+        else:
+            st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다. 다른 센터/SKU/기간을 선택해주세요.")
 
         st.divider()
 
