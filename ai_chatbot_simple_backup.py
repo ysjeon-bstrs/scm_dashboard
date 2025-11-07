@@ -1,8 +1,8 @@
 """
 AI 챗봇 Function Calling 버전: Gemini 2.0 Native Function Calling
-- 텍스트 요약 제거 → 메타데이터만 전달 (90% 토큰 절약)
-- AI가 필요한 함수를 직접 선택 및 호출
-- 정확한 계산, 확장 가능한 아키텍처
+- 텍스트 요약 제거 → 메타데이터만 전달
+- AI가 필요한 함수를 직접 호출
+- 정확한 계산, 토큰 절약, 확장 가능
 """
 
 import streamlit as st
@@ -12,618 +12,220 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
-from typing import Optional, Dict, List, Any
 
 
 def prepare_minimal_metadata(
     snapshot_df: pd.DataFrame,
-    moves_df: Optional[pd.DataFrame] = None,
-    timeline_df: Optional[pd.DataFrame] = None
-) -> Dict[str, Any]:
+    moves_df: pd.DataFrame = None,
+    timeline_df: pd.DataFrame = None
+) -> dict:
     """
-    텍스트 요약 대신 메타데이터만 추출 (토큰 90% 절약)
+    텍스트 요약 대신 메타데이터만 추출 (토큰 절약)
 
     Returns:
-        메타데이터 dict (SKU 목록, 센터 목록, 날짜 범위 등)
+        메타데이터 dict
     """
     if snapshot_df.empty:
-        return {"status": "empty", "message": "데이터가 없습니다"}
+        return {"status": "empty"}
 
-    metadata = {
-        "status": "ok",
-        "snapshot": {
-            "total_rows": len(snapshot_df),
-            "centers": sorted(snapshot_df["center"].unique().tolist()) if "center" in snapshot_df.columns else [],
-            "skus": sorted(snapshot_df["resource_code"].unique().tolist()[:50]) if "resource_code" in snapshot_df.columns else [],  # 상위 50개만
-            "sku_count": int(snapshot_df["resource_code"].nunique()) if "resource_code" in snapshot_df.columns else 0,
-            "date_range": None
-        },
-        "moves": {
-            "available": moves_df is not None and not moves_df.empty,
-            "date_range": None
-        },
-        "timeline": {
-            "available": timeline_df is not None and not timeline_df.empty,
-            "has_forecast": False,
-            "date_range": None
-        }
-    }
+    df = snapshot_df
 
-    # 날짜 범위
-    if "date" in snapshot_df.columns:
-        snapshot_copy = snapshot_df.copy()
-        snapshot_copy["date"] = pd.to_datetime(snapshot_copy["date"], errors="coerce")
-        min_date = snapshot_copy["date"].min()
-        max_date = snapshot_copy["date"].max()
-        if pd.notna(min_date) and pd.notna(max_date):
-            metadata["snapshot"]["date_range"] = {
-                "min": min_date.strftime('%Y-%m-%d'),
-                "max": max_date.strftime('%Y-%m-%d')
-            }
+    # 최신 날짜만 유지
+    if "date" in df.columns:
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.sort_values("date").groupby(["center", "resource_code"], as_index=False).last()
 
-    if moves_df is not None and not moves_df.empty and "date" in moves_df.columns:
-        moves_copy = moves_df.copy()
-        moves_copy["date"] = pd.to_datetime(moves_copy["date"], errors="coerce")
-        min_date = moves_copy["date"].min()
-        max_date = moves_copy["date"].max()
-        if pd.notna(min_date) and pd.notna(max_date):
-            metadata["moves"]["date_range"] = {
-                "min": min_date.strftime('%Y-%m-%d'),
-                "max": max_date.strftime('%Y-%m-%d')
-            }
+    # 상위 N개 행만 사용 (토큰 제한)
+    sample = df.head(max_rows)
 
+    # 요약 통계
+    stats = f"""
+📊 데이터 요약:
+- 총 재고: {df['stock_qty'].sum():,.0f}개
+- 센터 수: {df['center'].nunique()}곳
+- SKU 수: {df['resource_code'].nunique()}개
+- 최신 날짜: {df['date'].max().strftime('%Y-%m-%d') if 'date' in df.columns else 'N/A'}
+
+센터별 재고:
+"""
+    for center, group in df.groupby("center")["stock_qty"].sum().items():
+        stats += f"- {center}: {group:,.0f}개\n"
+
+    # 상위 SKU
+    stats += f"\n상위 SKU (재고량):\n"
+    for sku, qty in df.groupby("resource_code")["stock_qty"].sum().nlargest(10).items():
+        stats += f"- {sku}: {qty:,.0f}개\n"
+
+    # 판매/입고 데이터 추가!
+    if moves_df is not None and not moves_df.empty:
+        stats += f"\n📦 판매/입고 데이터 (최근 30일):\n"
+
+        # 최근 30일 필터
+        if "date" in moves_df.columns:
+            moves_recent = moves_df.copy()
+            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
+            cutoff_date = moves_recent["date"].max() - pd.Timedelta(days=30)
+            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+
+            # 센터/SKU 필터 (선택된 것만)
+            if "center" in moves_recent.columns and "center" in df.columns:
+                centers_in_snapshot = df["center"].unique()
+                moves_recent = moves_recent[moves_recent["center"].isin(centers_in_snapshot)]
+            if "resource_code" in moves_recent.columns:
+                skus_in_snapshot = df["resource_code"].unique()
+                moves_recent = moves_recent[moves_recent["resource_code"].isin(skus_in_snapshot)]
+
+            # 판매/입고 집계 (30일 전체)
+            if "quantity" in moves_recent.columns:
+                stats += "전체 집계 (30일):\n"
+                # move_type별 집계
+                if "move_type" in moves_recent.columns:
+                    for move_type, group in moves_recent.groupby("move_type")["quantity"].sum().items():
+                        stats += f"- {move_type}: {group:,.0f}개\n"
+
+                # SKU별 판매량
+                stats += f"\nSKU별 이동량 (상위 5개):\n"
+                sku_moves = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(5)
+                for sku, qty in sku_moves.items():
+                    stats += f"- {sku}: {qty:,.0f}개\n"
+
+                # 최근 7일 일별 상세 데이터 추가!
+                latest_date = moves_recent["date"].max()
+                moves_last_7days = moves_recent[moves_recent["date"] >= latest_date - pd.Timedelta(days=7)]
+
+                if not moves_last_7days.empty:
+                    stats += f"\n📅 최근 7일 일별 상세 (상위 3개 SKU):\n"
+
+                    # 상위 3개 SKU만
+                    top_skus = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(3).index
+
+                    for sku in top_skus:
+                        sku_data = moves_last_7days[moves_last_7days["resource_code"] == sku]
+                        if not sku_data.empty:
+                            stats += f"\n{sku}:\n"
+
+                            # 날짜별로 정렬
+                            sku_data_sorted = sku_data.sort_values("date", ascending=False)
+
+                            # 날짜별 + move_type별로 그룹화
+                            for date, date_group in sku_data_sorted.groupby("date"):
+                                # NaT 체크
+                                if pd.isna(date):
+                                    continue
+
+                                date_str = date.strftime('%Y-%m-%d')
+
+                                # 센터별/타입별 세분화
+                                for idx, row in date_group.iterrows():
+                                    center = row.get("center", "N/A")
+                                    move_type = row.get("move_type", "N/A")
+                                    qty = row.get("quantity", 0)
+                                    stats += f"  · {date_str} | {center} | {move_type}: {qty:,.0f}개\n"
+
+    # 30일 시계열 + 예측 데이터 추가!
     if timeline_df is not None and not timeline_df.empty:
-        if "is_forecast" in timeline_df.columns:
-            metadata["timeline"]["has_forecast"] = timeline_df["is_forecast"].any()
+        stats += f"\n📈 재고 추세 및 예측 데이터:\n"
 
-    return metadata
-
-
-# Gemini Function Declarations
-GEMINI_FUNCTIONS = [
-    {
-        "name": "get_total_stock",
-        "description": "전체 재고량을 조회합니다. 모든 센터와 SKU의 총 재고를 합산합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_stock_by_center",
-        "description": "센터별 재고량을 조회합니다. 특정 센터를 지정하거나 전체 센터의 재고를 확인할 수 있습니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "center": {
-                    "type": "string",
-                    "description": "센터 코드 (예: AMZUS, KR01). 지정하지 않으면 모든 센터 반환"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "get_stock_by_sku",
-        "description": "특정 SKU의 재고량과 센터별 분포를 조회합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sku": {
-                    "type": "string",
-                    "description": "SKU 코드 (예: BA00021)"
-                }
-            },
-            "required": ["sku"]
-        }
-    },
-    {
-        "name": "calculate_stockout_days",
-        "description": "특정 SKU가 품절될 때까지 남은 일수를 계산합니다. 최근 7일 평균 판매량을 기반으로 예측합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sku": {
-                    "type": "string",
-                    "description": "SKU 코드 (예: BA00021)"
-                }
-            },
-            "required": ["sku"]
-        }
-    },
-    {
-        "name": "get_top_selling_skus",
-        "description": "최근 30일 판매량이 많은 상위 SKU 목록을 조회합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "limit": {
-                    "type": "integer",
-                    "description": "조회할 SKU 개수 (기본값: 5)",
-                    "default": 5
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "name": "get_sku_trend",
-        "description": "특정 SKU의 시계열 재고 추세를 조회합니다. 일별 재고 변화와 예측 데이터를 포함합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sku": {
-                    "type": "string",
-                    "description": "SKU 코드 (예: BA00021)"
-                },
-                "days": {
-                    "type": "integer",
-                    "description": "조회할 일수 (기본값: 30)",
-                    "default": 30
-                }
-            },
-            "required": ["sku"]
-        }
-    },
-    {
-        "name": "get_sales_summary",
-        "description": "특정 SKU의 판매 요약 정보를 조회합니다. 센터별, 날짜별 판매량을 포함합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sku": {
-                    "type": "string",
-                    "description": "SKU 코드 (예: BA00021)"
-                },
-                "days": {
-                    "type": "integer",
-                    "description": "조회할 일수 (기본값: 7)",
-                    "default": 7
-                }
-            },
-            "required": ["sku"]
-        }
-    },
-    {
-        "name": "compare_skus",
-        "description": "두 SKU의 재고량, 판매량, 추세를 비교합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sku1": {
-                    "type": "string",
-                    "description": "첫 번째 SKU 코드"
-                },
-                "sku2": {
-                    "type": "string",
-                    "description": "두 번째 SKU 코드"
-                }
-            },
-            "required": ["sku1", "sku2"]
-        }
-    },
-    {
-        "name": "search_low_stock_skus",
-        "description": "품절 임박 SKU를 검색합니다. 지정한 일수 이내에 품절될 것으로 예상되는 SKU 목록을 반환합니다.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "days_threshold": {
-                    "type": "integer",
-                    "description": "품절 임박 기준 일수 (기본값: 7)",
-                    "default": 7
-                }
-            },
-            "required": []
-        }
-    }
-]
-
-
-def execute_function(
-    function_name: str,
-    parameters: Dict[str, Any],
-    snapshot_df: pd.DataFrame,
-    moves_df: Optional[pd.DataFrame] = None,
-    timeline_df: Optional[pd.DataFrame] = None
-) -> Dict[str, Any]:
-    """
-    Gemini가 요청한 함수를 실행
-
-    Args:
-        function_name: 함수 이름
-        parameters: 함수 파라미터
-        snapshot_df: 재고 데이터
-        moves_df: 판매 데이터
-        timeline_df: 시계열 데이터
-
-    Returns:
-        함수 실행 결과 dict
-    """
-    try:
-        if function_name == "get_total_stock":
-            total = snapshot_df["stock_qty"].sum()
-            return {
-                "total_stock": float(total),
-                "unit": "개",
-                "center_count": int(snapshot_df["center"].nunique()),
-                "sku_count": int(snapshot_df["resource_code"].nunique())
-            }
-
-        elif function_name == "get_stock_by_center":
-            center = parameters.get("center")
-            if center:
-                center_data = snapshot_df[snapshot_df["center"] == center]
-                if center_data.empty:
-                    return {"error": f"센터 '{center}'를 찾을 수 없습니다"}
-                return {
-                    "center": center,
-                    "total_stock": float(center_data["stock_qty"].sum()),
-                    "sku_count": int(center_data["resource_code"].nunique()),
-                    "unit": "개"
-                }
-            else:
-                center_stock = snapshot_df.groupby("center")["stock_qty"].sum().to_dict()
-                return {
-                    "centers": {k: float(v) for k, v in center_stock.items()},
-                    "unit": "개"
-                }
-
-        elif function_name == "get_stock_by_sku":
-            sku = parameters.get("sku")
-            if not sku:
-                return {"error": "SKU 파라미터가 필요합니다"}
-
-            sku_data = snapshot_df[snapshot_df["resource_code"] == sku]
-            if sku_data.empty:
-                return {"error": f"SKU '{sku}'를 찾을 수 없습니다"}
-
-            by_center = sku_data.groupby("center")["stock_qty"].sum().to_dict()
-            return {
-                "sku": sku,
-                "total_stock": float(sku_data["stock_qty"].sum()),
-                "by_center": {k: float(v) for k, v in by_center.items()},
-                "unit": "개"
-            }
-
-        elif function_name == "calculate_stockout_days":
-            sku = parameters.get("sku")
-            if not sku or moves_df is None or moves_df.empty:
-                return {"error": "SKU 파라미터와 판매 데이터가 필요합니다"}
-
-            # 최근 7일 평균 판매량
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=7)
-            moves_recent = moves_recent[
-                (moves_recent["date"] >= cutoff_date) &
-                (moves_recent["resource_code"] == sku)
-            ]
-
-            if moves_recent.empty:
-                return {"error": f"SKU '{sku}'의 판매 데이터가 없습니다"}
-
-            daily_sales = moves_recent["quantity"].sum() / 7
-            current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
-
-            if daily_sales <= 0:
-                return {
-                    "sku": sku,
-                    "message": "판매량이 0입니다",
-                    "current_stock": float(current_stock)
-                }
-
-            days_left = current_stock / daily_sales
-            return {
-                "sku": sku,
-                "current_stock": float(current_stock),
-                "daily_sales_avg": float(daily_sales),
-                "days_until_stockout": float(days_left),
-                "status": "urgent" if days_left < 3 else "warning" if days_left < 7 else "ok"
-            }
-
-        elif function_name == "get_top_selling_skus":
-            limit = parameters.get("limit", 5)
-            if moves_df is None or moves_df.empty:
-                return {"error": "판매 데이터가 없습니다"}
-
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=30)
-            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
-
-            top_skus = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(limit)
-            return {
-                "top_skus": [
-                    {"sku": sku, "quantity": float(qty)}
-                    for sku, qty in top_skus.items()
-                ],
-                "period": "last_30_days",
-                "unit": "개"
-            }
-
-        elif function_name == "get_sku_trend":
-            sku = parameters.get("sku")
-            days = parameters.get("days", 30)
-
-            if not sku or timeline_df is None or timeline_df.empty:
-                return {"error": "SKU 파라미터와 시계열 데이터가 필요합니다"}
-
-            timeline = timeline_df[timeline_df["resource_code"] == sku].copy()
-            if timeline.empty:
-                return {"error": f"SKU '{sku}'의 추세 데이터가 없습니다"}
-
+        timeline = timeline_df.copy()
+        if "date" in timeline.columns:
             timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce")
-            timeline = timeline.sort_values("date").tail(days)
+            timeline = timeline.sort_values("date")
 
-            # 실제 vs 예측 분리
-            actual = timeline[timeline.get("is_forecast", False) == False]
-            forecast = timeline[timeline.get("is_forecast", False) == True]
+            # 실제 데이터와 예측 데이터 구분
+            if "is_forecast" in timeline.columns:
+                actual_data = timeline[timeline["is_forecast"] == False]
+                forecast_data = timeline[timeline["is_forecast"] == True]
 
-            result = {
-                "sku": sku,
-                "actual_data": [
-                    {
-                        "date": row["date"].strftime('%Y-%m-%d') if pd.notna(row["date"]) else None,
-                        "stock_qty": float(row["stock_qty"])
-                    }
-                    for _, row in actual.iterrows()
-                ],
-                "forecast_data": [
-                    {
-                        "date": row["date"].strftime('%Y-%m-%d') if pd.notna(row["date"]) else None,
-                        "stock_qty": float(row["stock_qty"])
-                    }
-                    for _, row in forecast.iterrows()
-                ]
-            }
+                if not actual_data.empty:
+                    actual_min = actual_data["date"].min()
+                    actual_max = actual_data["date"].max()
+                    if pd.notna(actual_min) and pd.notna(actual_max):
+                        actual_min_str = actual_min.strftime('%Y-%m-%d')
+                        actual_max_str = actual_max.strftime('%Y-%m-%d')
+                        stats += f"- 📊 실제 데이터 기간: {actual_min_str} ~ {actual_max_str}\n"
 
-            # 추세 계산
-            if len(actual) >= 2:
-                first_qty = actual.iloc[0]["stock_qty"]
-                last_qty = actual.iloc[-1]["stock_qty"]
-                change = last_qty - first_qty
-                change_pct = (change / first_qty * 100) if first_qty > 0 else 0
-                result["trend"] = {
-                    "direction": "증가" if change > 0 else "감소" if change < 0 else "유지",
-                    "change": float(change),
-                    "change_percent": float(change_pct)
-                }
-
-            return result
-
-        elif function_name == "get_sales_summary":
-            sku = parameters.get("sku")
-            days = parameters.get("days", 7)
-
-            if not sku or moves_df is None or moves_df.empty:
-                return {"error": "SKU 파라미터와 판매 데이터가 필요합니다"}
-
-            moves_copy = moves_df.copy()
-            moves_copy["date"] = pd.to_datetime(moves_copy["date"], errors="coerce")
-            cutoff_date = moves_copy["date"].max() - timedelta(days=days)
-
-            sku_sales = moves_copy[
-                (moves_copy["date"] >= cutoff_date) &
-                (moves_copy["resource_code"] == sku)
-            ]
-
-            if sku_sales.empty:
-                return {"error": f"SKU '{sku}'의 판매 데이터가 없습니다"}
-
-            # 센터별
-            by_center = sku_sales.groupby("center")["quantity"].sum().to_dict()
-
-            # 일별
-            by_date = sku_sales.groupby(sku_sales["date"].dt.date)["quantity"].sum()
-
-            return {
-                "sku": sku,
-                "period_days": days,
-                "total_sales": float(sku_sales["quantity"].sum()),
-                "daily_avg": float(sku_sales["quantity"].sum() / days),
-                "by_center": {k: float(v) for k, v in by_center.items()},
-                "daily_breakdown": [
-                    {"date": str(date), "quantity": float(qty)}
-                    for date, qty in by_date.items()
-                ],
-                "unit": "개"
-            }
-
-        elif function_name == "compare_skus":
-            sku1 = parameters.get("sku1")
-            sku2 = parameters.get("sku2")
-
-            if not sku1 or not sku2:
-                return {"error": "두 개의 SKU 파라미터가 필요합니다"}
-
-            # 재고 비교
-            stock1 = snapshot_df[snapshot_df["resource_code"] == sku1]["stock_qty"].sum()
-            stock2 = snapshot_df[snapshot_df["resource_code"] == sku2]["stock_qty"].sum()
-
-            result = {
-                "sku1": {
-                    "code": sku1,
-                    "stock": float(stock1)
-                },
-                "sku2": {
-                    "code": sku2,
-                    "stock": float(stock2)
-                },
-                "stock_diff": float(stock1 - stock2),
-                "unit": "개"
-            }
-
-            # 판매 비교
-            if moves_df is not None and not moves_df.empty:
-                moves_recent = moves_df.copy()
-                moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-                cutoff_date = moves_recent["date"].max() - timedelta(days=30)
-                moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
-
-                sales1 = moves_recent[moves_recent["resource_code"] == sku1]["quantity"].sum()
-                sales2 = moves_recent[moves_recent["resource_code"] == sku2]["quantity"].sum()
-
-                result["sku1"]["sales_30d"] = float(sales1)
-                result["sku2"]["sales_30d"] = float(sales2)
-                result["sales_diff"] = float(sales1 - sales2)
-
-            return result
-
-        elif function_name == "search_low_stock_skus":
-            days_threshold = parameters.get("days_threshold", 7)
-
-            if moves_df is None or moves_df.empty:
-                return {"error": "판매 데이터가 필요합니다"}
-
-            # 모든 SKU에 대해 품절 임박 계산
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=7)
-            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
-
-            daily_sales_by_sku = moves_recent.groupby("resource_code")["quantity"].sum() / 7
-
-            low_stock_skus = []
-            for sku in daily_sales_by_sku.index:
-                if daily_sales_by_sku[sku] <= 0:
-                    continue
-
-                current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
-                days_left = current_stock / daily_sales_by_sku[sku]
-
-                if 0 < days_left <= days_threshold:
-                    low_stock_skus.append({
-                        "sku": sku,
-                        "current_stock": float(current_stock),
-                        "daily_sales": float(daily_sales_by_sku[sku]),
-                        "days_left": float(days_left),
-                        "severity": "urgent" if days_left < 3 else "warning"
-                    })
-
-            # 심각도 순 정렬
-            low_stock_skus.sort(key=lambda x: x["days_left"])
-
-            return {
-                "low_stock_skus": low_stock_skus[:10],  # 상위 10개
-                "threshold_days": days_threshold,
-                "total_found": len(low_stock_skus)
-            }
-
-        else:
-            return {"error": f"알 수 없는 함수: {function_name}"}
-
-    except Exception as e:
-        return {"error": f"함수 실행 오류: {str(e)}"}
-
-
-def ask_ai_with_functions(
-    question: str,
-    metadata: Dict[str, Any],
-    snapshot_df: pd.DataFrame,
-    moves_df: Optional[pd.DataFrame] = None,
-    timeline_df: Optional[pd.DataFrame] = None,
-    max_iterations: int = 5
-) -> str:
-    """
-    Gemini 2.0 Function Calling으로 질문 답변
-
-    Args:
-        question: 사용자 질문
-        metadata: 최소 메타데이터
-        snapshot_df, moves_df, timeline_df: 실제 데이터 (함수 실행용)
-        max_iterations: 최대 함수 호출 횟수
-
-    Returns:
-        AI 답변
-    """
-    try:
-        today = datetime.now().strftime('%Y-%m-%d')
-
-        genai.configure(api_key=st.secrets["gemini"]["api_key"])
-
-        # Function declarations 등록
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash-exp",
-            tools=[{"function_declarations": GEMINI_FUNCTIONS}]
-        )
-
-        # 초기 프롬프트
-        initial_prompt = f"""당신은 SCM 재고 관리 전문가입니다.
-
-**현재 날짜: {today}**
-
-**이용 가능한 데이터:**
-{json.dumps(metadata, ensure_ascii=False, indent=2)}
-
-**사용자 질문:**
-{question}
-
-**답변 규칙:**
-1. 정확한 정보가 필요하면 제공된 함수를 호출하세요
-2. 숫자는 쉼표로 포맷팅하세요 (예: 1,234개)
-3. 2-4문장으로 간결하게 답변하세요
-4. 데이터에 없는 내용은 "데이터에서 확인할 수 없습니다"라고 답변하세요
-5. 한국어로 작성하세요"""
-
-        chat = model.start_chat()
-        response = chat.send_message(initial_prompt)
-
-        # Function calling loop
-        iteration = 0
-        while iteration < max_iterations:
-            # 함수 호출이 있는지 확인
-            if not response.candidates:
-                break
-
-            part = response.candidates[0].content.parts[0]
-
-            # 텍스트 응답이면 종료
-            if hasattr(part, 'text'):
-                return part.text
-
-            # 함수 호출이면 실행
-            if hasattr(part, 'function_call'):
-                function_call = part.function_call
-                function_name = function_call.name
-                function_args = dict(function_call.args)
-
-                st.caption(f"🔧 함수 호출: `{function_name}({json.dumps(function_args, ensure_ascii=False)})`")
-
-                # 함수 실행
-                result = execute_function(
-                    function_name,
-                    function_args,
-                    snapshot_df,
-                    moves_df,
-                    timeline_df
-                )
-
-                # 결과를 Gemini에게 전달
-                response = chat.send_message(
-                    genai.protos.Content(
-                        parts=[genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name=function_name,
-                                response={"result": result}
-                            )
-                        )]
-                    )
-                )
-
-                iteration += 1
+                if not forecast_data.empty:
+                    forecast_min = forecast_data["date"].min()
+                    forecast_max = forecast_data["date"].max()
+                    if pd.notna(forecast_min) and pd.notna(forecast_max):
+                        forecast_min_str = forecast_min.strftime('%Y-%m-%d')
+                        forecast_max_str = forecast_max.strftime('%Y-%m-%d')
+                        stats += f"- 🔮 예측 데이터 기간: {forecast_min_str} ~ {forecast_max_str}\n"
             else:
-                break
+                # is_forecast 컬럼이 없으면 전체 범위만 표시
+                date_min = timeline["date"].min().strftime('%Y-%m-%d') if pd.notna(timeline["date"].min()) else 'N/A'
+                date_max = timeline["date"].max().strftime('%Y-%m-%d') if pd.notna(timeline["date"].max()) else 'N/A'
+                stats += f"- 전체 기간: {date_min} ~ {date_max}\n"
 
-        # 최종 응답
-        if response.candidates and hasattr(response.candidates[0].content.parts[0], 'text'):
-            return response.candidates[0].content.parts[0].text
-        else:
-            return "답변을 생성할 수 없습니다."
+            # 센터/SKU 필터 (선택된 것만)
+            if "center" in timeline.columns and "center" in df.columns:
+                centers_in_snapshot = df["center"].unique()
+                timeline = timeline[timeline["center"].isin(centers_in_snapshot)]
+            if "resource_code" in timeline.columns:
+                skus_in_snapshot = df["resource_code"].unique()
+                timeline = timeline[timeline["resource_code"].isin(skus_in_snapshot)]
 
-    except Exception as e:
-        return f"⚠️ 오류 발생: {str(e)}"
+            # SKU별 실제 추세 분석 (상위 5개)
+            if "resource_code" in timeline.columns and "stock_qty" in timeline.columns:
+                # 실제 데이터만 사용해서 추세 계산
+                if "is_forecast" in timeline.columns:
+                    actual_timeline = timeline[timeline["is_forecast"] == False]
+                else:
+                    actual_timeline = timeline
+
+                if not actual_timeline.empty:
+                    stats += f"\n📊 실제 재고 추세 (상위 5개 SKU):\n"
+
+                    # 각 SKU의 실제 추세 계산
+                    for sku in skus_in_snapshot[:5]:  # 상위 5개만
+                        sku_timeline = actual_timeline[actual_timeline["resource_code"] == sku].sort_values("date")
+                        if len(sku_timeline) >= 2:
+                            # 최신 vs 최초
+                            first_qty = sku_timeline.iloc[0]["stock_qty"]
+                            last_qty = sku_timeline.iloc[-1]["stock_qty"]
+                            change = last_qty - first_qty
+                            trend = "↗️ 증가" if change > 0 else "↘️ 감소" if change < 0 else "→ 유지"
+
+                            # 평균 재고
+                            avg_qty = sku_timeline["stock_qty"].mean()
+
+                            stats += f"- {sku}: {first_qty:,.0f}개 → {last_qty:,.0f}개 ({trend}, 평균 {avg_qty:,.0f}개)\n"
+
+            # SKU별 예측 정보
+            if "is_forecast" in timeline.columns:
+                forecast_data = timeline[timeline["is_forecast"] == True]
+                if not forecast_data.empty and "resource_code" in forecast_data.columns:
+                    stats += f"\n🔮 SKU별 예측 재고 (상위 3개):\n"
+
+                    # SKU별 최종 예측값
+                    for sku in skus_in_snapshot[:3]:
+                        sku_forecast = forecast_data[forecast_data["resource_code"] == sku]
+                        if not sku_forecast.empty:
+                            final_forecast = sku_forecast.iloc[-1]["stock_qty"]
+                            final_date_val = sku_forecast.iloc[-1]["date"]
+                            if pd.notna(final_date_val):
+                                final_date = final_date_val.strftime('%Y-%m-%d')
+                                stats += f"- {sku}: {final_forecast:,.0f}개 (예측일: {final_date})\n"
+
+    # 샘플 데이터 (상위 N개)
+    stats += f"\n📋 재고 상세 데이터 (상위 {min(max_rows, len(df))}개):\n"
+    for idx, row in sample.iterrows():
+        stats += (
+            f"  · {row.get('center', 'N/A')} | "
+            f"{row.get('resource_code', 'N/A')} | "
+            f"재고: {row.get('stock_qty', 0):,.0f}개"
+        )
+        if pd.notna(row.get('resource_name')):
+            stats += f" ({row.get('resource_name')})"
+        stats += "\n"
+
+    if len(df) > max_rows:
+        stats += f"\n... 외 {len(df) - max_rows}개 항목\n"
+
+    return stats
+
+
 def detect_stockout_risks(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame,
@@ -1388,7 +990,7 @@ def render_simple_chatbot_tab(
         selected_centers: 선택된 센터
         selected_skus: 선택된 SKU
     """
-    st.subheader("🤖 AI 어시스턴트 (Gemini 2.0 Function Calling - 토큰 90% 절약)")
+    st.subheader("🤖 AI 어시스턴트 (30일 추세 + 예측 포함)")
 
     # 필터링
     snap = snapshot_df.copy()
@@ -1413,8 +1015,8 @@ def render_simple_chatbot_tab(
         st.session_state.last_question = ""
     if "last_answer" not in st.session_state:
         st.session_state.last_answer = ""
-    if "last_metadata" not in st.session_state:
-        st.session_state.last_metadata = {}
+    if "last_context" not in st.session_state:
+        st.session_state.last_context = ""
 
     # 질문 입력
     question = st.text_input(
@@ -1472,22 +1074,16 @@ def render_simple_chatbot_tab(
             if filter_applied:
                 st.info(f"🎯 자동 필터 적용: {filter_msg}")
 
-            # 최소 메타데이터만 준비 (토큰 90% 절약!)
-            metadata = prepare_minimal_metadata(filtered_snap, filtered_moves, filtered_timeline)
+            # 데이터 컨텍스트 준비 (필터링된 데이터 사용!)
+            context = prepare_data_context(filtered_snap, filtered_moves, filtered_timeline, max_rows=50)
 
-            # Gemini 2.0 Native Function Calling으로 질문
-            answer = ask_ai_with_functions(
-                question,
-                metadata,
-                filtered_snap,
-                filtered_moves,
-                filtered_timeline
-            )
+            # AI에게 질문 (KPI 계산 지원)
+            answer = ask_ai(question, context, filtered_snap, filtered_moves)
 
             # 세션에 저장 (필터링된 데이터도 함께)
             st.session_state.last_question = question
             st.session_state.last_answer = answer
-            st.session_state.last_metadata = metadata
+            st.session_state.last_context = context
             st.session_state.last_filtered_snap = filtered_snap
             st.session_state.last_filtered_timeline = filtered_timeline
 
@@ -1511,12 +1107,10 @@ def render_simple_chatbot_tab(
 
         # 후속 질문 제안
         with st.spinner("💡 후속 질문 제안 중..."):
-            # 메타데이터를 간략한 텍스트로 변환
-            metadata_text = json.dumps(st.session_state.get("last_metadata", {}), ensure_ascii=False, indent=2)[:500]
             followup_questions = suggest_followup_questions(
                 st.session_state.last_question,
                 st.session_state.last_answer,
-                metadata_text
+                st.session_state.last_context
             )
 
         if followup_questions:
@@ -1528,9 +1122,9 @@ def render_simple_chatbot_tab(
                         st.session_state.pending_question = fq
                         st.rerun()
 
-        # 메타데이터 확인 (디버깅용)
-        with st.expander("🔍 AI가 본 메타데이터 (Function Calling)"):
-            st.json(st.session_state.get("last_metadata", {}))
+        # 컨텍스트 확인 (디버깅용)
+        with st.expander("🔍 AI가 본 데이터"):
+            st.text(st.session_state.last_context)
 
     # 예시 질문
     st.divider()
