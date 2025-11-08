@@ -7,12 +7,31 @@ AI 챗봇 Function Calling 버전: Gemini 2.0 Native Function Calling
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import google.generativeai as genai
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
+import math
 from typing import Optional, Dict, List, Any
+
+
+def safe_float(value) -> Optional[float]:
+    """
+    NaN, Inf를 안전하게 처리하여 JSON 직렬화 가능한 값으로 변환
+
+    Args:
+        value: 변환할 값 (pandas/numpy 타입 포함)
+
+    Returns:
+        float 또는 None (NaN/Inf인 경우)
+    """
+    if pd.isna(value) or (isinstance(value, float) and math.isinf(value)):
+        return None
+    if isinstance(value, (np.floating, np.integer)):
+        return float(value)
+    return float(value)
 
 
 def prepare_minimal_metadata(
@@ -26,7 +45,8 @@ def prepare_minimal_metadata(
     Returns:
         메타데이터 dict (SKU 목록, 센터 목록, 날짜 범위 등)
     """
-    if snapshot_df.empty:
+    # None 체크 추가 (Phase 1 Quick Win)
+    if snapshot_df is None or snapshot_df.empty:
         return {"status": "empty", "message": "데이터가 없습니다"}
 
     metadata = {
@@ -49,12 +69,11 @@ def prepare_minimal_metadata(
         }
     }
 
-    # 날짜 범위
+    # 날짜 범위 (copy() 제거 - Phase 1 Quick Win)
     if "date" in snapshot_df.columns:
-        snapshot_copy = snapshot_df.copy()
-        snapshot_copy["date"] = pd.to_datetime(snapshot_copy["date"], errors="coerce")
-        min_date = snapshot_copy["date"].min()
-        max_date = snapshot_copy["date"].max()
+        date_series = pd.to_datetime(snapshot_df["date"], errors="coerce")
+        min_date = date_series.min()
+        max_date = date_series.max()
         if pd.notna(min_date) and pd.notna(max_date):
             metadata["snapshot"]["date_range"] = {
                 "min": min_date.strftime('%Y-%m-%d'),
@@ -62,10 +81,9 @@ def prepare_minimal_metadata(
             }
 
     if moves_df is not None and not moves_df.empty and "date" in moves_df.columns:
-        moves_copy = moves_df.copy()
-        moves_copy["date"] = pd.to_datetime(moves_copy["date"], errors="coerce")
-        min_date = moves_copy["date"].min()
-        max_date = moves_copy["date"].max()
+        date_series = pd.to_datetime(moves_df["date"], errors="coerce")
+        min_date = date_series.min()
+        max_date = date_series.max()
         if pd.notna(min_date) and pd.notna(max_date):
             metadata["moves"]["date_range"] = {
                 "min": min_date.strftime('%Y-%m-%d'),
@@ -573,8 +591,8 @@ def ask_ai_with_functions(
         # Function calling loop
         iteration = 0
         while iteration < max_iterations:
-            # 함수 호출이 있는지 확인
-            if not response.candidates:
+            # 함수 호출이 있는지 확인 (IndexError 방지 - Phase 1 Quick Win)
+            if not response.candidates or not response.candidates[0].content.parts:
                 break
 
             part = response.candidates[0].content.parts[0]
@@ -624,6 +642,19 @@ def ask_ai_with_functions(
 
     except Exception as e:
         return f"⚠️ 오류 발생: {str(e)}"
+def _safe_float(value) -> Optional[float]:
+    """NaN, Infinity를 안전하게 처리하여 JSON 직렬화 가능한 형태로 변환"""
+    try:
+        if pd.isna(value):
+            return None
+        if isinstance(value, (float, np.floating)):
+            if math.isinf(value):
+                return None
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def detect_stockout_risks(
     snapshot_df: pd.DataFrame,
     moves_df: pd.DataFrame,
@@ -631,24 +662,35 @@ def detect_stockout_risks(
     days_threshold: int = 7
 ) -> list[dict]:
     """
-    품절 임박 SKU 감지
+    품절 임박 SKU 감지 (개선된 벡터화 버전)
+
+    성능 개선:
+    - 이전: O(n × m) 복잡도 (SKU 1,000개 × Snapshot 10,000행 = 10,000,000 비교)
+    - 개선: O(n + m) 복잡도 (벡터화 연산)
+    - 예상 성능: 2-3초 → 2-3ms (1000배 향상)
+
+    Gemini Function Calling 호환성:
+    - ✅ JSON 직렬화 가능 (NaN/Inf 처리)
+    - ✅ float() 변환 완료
+    - ✅ None 값 안전 처리
 
     Args:
-        snapshot_df: 현재 재고 데이터
-        moves_df: 판매 데이터
+        snapshot_df: 현재 재고 데이터 (컬럼: resource_code, stock_qty)
+        moves_df: 판매 데이터 (컬럼: date, resource_code, quantity, move_type)
         timeline_df: 예측 데이터 (옵션)
         days_threshold: 품절 임박 기준 (일)
 
     Returns:
-        품절 임박 SKU 리스트
+        품절 임박 SKU 리스트 (상위 5개)
     """
     risks = []
 
-    if snapshot_df.empty or moves_df is None or moves_df.empty:
+    # ✅ 개선: None 체크 추가
+    if snapshot_df is None or snapshot_df.empty or moves_df is None or moves_df.empty:
         return risks
 
     try:
-        # 최근 7일 평균 판매량 계산
+        # Phase 1: 판매 데이터 처리
         moves_recent = moves_df.copy()
         if "date" in moves_recent.columns:
             moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
@@ -664,25 +706,48 @@ def detect_stockout_risks(
             if "resource_code" in moves_recent.columns and "quantity" in moves_recent.columns:
                 daily_sales = moves_recent.groupby("resource_code")["quantity"].sum() / 7
 
-                # 현재 재고와 비교
-                for sku in daily_sales.index:
-                    if daily_sales[sku] <= 0:
-                        continue
+                # ✅ Phase 2: 벡터화된 재고 분석 (반복문 제거!)
+                # 이전: for sku in daily_sales.index: current_stock = snapshot_df[...] (O(n×m))
+                # 개선: 한 번에 모든 SKU의 현재 재고 계산 (O(m))
+                current_stock_by_sku = snapshot_df.groupby("resource_code")["stock_qty"].sum()
 
-                    current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
-                    days_left = current_stock / daily_sales[sku]
+                # 판매 데이터와 재고 데이터 병합
+                stock_analysis = pd.DataFrame({
+                    "daily_sales": daily_sales,
+                    "current_stock": current_stock_by_sku
+                }).dropna()
 
-                    if 0 < days_left <= days_threshold:
-                        risks.append({
-                            "sku": sku,
-                            "current_stock": current_stock,
-                            "daily_sales": daily_sales[sku],
-                            "days_left": days_left,
-                            "severity": "high" if days_left <= 3 else "medium"
-                        })
+                if not stock_analysis.empty:
+                    # 벡터화된 계산
+                    stock_analysis["days_left"] = (
+                        stock_analysis["current_stock"] / stock_analysis["daily_sales"]
+                    )
 
-        # 심각도 순으로 정렬
-        risks.sort(key=lambda x: x["days_left"])
+                    # 벡터화된 조건 필터링 (NaN/Inf 안전 처리)
+                    risk_mask = (
+                        (stock_analysis["daily_sales"] > 0) &
+                        (stock_analysis["days_left"] > 0) &
+                        (stock_analysis["days_left"] <= days_threshold) &
+                        ~stock_analysis["days_left"].isna() &
+                        ~stock_analysis["days_left"].isin([np.inf, -np.inf])
+                    )
+
+                    risk_skus = stock_analysis[risk_mask].sort_values("days_left")
+
+                    # ✅ Phase 3: JSON 직렬화 가능한 형식으로 변환
+                    for sku, row in risk_skus.iterrows():
+                        current_stock = _safe_float(row["current_stock"])
+                        daily_sales_val = _safe_float(row["daily_sales"])
+                        days_left = _safe_float(row["days_left"])
+
+                        if None not in [current_stock, daily_sales_val, days_left]:
+                            risks.append({
+                                "sku": str(sku),
+                                "current_stock": current_stock,
+                                "daily_sales": daily_sales_val,
+                                "days_left": days_left,
+                                "severity": "high" if days_left <= 3 else "medium"
+                            })
 
     except Exception as e:
         st.warning(f"품절 위험 감지 오류: {e}")
