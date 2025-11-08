@@ -303,56 +303,74 @@ def execute_function(
 
         elif function_name == "calculate_stockout_days":
             sku = parameters.get("sku")
-            if not sku or moves_df is None or moves_df.empty:
-                return {"error": "SKU 파라미터와 판매 데이터가 필요합니다"}
+            if not sku:
+                return {"error": "SKU 파라미터가 필요합니다"}
+
+            # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+            if "sales_qty" not in snapshot_df.columns:
+                return {"error": "판매 데이터(sales_qty)를 찾을 수 없습니다"}
+
+            sales_data = snapshot_df.copy()
+            sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
 
             # 최근 7일 평균 판매량
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=7)
-            moves_recent = moves_recent[
-                (moves_recent["date"] >= cutoff_date) &
-                (moves_recent["resource_code"] == sku)
+            cutoff_date = sales_data["date"].max() - timedelta(days=7)
+            sales_recent = sales_data[
+                (sales_data["date"] >= cutoff_date) &
+                (sales_data["resource_code"] == sku)
             ]
 
-            if moves_recent.empty:
-                return {"error": f"SKU '{sku}'의 판매 데이터가 없습니다"}
+            if sales_recent.empty:
+                return {"error": f"SKU '{sku}'의 최근 7일 판매 데이터가 없습니다"}
 
-            daily_sales = moves_recent["quantity"].sum() / 7
+            daily_sales = sales_recent["sales_qty"].sum() / 7
             current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
 
             if daily_sales <= 0:
                 return {
                     "sku": sku,
-                    "message": "판매량이 0입니다",
-                    "current_stock": float(current_stock)
+                    "message": "최근 7일 판매량이 0입니다",
+                    "current_stock": safe_float(current_stock)
                 }
 
             days_left = current_stock / daily_sales
             return {
                 "sku": sku,
-                "current_stock": float(current_stock),
-                "daily_sales_avg": float(daily_sales),
-                "days_until_stockout": float(days_left),
+                "current_stock": safe_float(current_stock),
+                "daily_sales_avg": safe_float(daily_sales),
+                "days_until_stockout": safe_float(days_left),
                 "status": "urgent" if days_left < 3 else "warning" if days_left < 7 else "ok"
             }
 
         elif function_name == "get_top_selling_skus":
             limit = parameters.get("limit", 5)
-            if moves_df is None or moves_df.empty:
-                return {"error": "판매 데이터가 없습니다"}
 
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=30)
-            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+            # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+            if "sales_qty" not in snapshot_df.columns:
+                return {"error": "판매 데이터(sales_qty)를 찾을 수 없습니다"}
 
-            top_skus = moves_recent.groupby("resource_code")["quantity"].sum().nlargest(limit)
+            sales_data = snapshot_df.copy()
+            sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
+
+            # 최근 30일 필터링
+            cutoff_date = sales_data["date"].max() - timedelta(days=30)
+            sales_recent = sales_data[sales_data["date"] >= cutoff_date]
+
+            # SKU별 판매량 합계
+            top_skus = sales_recent.groupby("resource_code")["sales_qty"].sum().nlargest(limit)
+
+            # resource_name 추가 (있으면)
+            result_list = []
+            for sku, qty in top_skus.items():
+                sku_info = {"sku": sku, "quantity": safe_float(qty)}
+                if "resource_name" in snapshot_df.columns:
+                    name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
+                    if pd.notna(name):
+                        sku_info["product_name"] = str(name)
+                result_list.append(sku_info)
+
             return {
-                "top_skus": [
-                    {"sku": sku, "quantity": float(qty)}
-                    for sku, qty in top_skus.items()
-                ],
+                "top_skus": result_list,
                 "period": "last_30_days",
                 "unit": "개"
             }
@@ -411,35 +429,42 @@ def execute_function(
             sku = parameters.get("sku")
             days = parameters.get("days", 7)
 
-            if not sku or moves_df is None or moves_df.empty:
-                return {"error": "SKU 파라미터와 판매 데이터가 필요합니다"}
+            if not sku:
+                return {"error": "SKU 파라미터가 필요합니다"}
 
-            moves_copy = moves_df.copy()
-            moves_copy["date"] = pd.to_datetime(moves_copy["date"], errors="coerce")
-            cutoff_date = moves_copy["date"].max() - timedelta(days=days)
+            # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+            if "sales_qty" not in snapshot_df.columns:
+                return {"error": "판매 데이터(sales_qty)를 찾을 수 없습니다"}
 
-            sku_sales = moves_copy[
-                (moves_copy["date"] >= cutoff_date) &
-                (moves_copy["resource_code"] == sku)
+            sales_data = snapshot_df.copy()
+            sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
+
+            # 최근 N일 필터링
+            cutoff_date = sales_data["date"].max() - timedelta(days=days)
+            sku_sales = sales_data[
+                (sales_data["date"] >= cutoff_date) &
+                (sales_data["resource_code"] == sku)
             ]
 
             if sku_sales.empty:
-                return {"error": f"SKU '{sku}'의 판매 데이터가 없습니다"}
+                return {"error": f"SKU '{sku}'의 최근 {days}일 판매 데이터가 없습니다"}
 
-            # 센터별
-            by_center = sku_sales.groupby("center")["quantity"].sum().to_dict()
+            # 센터별 판매량
+            by_center = sku_sales.groupby("center")["sales_qty"].sum().to_dict()
 
-            # 일별
-            by_date = sku_sales.groupby(sku_sales["date"].dt.date)["quantity"].sum()
+            # 일별 판매량
+            by_date = sku_sales.groupby(sku_sales["date"].dt.date)["sales_qty"].sum()
+
+            total_sales = sku_sales["sales_qty"].sum()
 
             return {
                 "sku": sku,
                 "period_days": days,
-                "total_sales": float(sku_sales["quantity"].sum()),
-                "daily_avg": float(sku_sales["quantity"].sum() / days),
-                "by_center": {k: float(v) for k, v in by_center.items()},
+                "total_sales": safe_float(total_sales),
+                "daily_avg": safe_float(total_sales / days),
+                "by_center": {k: safe_float(v) for k, v in by_center.items()},
                 "daily_breakdown": [
-                    {"date": str(date), "quantity": float(qty)}
+                    {"date": str(date), "quantity": safe_float(qty)}
                     for date, qty in by_date.items()
                 ],
                 "unit": "개"
@@ -469,35 +494,38 @@ def execute_function(
                 "unit": "개"
             }
 
-            # 판매 비교
-            if moves_df is not None and not moves_df.empty:
-                moves_recent = moves_df.copy()
-                moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-                cutoff_date = moves_recent["date"].max() - timedelta(days=30)
-                moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+            # 판매 비교 - ✅ FIX: snapshot_df의 sales_qty 사용
+            if "sales_qty" in snapshot_df.columns:
+                sales_data = snapshot_df.copy()
+                sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
+                cutoff_date = sales_data["date"].max() - timedelta(days=30)
+                sales_recent = sales_data[sales_data["date"] >= cutoff_date]
 
-                sales1 = moves_recent[moves_recent["resource_code"] == sku1]["quantity"].sum()
-                sales2 = moves_recent[moves_recent["resource_code"] == sku2]["quantity"].sum()
+                sales1 = sales_recent[sales_recent["resource_code"] == sku1]["sales_qty"].sum()
+                sales2 = sales_recent[sales_recent["resource_code"] == sku2]["sales_qty"].sum()
 
-                result["sku1"]["sales_30d"] = float(sales1)
-                result["sku2"]["sales_30d"] = float(sales2)
-                result["sales_diff"] = float(sales1 - sales2)
+                result["sku1"]["sales_30d"] = safe_float(sales1)
+                result["sku2"]["sales_30d"] = safe_float(sales2)
+                result["sales_diff"] = safe_float(sales1 - sales2)
 
             return result
 
         elif function_name == "search_low_stock_skus":
             days_threshold = parameters.get("days_threshold", 7)
 
-            if moves_df is None or moves_df.empty:
-                return {"error": "판매 데이터가 필요합니다"}
+            # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+            if "sales_qty" not in snapshot_df.columns:
+                return {"error": "판매 데이터(sales_qty)를 찾을 수 없습니다"}
 
-            # 모든 SKU에 대해 품절 임박 계산
-            moves_recent = moves_df.copy()
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - timedelta(days=7)
-            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+            sales_data = snapshot_df.copy()
+            sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
 
-            daily_sales_by_sku = moves_recent.groupby("resource_code")["quantity"].sum() / 7
+            # 최근 7일 판매 데이터
+            cutoff_date = sales_data["date"].max() - timedelta(days=7)
+            sales_recent = sales_data[sales_data["date"] >= cutoff_date]
+
+            # SKU별 일평균 판매량
+            daily_sales_by_sku = sales_recent.groupby("resource_code")["sales_qty"].sum() / 7
 
             low_stock_skus = []
             for sku in daily_sales_by_sku.index:
@@ -508,13 +536,19 @@ def execute_function(
                 days_left = current_stock / daily_sales_by_sku[sku]
 
                 if 0 < days_left <= days_threshold:
-                    low_stock_skus.append({
+                    sku_info = {
                         "sku": sku,
-                        "current_stock": float(current_stock),
-                        "daily_sales": float(daily_sales_by_sku[sku]),
-                        "days_left": float(days_left),
+                        "current_stock": safe_float(current_stock),
+                        "daily_sales": safe_float(daily_sales_by_sku[sku]),
+                        "days_left": safe_float(days_left),
                         "severity": "urgent" if days_left < 3 else "warning"
-                    })
+                    }
+                    # resource_name 추가 (있으면)
+                    if "resource_name" in snapshot_df.columns:
+                        name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
+                        if pd.notna(name):
+                            sku_info["product_name"] = str(name)
+                    low_stock_skus.append(sku_info)
 
             # 심각도 순 정렬
             low_stock_skus.sort(key=lambda x: x["days_left"])
@@ -653,7 +687,7 @@ def _safe_float(value) -> Optional[float]:
 
 def detect_stockout_risks(
     snapshot_df: pd.DataFrame,
-    moves_df: pd.DataFrame,
+    moves_df: pd.DataFrame = None,
     timeline_df: pd.DataFrame = None,
     days_threshold: int = 7
 ) -> list[dict]:
@@ -671,8 +705,8 @@ def detect_stockout_risks(
     - ✅ None 값 안전 처리
 
     Args:
-        snapshot_df: 현재 재고 데이터 (컬럼: resource_code, stock_qty)
-        moves_df: 판매 데이터 (컬럼: date, resource_code, quantity, move_type)
+        snapshot_df: 재고 + 판매 데이터 (컬럼: resource_code, stock_qty, sales_qty, date)
+        moves_df: (사용 안 함 - 하위 호환성)
         timeline_df: 예측 데이터 (옵션)
         days_threshold: 품절 임박 기준 (일)
 
@@ -681,26 +715,23 @@ def detect_stockout_risks(
     """
     risks = []
 
-    # ✅ 개선: None 체크 추가
-    if snapshot_df is None or snapshot_df.empty or moves_df is None or moves_df.empty:
+    # ✅ 개선: None 체크 + sales_qty 확인
+    if snapshot_df is None or snapshot_df.empty or "sales_qty" not in snapshot_df.columns:
         return risks
 
     try:
-        # Phase 1: 판매 데이터 처리
-        moves_recent = moves_df.copy()
-        if "date" in moves_recent.columns:
-            moves_recent["date"] = pd.to_datetime(moves_recent["date"], errors="coerce")
-            cutoff_date = moves_recent["date"].max() - pd.Timedelta(days=7)
-            moves_recent = moves_recent[moves_recent["date"] >= cutoff_date]
+        # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+        sales_data = snapshot_df.copy()
+        sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
 
-            # 판매만 필터 (CustomerShipment 등)
-            if "move_type" in moves_recent.columns:
-                sales_types = ["CustomerShipment", "출고", "판매"]
-                moves_recent = moves_recent[moves_recent["move_type"].isin(sales_types)]
+        # Phase 1: 최근 7일 판매 데이터
+        cutoff_date = sales_data["date"].max() - pd.Timedelta(days=7)
+        sales_recent = sales_data[sales_data["date"] >= cutoff_date]
 
+        if not sales_recent.empty:
             # SKU별 일평균 판매량
-            if "resource_code" in moves_recent.columns and "quantity" in moves_recent.columns:
-                daily_sales = moves_recent.groupby("resource_code")["quantity"].sum() / 7
+            if "resource_code" in sales_recent.columns:
+                daily_sales = sales_recent.groupby("resource_code")["sales_qty"].sum() / 7
 
                 # ✅ Phase 2: 벡터화된 재고 분석 (반복문 제거!)
                 # 이전: for sku in daily_sales.index: current_stock = snapshot_df[...] (O(n×m))
