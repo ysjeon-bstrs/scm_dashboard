@@ -1451,6 +1451,18 @@ def render_simple_chatbot_tab(
     """
     st.subheader("🤖 AI 어시스턴트 (Gemini 2.0 Function Calling - 토큰 90% 절약)")
 
+    # 🐛 DEBUG: moves_df 구조 확인
+    with st.expander("🔍 DEBUG: moves_df 정보 (개발용)", expanded=False):
+        if moves_df is not None and not moves_df.empty:
+            st.write(f"**Rows**: {len(moves_df):,}")
+            st.write(f"**Columns**: {list(moves_df.columns)}")
+            st.write("**첫 3행**:")
+            st.dataframe(moves_df.head(3))
+            st.write("**데이터 타입**:")
+            st.write(moves_df.dtypes)
+        else:
+            st.warning("moves_df가 비어있거나 None입니다")
+
     # 필터링
     snap = snapshot_df.copy()
     if "center" in snap.columns:
