@@ -158,8 +158,7 @@ GEMINI_FUNCTIONS = [
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "조회할 SKU 개수 (기본값: 5)",
-                    "default": 5
+                    "description": "조회할 SKU 개수. 지정하지 않으면 5개 반환"
                 }
             },
             "required": []
@@ -177,8 +176,7 @@ GEMINI_FUNCTIONS = [
                 },
                 "days": {
                     "type": "integer",
-                    "description": "조회할 일수 (기본값: 30)",
-                    "default": 30
+                    "description": "조회할 일수. 지정하지 않으면 30일 반환"
                 }
             },
             "required": ["sku"]
@@ -196,8 +194,7 @@ GEMINI_FUNCTIONS = [
                 },
                 "days": {
                     "type": "integer",
-                    "description": "조회할 일수 (기본값: 7)",
-                    "default": 7
+                    "description": "조회할 일수. 지정하지 않으면 7일 반환"
                 }
             },
             "required": ["sku"]
@@ -229,8 +226,7 @@ GEMINI_FUNCTIONS = [
             "properties": {
                 "days_threshold": {
                     "type": "integer",
-                    "description": "품절 임박 기준 일수 (기본값: 7)",
-                    "default": 7
+                    "description": "품절 임박 기준 일수. 지정하지 않으면 7일 사용"
                 }
             },
             "required": []
