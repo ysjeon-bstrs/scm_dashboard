@@ -1678,34 +1678,6 @@ def render_simple_chatbot_tab(
     """
     st.subheader("🤖 AI 어시스턴트 (Gemini 2.0 Function Calling - 토큰 90% 절약)")
 
-    # 🐛 DEBUG: 데이터 구조 확인
-    with st.expander("🔍 DEBUG: 데이터 구조 (개발용)", expanded=False):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("### snapshot_df")
-            if snapshot_df is not None and not snapshot_df.empty:
-                st.write(f"**Rows**: {len(snapshot_df):,}")
-                st.write(f"**Columns**: {list(snapshot_df.columns)}")
-                st.write("**sales_qty 있음?**:", "sales_qty" in snapshot_df.columns)
-                if "sales_qty" in snapshot_df.columns:
-                    st.write(f"**sales_qty 합계**: {snapshot_df['sales_qty'].sum():,.0f}")
-                st.write("**첫 3행**:")
-                st.dataframe(snapshot_df.head(3))
-            else:
-                st.warning("snapshot_df가 비어있음")
-
-        with col2:
-            st.markdown("### moves_df")
-            if moves_df is not None and not moves_df.empty:
-                st.write(f"**Rows**: {len(moves_df):,}")
-                st.write(f"**Columns**: {list(moves_df.columns)}")
-                st.write("**qty_ea 합계**:", f"{moves_df['qty_ea'].sum():,.0f}" if "qty_ea" in moves_df.columns else "N/A")
-                st.write("**첫 3행**:")
-                st.dataframe(moves_df.head(3))
-            else:
-                st.warning("moves_df가 비어있음")
-
     # 필터링
     snap = snapshot_df.copy()
     if "center" in snap.columns:
@@ -1740,12 +1712,13 @@ def render_simple_chatbot_tab(
         value=st.session_state.get("pending_question", "")
     )
 
-    # pending_question이 있으면 자동 실행 후 클리어
+    # pending_question 처리: 자동으로 질문 실행
+    auto_ask = False
     if "pending_question" in st.session_state and st.session_state.pending_question:
+        auto_ask = True
         st.session_state.pop("pending_question")
-        st.rerun()
 
-    if st.button("💬 질문하기", type="primary", key="simple_ask") and question:
+    if (st.button("💬 질문하기", type="primary", key="simple_ask") or auto_ask) and question:
         with st.spinner("🤔 생각 중..."):
             # 질문에서 엔티티 추출 (SKU, 센터, 날짜)
             entities = extract_entities_from_question(question, snap, moves_df)
