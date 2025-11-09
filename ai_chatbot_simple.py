@@ -231,6 +231,24 @@ GEMINI_FUNCTIONS = [
             },
             "required": []
         }
+    },
+    {
+        "name": "forecast_sales",
+        "description": "특정 SKU의 미래 판매량을 예측합니다. 최근 4주의 판매 데이터를 기반으로 선형 트렌드를 계산하여 다음 주 또는 다음 N주의 예상 판매량을 반환합니다.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sku": {
+                    "type": "string",
+                    "description": "SKU 코드 (예: BA00021)"
+                },
+                "weeks": {
+                    "type": "integer",
+                    "description": "몇 주 후를 예측할지. 지정하지 않으면 1주 후 (다음주) 예측"
+                }
+            },
+            "required": ["sku"]
+        }
     }
 ]
 
@@ -558,6 +576,115 @@ def execute_function(
                 "threshold_days": days_threshold,
                 "total_found": len(low_stock_skus)
             }
+
+        elif function_name == "forecast_sales":
+            sku = parameters.get("sku")
+            weeks = parameters.get("weeks", 1)
+
+            if not sku:
+                return {"error": "SKU 파라미터가 필요합니다"}
+
+            # ✅ snapshot_df의 sales_qty 사용 (실제 판매 데이터)
+            if "sales_qty" not in snapshot_df.columns:
+                return {"error": "판매 데이터(sales_qty)를 찾을 수 없습니다"}
+
+            sales_data = snapshot_df.copy()
+            sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
+
+            # 최근 4주 데이터 (28일)
+            latest_date = sales_data["date"].max()
+            cutoff_date = latest_date - timedelta(days=28)
+            sales_recent = sales_data[
+                (sales_data["date"] >= cutoff_date) &
+                (sales_data["resource_code"] == sku)
+            ]
+
+            if sales_recent.empty:
+                return {"error": f"SKU '{sku}'의 최근 4주 판매 데이터가 없습니다"}
+
+            # 주차별 판매량 계산
+            sales_recent["week"] = sales_recent["date"].dt.isocalendar().week
+            sales_recent["year"] = sales_recent["date"].dt.year
+            weekly_sales = sales_recent.groupby(["year", "week"])["sales_qty"].sum().reset_index()
+            weekly_sales = weekly_sales.sort_values(["year", "week"])
+
+            if len(weekly_sales) < 2:
+                # 데이터가 부족하면 최근 7일 평균 사용
+                recent_7days = sales_data[
+                    (sales_data["date"] >= latest_date - timedelta(days=7)) &
+                    (sales_data["resource_code"] == sku)
+                ]
+                avg_weekly = recent_7days["sales_qty"].sum()  # 최근 1주 총합
+
+                return {
+                    "sku": sku,
+                    "forecast_weeks": weeks,
+                    "predicted_sales": safe_float(avg_weekly * weeks),
+                    "method": "recent_average",
+                    "weekly_average": safe_float(avg_weekly),
+                    "confidence": "low",
+                    "note": "데이터 부족으로 최근 1주 평균 사용"
+                }
+
+            # 선형 트렌드 계산
+            weekly_sales["week_index"] = range(len(weekly_sales))
+            x = weekly_sales["week_index"].values
+            y = weekly_sales["sales_qty"].values
+
+            # 간단한 선형 회귀 (y = mx + b)
+            n = len(x)
+            x_mean = x.mean()
+            y_mean = y.mean()
+
+            numerator = ((x - x_mean) * (y - y_mean)).sum()
+            denominator = ((x - x_mean) ** 2).sum()
+
+            if denominator != 0:
+                slope = numerator / denominator
+                intercept = y_mean - slope * x_mean
+
+                # 다음 weeks주 예측
+                next_week_index = len(weekly_sales)
+                predicted_sales = []
+                for i in range(weeks):
+                    pred = intercept + slope * (next_week_index + i)
+                    predicted_sales.append(max(0, pred))  # 음수 방지
+
+                total_predicted = sum(predicted_sales)
+
+                # 트렌드 방향
+                trend = "증가" if slope > 0 else "감소" if slope < 0 else "유지"
+
+                result = {
+                    "sku": sku,
+                    "forecast_weeks": weeks,
+                    "predicted_sales": safe_float(total_predicted),
+                    "weekly_breakdown": [safe_float(p) for p in predicted_sales],
+                    "method": "linear_trend",
+                    "trend": trend,
+                    "trend_slope": safe_float(slope),
+                    "recent_4weeks_average": safe_float(y_mean),
+                    "confidence": "medium" if abs(slope) < y_mean * 0.2 else "low"
+                }
+
+                # product_name 추가 (있으면)
+                if "resource_name" in snapshot_df.columns:
+                    name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
+                    if pd.notna(name):
+                        result["product_name"] = str(name)
+
+                return result
+            else:
+                # slope 계산 불가 시 평균 사용
+                avg_weekly = y_mean
+                return {
+                    "sku": sku,
+                    "forecast_weeks": weeks,
+                    "predicted_sales": safe_float(avg_weekly * weeks),
+                    "method": "average",
+                    "weekly_average": safe_float(avg_weekly),
+                    "confidence": "medium"
+                }
 
         else:
             return {"error": f"알 수 없는 함수: {function_name}"}
@@ -1680,7 +1807,7 @@ def render_simple_chatbot_tab(
         st.caption("• BA00021은 어느 센터에 있나요?")
 
     with col2:
-        st.caption("**추세/예측 분석 🆕**")
-        st.caption("• BA00021의 재고 추세는?")
-        st.caption("• 다음주 예상 재고는?")
-        st.caption("• 어느 SKU가 재고가 증가하고 있나요?")
+        st.caption("**판매/재고 예측 🆕**")
+        st.caption("• BA00021 다음주 예상 판매량은?")
+        st.caption("• BA00022의 판매 추세는?")
+        st.caption("• 다음 2주간 BA00021은 몇개 팔릴까?")
