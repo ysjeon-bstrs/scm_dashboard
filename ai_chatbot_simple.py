@@ -779,7 +779,8 @@ def ask_ai_with_functions(
             if hasattr(part, 'function_call'):
                 function_call = part.function_call
                 function_name = function_call.name
-                function_args = dict(function_call.args)
+                # args가 None일 수 있으므로 안전하게 처리
+                function_args = dict(function_call.args) if function_call.args else {}
 
                 st.caption(f"🔧 함수 호출: `{function_name}({json.dumps(function_args, ensure_ascii=False)})`")
 
