@@ -608,12 +608,15 @@ def ask_ai_with_functions(
 **사용자 질문:**
 {question}
 
-**답변 규칙:**
-1. 정확한 정보가 필요하면 제공된 함수를 호출하세요
-2. 숫자는 쉼표로 포맷팅하세요 (예: 1,234개)
-3. 2-4문장으로 간결하게 답변하세요
-4. 데이터에 없는 내용은 "데이터에서 확인할 수 없습니다"라고 답변하세요
-5. 한국어로 작성하세요"""
+**답변 규칙 (매우 중요!):**
+1. ⚠️ 재고량, 판매량, SKU 정보 등 데이터 조회가 필요한 질문은 **반드시** 함수를 호출하세요
+2. ⚠️ 절대 "함수를 호출하겠습니다"라고 말만 하지 마세요 - 즉시 함수를 실행하세요
+3. 함수 결과를 받으면 그 정확한 숫자로 답변하세요 (쉼표 포맷: 1,234개)
+4. 2-4문장으로 간결하게 답변하세요
+5. 데이터에 없는 내용은 "데이터에서 확인할 수 없습니다"라고 답변하세요
+6. 한국어로 작성하세요
+
+**중요:** 함수 호출이 가능한 경우 먼저 함수를 호출한 후, 그 결과를 바탕으로 답변하세요. 함수 호출 의도만 말하지 마세요."""
 
         chat = model.start_chat()
         response = chat.send_message(initial_prompt)
@@ -1291,18 +1294,31 @@ def analyze_question_for_chart(question: str) -> dict:
     """
     question_lower = question.lower()
 
-    # 차트가 필요한 키워드
-    chart_keywords = ["추세", "변화", "비교", "분포", "그래프", "차트", "시각화", "트렌드"]
-    need_chart = any(kw in question_lower for kw in chart_keywords)
+    # 차트가 명시적으로 필요한 키워드 (더 엄격하게)
+    explicit_chart_keywords = ["그래프", "차트", "시각화", "보여줘", "그려줘"]
+    has_explicit_request = any(kw in question_lower for kw in explicit_chart_keywords)
+
+    # 차트가 도움이 될 수 있는 키워드 (추세, 비교, 분포 등)
+    implicit_chart_keywords = ["추세", "변화", "비교", "분포", "트렌드", "센터별", "sku별"]
+    has_implicit_need = any(kw in question_lower for kw in implicit_chart_keywords)
+
+    # 단순 사실 질문 키워드 (차트 불필요)
+    # 단, "센터별"이나 "sku별" 같은 분포 질문은 제외
+    simple_fact_keywords = ["총 몇", "몇개", "얼마"]
+    is_simple_fact = any(kw in question_lower for kw in simple_fact_keywords) and not has_implicit_need
+
+    # 명시적 요청이 있거나, 암묵적 필요가 있으면서 단순 사실 질문이 아닌 경우만 차트 생성
+    need_chart = has_explicit_request or (has_implicit_need and not is_simple_fact)
 
     # 차트 타입 판단
     chart_type = None
-    if "추세" in question_lower or "변화" in question_lower or "트렌드" in question_lower:
-        chart_type = "line"  # 시계열
-    elif "비교" in question_lower or "분포" in question_lower or "센터별" in question_lower or "sku별" in question_lower:
-        chart_type = "bar"  # 바 차트
-    elif "비율" in question_lower or "점유" in question_lower:
-        chart_type = "pie"  # 파이 차트
+    if need_chart:
+        if "추세" in question_lower or "변화" in question_lower or "트렌드" in question_lower:
+            chart_type = "line"  # 시계열
+        elif "비교" in question_lower or "분포" in question_lower or "센터별" in question_lower or "sku별" in question_lower:
+            chart_type = "bar"  # 바 차트
+        elif "비율" in question_lower or "점유" in question_lower:
+            chart_type = "pie"  # 파이 차트
 
     # 엔티티 추출 (간단 버전)
     entities = {
@@ -1312,7 +1328,7 @@ def analyze_question_for_chart(question: str) -> dict:
     }
 
     return {
-        "need_chart": need_chart or chart_type is not None,
+        "need_chart": need_chart,
         "chart_type": chart_type,
         "entities": entities
     }
