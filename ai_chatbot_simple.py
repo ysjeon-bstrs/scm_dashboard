@@ -1298,13 +1298,14 @@ def analyze_question_for_chart(question: str) -> dict:
     explicit_chart_keywords = ["그래프", "차트", "시각화", "보여줘", "그려줘"]
     has_explicit_request = any(kw in question_lower for kw in explicit_chart_keywords)
 
-    # 차트가 도움이 될 수 있는 키워드 (추세, 비교 등)
-    implicit_chart_keywords = ["추세", "변화", "비교", "분포", "트렌드"]
+    # 차트가 도움이 될 수 있는 키워드 (추세, 비교, 분포 등)
+    implicit_chart_keywords = ["추세", "변화", "비교", "분포", "트렌드", "센터별", "sku별"]
     has_implicit_need = any(kw in question_lower for kw in implicit_chart_keywords)
 
     # 단순 사실 질문 키워드 (차트 불필요)
-    simple_fact_keywords = ["총 몇", "몇개", "얼마", "재고는", "있나"]
-    is_simple_fact = any(kw in question_lower for kw in simple_fact_keywords)
+    # 단, "센터별"이나 "sku별" 같은 분포 질문은 제외
+    simple_fact_keywords = ["총 몇", "몇개", "얼마"]
+    is_simple_fact = any(kw in question_lower for kw in simple_fact_keywords) and not has_implicit_need
 
     # 명시적 요청이 있거나, 암묵적 필요가 있으면서 단순 사실 질문이 아닌 경우만 차트 생성
     need_chart = has_explicit_request or (has_implicit_need and not is_simple_fact)
