@@ -725,7 +725,7 @@ def ask_ai_with_functions(
 
         # Function declarations 등록
         model = genai.GenerativeModel(
-            "gemini-1.5-flash-latest",  # 올바른 모델명
+            "gemini-2.0-flash-exp",  # 2.0으로 복귀 (확실히 작동함)
             tools=[{"function_declarations": GEMINI_FUNCTIONS}]
         )
 
@@ -757,7 +757,23 @@ def ask_ai_with_functions(
 **중요:** 함수 호출 가능한 질문에는 반드시 함수를 먼저 호출하세요. 텍스트 설명만 하지 마세요."""
 
         chat = model.start_chat()
-        response = chat.send_message(initial_prompt)
+
+        # Rate limit 처리를 위한 재시도 로직
+        import time
+        from google.api_core.exceptions import ResourceExhausted
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = chat.send_message(initial_prompt)
+                break
+            except ResourceExhausted as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1초, 2초, 4초
+                    st.caption(f"⏳ Rate limit 도달. {wait_time}초 대기 중... ({attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    raise  # 마지막 시도에서도 실패하면 에러 발생
 
         # Function calling loop
         iteration = 0
@@ -1275,8 +1291,8 @@ def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, m
             kpi_result = calculate_kpi(func_name, snapshot_df, moves_df, **kwargs)
 
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        # Gemini 1.5 Flash 모델 사용 (안정적, 높은 rate limit)
-        model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        # Gemini 2.0 Flash 모델 사용
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
 
         # 2. KPI 결과가 있으면 프롬프트에 추가
         kpi_section = ""
