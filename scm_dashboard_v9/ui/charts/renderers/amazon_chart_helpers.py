@@ -214,18 +214,21 @@ def process_moves_data(
             if name in mv_cols:
                 rename_moves[mv_cols[name]] = name
         moves_df = moves_df.rename(columns=rename_moves)
-        moves_df["event_date"] = pd.to_datetime(
-            moves_df.get("event_date"), errors="coerce"
-        ).dt.normalize()
+        if "event_date" in moves_df.columns:
+            moves_df["event_date"] = pd.to_datetime(
+                moves_df["event_date"], errors="coerce"
+            ).dt.normalize()
+        else:
+            moves_df["event_date"] = pd.NaT
         if "arrival_date" in moves_df.columns:
             moves_df["arrival_date"] = pd.to_datetime(
-                moves_df.get("arrival_date"), errors="coerce"
+                moves_df["arrival_date"], errors="coerce"
             ).dt.normalize()
         else:
             moves_df["arrival_date"] = pd.NaT
         if "eta_date" in moves_df.columns:
             moves_df["eta_date"] = pd.to_datetime(
-                moves_df.get("eta_date"), errors="coerce"
+                moves_df["eta_date"], errors="coerce"
             ).dt.normalize()
         else:
             moves_df["eta_date"] = pd.NaT
