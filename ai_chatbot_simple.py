@@ -736,14 +736,20 @@ def ask_ai_with_functions(
 {question}
 
 **답변 규칙 (매우 중요!):**
-1. ⚠️ 재고량, 판매량, SKU 정보 등 데이터 조회가 필요한 질문은 **반드시** 함수를 호출하세요
+1. ⚠️ 재고량, 판매량, SKU 정보, 예측 등 데이터 조회가 필요한 질문은 **반드시 먼저 함수를 호출**하세요
 2. ⚠️ 절대 "함수를 호출하겠습니다"라고 말만 하지 마세요 - 즉시 함수를 실행하세요
-3. 함수 결과를 받으면 그 정확한 숫자로 답변하세요 (쉼표 포맷: 1,234개)
-4. 2-4문장으로 간결하게 답변하세요
-5. 데이터에 없는 내용은 "데이터에서 확인할 수 없습니다"라고 답변하세요
-6. 한국어로 작성하세요
+3. ⚠️ "다음주", "몇개 팔릴까", "예상", "예측" 같은 단어가 있으면 forecast_sales() 함수를 호출하세요
+4. 함수 결과를 받으면 그 정확한 숫자로 답변하세요 (쉼표 포맷: 1,234개)
+5. 2-4문장으로 간결하게 답변하세요
+6. 데이터에 없는 내용만 "데이터에서 확인할 수 없습니다"라고 답변하세요
+7. 한국어로 작성하세요
 
-**중요:** 함수 호출이 가능한 경우 먼저 함수를 호출한 후, 그 결과를 바탕으로 답변하세요. 함수 호출 의도만 말하지 마세요."""
+**함수 호출 예시:**
+- "다음주 BA00022 몇개 팔릴까?" → forecast_sales(sku="BA00022", weeks=1) 즉시 호출
+- "다음 2주간 판매 예측" → forecast_sales(sku=..., weeks=2) 즉시 호출
+- "총 재고는?" → get_total_stock() 즉시 호출
+
+**중요:** 함수 호출 가능한 질문에는 반드시 함수를 먼저 호출하세요. 텍스트 설명만 하지 마세요."""
 
         chat = model.start_chat()
         response = chat.send_message(initial_prompt)
@@ -753,13 +759,25 @@ def ask_ai_with_functions(
         while iteration < max_iterations:
             # 함수 호출이 있는지 확인 (IndexError 방지 - Phase 1 Quick Win)
             if not response.candidates or not response.candidates[0].content.parts:
+                st.caption(f"🔍 DEBUG: 응답에 candidates나 parts가 없음 (iteration {iteration})")
                 break
 
             part = response.candidates[0].content.parts[0]
 
+            # DEBUG: 응답 타입 확인
+            has_text = hasattr(part, 'text')
+            has_function = hasattr(part, 'function_call')
+            if iteration == 0:
+                st.caption(f"🔍 DEBUG: 첫 응답 - text={has_text}, function_call={has_function}")
+
             # 텍스트 응답이면 종료
             if hasattr(part, 'text'):
-                return part.text
+                text_response = part.text.strip()
+                if not text_response:
+                    # 빈 응답 처리
+                    st.warning("⚠️ AI가 빈 응답을 반환했습니다. 다시 시도해주세요.")
+                    return "죄송합니다. 답변을 생성할 수 없었습니다. 질문을 다시 입력해주세요."
+                return text_response
 
             # 함수 호출이면 실행
             if hasattr(part, 'function_call'):
