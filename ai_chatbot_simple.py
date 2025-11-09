@@ -627,7 +627,7 @@ def execute_function(
                 }
 
             # 선형 트렌드 계산
-            weekly_sales["week_index"] = range(len(weekly_sales))
+            weekly_sales["week_index"] = list(range(len(weekly_sales)))
             x = weekly_sales["week_index"].values
             y = weekly_sales["sales_qty"].values
 
@@ -646,7 +646,7 @@ def execute_function(
                 # 다음 weeks주 예측
                 next_week_index = len(weekly_sales)
                 predicted_sales = []
-                for i in range(weeks):
+                for i in range(int(weeks)):  # weeks를 int로 변환
                     pred = intercept + slope * (next_week_index + i)
                     predicted_sales.append(max(0, pred))  # 음수 방지
 
@@ -657,7 +657,7 @@ def execute_function(
 
                 result = {
                     "sku": sku,
-                    "forecast_weeks": weeks,
+                    "forecast_weeks": int(weeks),
                     "predicted_sales": safe_float(total_predicted),
                     "weekly_breakdown": [safe_float(p) for p in predicted_sales],
                     "method": "linear_trend",
@@ -669,9 +669,11 @@ def execute_function(
 
                 # product_name 추가 (있으면)
                 if "resource_name" in snapshot_df.columns:
-                    name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
-                    if pd.notna(name):
-                        result["product_name"] = str(name)
+                    sku_rows = snapshot_df[snapshot_df["resource_code"] == sku]
+                    if not sku_rows.empty:
+                        name = sku_rows["resource_name"].iloc[0]
+                        if pd.notna(name):
+                            result["product_name"] = str(name)
 
                 return result
             else:
@@ -679,7 +681,7 @@ def execute_function(
                 avg_weekly = y_mean
                 return {
                     "sku": sku,
-                    "forecast_weeks": weeks,
+                    "forecast_weeks": int(weeks),
                     "predicted_sales": safe_float(avg_weekly * weeks),
                     "method": "average",
                     "weekly_average": safe_float(avg_weekly),
@@ -690,6 +692,9 @@ def execute_function(
             return {"error": f"알 수 없는 함수: {function_name}"}
 
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        st.error(f"🐛 함수 실행 상세 오류:\n```\n{error_detail}\n```")
         return {"error": f"함수 실행 오류: {str(e)}"}
 
 
@@ -820,6 +825,9 @@ def ask_ai_with_functions(
             return "답변을 생성할 수 없습니다."
 
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        st.error(f"🐛 ask_ai_with_functions 상세 오류:\n```\n{error_detail}\n```")
         return f"⚠️ 오류 발생: {str(e)}"
 def _safe_float(value) -> Optional[float]:
     """NaN, Infinity를 안전하게 처리하여 JSON 직렬화 가능한 형태로 변환"""
