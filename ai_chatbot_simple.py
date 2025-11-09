@@ -770,16 +770,7 @@ def ask_ai_with_functions(
             if iteration == 0:
                 st.caption(f"🔍 DEBUG: 첫 응답 - text={has_text}, function_call={has_function}")
 
-            # 텍스트 응답이면 종료
-            if hasattr(part, 'text'):
-                text_response = part.text.strip()
-                if not text_response:
-                    # 빈 응답 처리
-                    st.warning("⚠️ AI가 빈 응답을 반환했습니다. 다시 시도해주세요.")
-                    return "죄송합니다. 답변을 생성할 수 없었습니다. 질문을 다시 입력해주세요."
-                return text_response
-
-            # 함수 호출이면 실행
+            # ⚠️ 중요: function_call을 먼저 체크! (Gemini는 둘 다 반환할 수 있음)
             if hasattr(part, 'function_call'):
                 function_call = part.function_call
                 function_name = function_call.name
@@ -809,6 +800,16 @@ def ask_ai_with_functions(
                 )
 
                 iteration += 1
+
+            # 텍스트 응답이면 종료
+            elif hasattr(part, 'text'):
+                text_response = part.text.strip()
+                if not text_response:
+                    # 빈 응답 처리
+                    st.warning("⚠️ AI가 빈 응답을 반환했습니다. 다시 시도해주세요.")
+                    return "죄송합니다. 답변을 생성할 수 없었습니다. 질문을 다시 입력해주세요."
+                return text_response
+
             else:
                 break
 
