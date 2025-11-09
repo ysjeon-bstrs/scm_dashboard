@@ -779,6 +779,12 @@ def ask_ai_with_functions(
             if hasattr(part, 'function_call'):
                 function_call = part.function_call
                 function_name = function_call.name
+
+                # function_name이 비어있으면 루프 중단 (Gemini 버그)
+                if not function_name:
+                    st.warning("⚠️ Gemini가 빈 함수 이름을 반환했습니다. 루프를 중단합니다.")
+                    break
+
                 # args가 None일 수 있으므로 안전하게 처리
                 function_args = dict(function_call.args) if function_call.args else {}
 
@@ -792,6 +798,9 @@ def ask_ai_with_functions(
                     moves_df,
                     timeline_df
                 )
+
+                # 🔍 DEBUG: 함수 실행 결과 로깅
+                st.caption(f"🔍 DEBUG: 함수 실행 결과 - {json.dumps(result, ensure_ascii=False)[:200]}...")
 
                 # 결과를 Gemini에게 전달
                 response = chat.send_message(
