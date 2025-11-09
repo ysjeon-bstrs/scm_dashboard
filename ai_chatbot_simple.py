@@ -725,7 +725,7 @@ def ask_ai_with_functions(
 
         # Function declarations 등록
         model = genai.GenerativeModel(
-            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash",  # 1.5로 변경: 더 높은 rate limit (15 RPM vs 10 RPM)
             tools=[{"function_declarations": GEMINI_FUNCTIONS}]
         )
 
@@ -1275,8 +1275,8 @@ def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, m
             kpi_result = calculate_kpi(func_name, snapshot_df, moves_df, **kwargs)
 
         genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        # Gemini 2.0 모델 사용 (최신 버전)
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        # Gemini 1.5 Flash 모델 사용 (안정적, 높은 rate limit)
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
         # 2. KPI 결과가 있으면 프롬프트에 추가
         kpi_section = ""
