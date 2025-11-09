@@ -729,13 +729,25 @@ def ask_ai_with_functions(
             tools=[{"function_declarations": GEMINI_FUNCTIONS}]
         )
 
+        # 🆕 이전 대화 맥락 추가 (대화 연속성)
+        context_section = ""
+        if hasattr(st.session_state, 'last_question') and st.session_state.last_question:
+            context_section = f"""
+
+**이전 대화 맥락:**
+- 이전 질문: {st.session_state.last_question}
+- 이전 답변: {st.session_state.last_answer[:200]}...
+
+**중요:** 현재 질문에 "그럼", "그것도", "같은" 같은 상대적 표현이 있다면, 이전 대화의 맥락(SKU, 센터, 기간 등)을 참고하세요.
+"""
+
         # 초기 프롬프트
         initial_prompt = f"""당신은 SCM 재고 관리 전문가입니다.
 
 **현재 날짜: {today}**
 
 **이용 가능한 데이터:**
-{json.dumps(metadata, ensure_ascii=False, indent=2)}
+{json.dumps(metadata, ensure_ascii=False, indent=2)}{context_section}
 
 **사용자 질문:**
 {question}
@@ -1703,6 +1715,8 @@ def render_simple_chatbot_tab(
         st.session_state.last_answer = ""
     if "last_metadata" not in st.session_state:
         st.session_state.last_metadata = {}
+    if "last_entities" not in st.session_state:
+        st.session_state.last_entities = {}  # 이전 질문의 SKU, 센터, 기간 저장
 
     # 질문 입력
     question = st.text_input(
@@ -1722,6 +1736,31 @@ def render_simple_chatbot_tab(
         with st.spinner("🤔 생각 중..."):
             # 질문에서 엔티티 추출 (SKU, 센터, 날짜)
             entities = extract_entities_from_question(question, snap, moves_df)
+
+            # 🆕 상대적 표현 감지 (대화 맥락 유지)
+            relative_keywords = ["그럼", "그것도", "거기도", "같은", "그 sku", "그 센터", "역시", "또"]
+            has_relative_ref = any(kw in question.lower() for kw in relative_keywords)
+
+            # 상대적 표현이 있고, 현재 질문에 엔티티가 부족하면 이전 엔티티 재사용
+            context_note = ""
+            if has_relative_ref and st.session_state.last_entities:
+                # SKU가 없으면 이전 SKU 재사용
+                if not entities["skus"] and st.session_state.last_entities.get("skus"):
+                    entities["skus"] = st.session_state.last_entities["skus"]
+                    context_note += f"이전 SKU({entities['skus']}) 재사용. "
+
+                # 센터가 없으면 이전 센터 재사용
+                if not entities["centers"] and st.session_state.last_entities.get("centers"):
+                    entities["centers"] = st.session_state.last_entities["centers"]
+                    context_note += f"이전 센터({entities['centers']}) 재사용. "
+
+                # 날짜가 없으면 이전 날짜 재사용
+                if not entities["date_range"] and st.session_state.last_entities.get("date_range"):
+                    entities["date_range"] = st.session_state.last_entities["date_range"]
+                    context_note += f"이전 기간 재사용. "
+
+                if context_note:
+                    st.caption(f"🔗 대화 맥락: {context_note}")
 
             # 자동 필터링
             filtered_snap = snap.copy()
@@ -1779,6 +1818,7 @@ def render_simple_chatbot_tab(
             st.session_state.last_metadata = metadata
             st.session_state.last_filtered_snap = filtered_snap
             st.session_state.last_filtered_timeline = filtered_timeline
+            st.session_state.last_entities = entities  # 🆕 엔티티 저장 (대화 맥락용)
 
     # 답변 표시 (세션에서 로드)
     if st.session_state.last_answer:
