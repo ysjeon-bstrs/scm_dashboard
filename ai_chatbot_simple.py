@@ -253,6 +253,45 @@ GEMINI_FUNCTIONS = [
 ]
 
 
+def get_latest_stock(snapshot_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    날짜별 스냅샷에서 가장 최신 날짜의 재고만 추출
+
+    Args:
+        snapshot_df: 날짜별 재고 스냅샷
+
+    Returns:
+        최신 날짜의 재고만 포함한 DataFrame
+    """
+    if snapshot_df is None or snapshot_df.empty:
+        return snapshot_df
+
+    if "date" not in snapshot_df.columns:
+        return snapshot_df
+
+    # 날짜를 datetime으로 변환
+    df = snapshot_df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # ⚠️ 중요: NaT (잘못된 날짜) 제거
+    # NaT는 정렬 시 맨 뒤에 배치되어 .last()에서 선택될 수 있음
+    df = df[df["date"].notna()]
+
+    if df.empty:
+        return df
+
+    # 각 SKU + 센터별로 가장 최신 날짜의 데이터만 선택
+    if "resource_code" in df.columns and "center" in df.columns:
+        # 날짜 기준으로 정렬 후, 각 그룹의 마지막(최신) 행만 선택
+        latest = df.sort_values("date").groupby(["resource_code", "center"], as_index=False).last()
+    else:
+        # 그냥 가장 최신 날짜만
+        latest_date = df["date"].max()
+        latest = df[df["date"] == latest_date]
+
+    return latest
+
+
 def execute_function(
     function_name: str,
     parameters: Dict[str, Any],
@@ -261,12 +300,12 @@ def execute_function(
     timeline_df: Optional[pd.DataFrame] = None
 ) -> Dict[str, Any]:
     """
-    Gemini가 요청한 함수를 실행
+    OpenAI가 요청한 함수를 실행
 
     Args:
         function_name: 함수 이름
         parameters: 함수 파라미터
-        snapshot_df: 재고 데이터
+        snapshot_df: 재고 데이터 (날짜별 스냅샷)
         moves_df: 판매 데이터
         timeline_df: 시계열 데이터
 
@@ -274,19 +313,22 @@ def execute_function(
         함수 실행 결과 dict
     """
     try:
+        # ⚠️ 중요: 날짜별 스냅샷에서 최신 날짜의 재고만 사용
+        latest_snapshot = get_latest_stock(snapshot_df)
+
         if function_name == "get_total_stock":
-            total = snapshot_df["stock_qty"].sum()
+            total = latest_snapshot["stock_qty"].sum()
             return {
                 "total_stock": float(total),
                 "unit": "개",
-                "center_count": int(snapshot_df["center"].nunique()),
-                "sku_count": int(snapshot_df["resource_code"].nunique())
+                "center_count": int(latest_snapshot["center"].nunique()),
+                "sku_count": int(latest_snapshot["resource_code"].nunique())
             }
 
         elif function_name == "get_stock_by_center":
             center = parameters.get("center")
             if center:
-                center_data = snapshot_df[snapshot_df["center"] == center]
+                center_data = latest_snapshot[latest_snapshot["center"] == center]
                 if center_data.empty:
                     return {"error": f"센터 '{center}'를 찾을 수 없습니다"}
                 return {
@@ -296,7 +338,7 @@ def execute_function(
                     "unit": "개"
                 }
             else:
-                center_stock = snapshot_df.groupby("center")["stock_qty"].sum().to_dict()
+                center_stock = latest_snapshot.groupby("center")["stock_qty"].sum().to_dict()
                 return {
                     "centers": {k: float(v) for k, v in center_stock.items()},
                     "unit": "개"
@@ -307,7 +349,7 @@ def execute_function(
             if not sku:
                 return {"error": "SKU 파라미터가 필요합니다"}
 
-            sku_data = snapshot_df[snapshot_df["resource_code"] == sku]
+            sku_data = latest_snapshot[latest_snapshot["resource_code"] == sku]
             if sku_data.empty:
                 return {"error": f"SKU '{sku}'를 찾을 수 없습니다"}
 
@@ -342,7 +384,8 @@ def execute_function(
                 return {"error": f"SKU '{sku}'의 최근 7일 판매 데이터가 없습니다"}
 
             daily_sales = sales_recent["sales_qty"].sum() / 7
-            current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
+            # ⚠️ 최신 날짜의 재고만 사용
+            current_stock = latest_snapshot[latest_snapshot["resource_code"] == sku]["stock_qty"].sum()
 
             if daily_sales <= 0:
                 return {
@@ -381,10 +424,12 @@ def execute_function(
             result_list = []
             for sku, qty in top_skus.items():
                 sku_info = {"sku": sku, "quantity": safe_float(qty)}
-                if "resource_name" in snapshot_df.columns:
-                    name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
-                    if pd.notna(name):
-                        sku_info["product_name"] = str(name)
+                if "resource_name" in latest_snapshot.columns:
+                    sku_rows = latest_snapshot[latest_snapshot["resource_code"] == sku]
+                    if not sku_rows.empty:
+                        name = sku_rows["resource_name"].iloc[0]
+                        if pd.notna(name):
+                            sku_info["product_name"] = str(name)
                 result_list.append(sku_info)
 
             return {
@@ -495,9 +540,9 @@ def execute_function(
             if not sku1 or not sku2:
                 return {"error": "두 개의 SKU 파라미터가 필요합니다"}
 
-            # 재고 비교
-            stock1 = snapshot_df[snapshot_df["resource_code"] == sku1]["stock_qty"].sum()
-            stock2 = snapshot_df[snapshot_df["resource_code"] == sku2]["stock_qty"].sum()
+            # 재고 비교 - ⚠️ 최신 날짜의 재고만 사용
+            stock1 = latest_snapshot[latest_snapshot["resource_code"] == sku1]["stock_qty"].sum()
+            stock2 = latest_snapshot[latest_snapshot["resource_code"] == sku2]["stock_qty"].sum()
 
             result = {
                 "sku1": {
@@ -550,7 +595,8 @@ def execute_function(
                 if daily_sales_by_sku[sku] <= 0:
                     continue
 
-                current_stock = snapshot_df[snapshot_df["resource_code"] == sku]["stock_qty"].sum()
+                # ⚠️ 최신 날짜의 재고만 사용
+                current_stock = latest_snapshot[latest_snapshot["resource_code"] == sku]["stock_qty"].sum()
                 days_left = current_stock / daily_sales_by_sku[sku]
 
                 if 0 < days_left <= days_threshold:
@@ -562,10 +608,12 @@ def execute_function(
                         "severity": "urgent" if days_left < 3 else "warning"
                     }
                     # resource_name 추가 (있으면)
-                    if "resource_name" in snapshot_df.columns:
-                        name = snapshot_df[snapshot_df["resource_code"] == sku]["resource_name"].iloc[0]
-                        if pd.notna(name):
-                            sku_info["product_name"] = str(name)
+                    if "resource_name" in latest_snapshot.columns:
+                        sku_rows = latest_snapshot[latest_snapshot["resource_code"] == sku]
+                        if not sku_rows.empty:
+                            name = sku_rows["resource_name"].iloc[0]
+                            if pd.notna(name):
+                                sku_info["product_name"] = str(name)
                     low_stock_skus.append(sku_info)
 
             # 심각도 순 정렬
@@ -668,8 +716,8 @@ def execute_function(
                 }
 
                 # product_name 추가 (있으면)
-                if "resource_name" in snapshot_df.columns:
-                    sku_rows = snapshot_df[snapshot_df["resource_code"] == sku]
+                if "resource_name" in latest_snapshot.columns:
+                    sku_rows = latest_snapshot[latest_snapshot["resource_code"] == sku]
                     if not sku_rows.empty:
                         name = sku_rows["resource_name"].iloc[0]
                         if pd.notna(name):
@@ -893,6 +941,9 @@ def detect_stockout_risks(
         return risks
 
     try:
+        # ⚠️ 중요: 최신 날짜의 재고만 사용
+        latest_snapshot = get_latest_stock(snapshot_df)
+
         # ✅ FIX: snapshot_df의 sales_qty 사용 (실제 판매 데이터)
         sales_data = snapshot_df.copy()
         sales_data["date"] = pd.to_datetime(sales_data["date"], errors="coerce")
@@ -909,7 +960,8 @@ def detect_stockout_risks(
                 # ✅ Phase 2: 벡터화된 재고 분석 (반복문 제거!)
                 # 이전: for sku in daily_sales.index: current_stock = snapshot_df[...] (O(n×m))
                 # 개선: 한 번에 모든 SKU의 현재 재고 계산 (O(m))
-                current_stock_by_sku = snapshot_df.groupby("resource_code")["stock_qty"].sum()
+                # ⚠️ 최신 날짜의 재고만 사용
+                current_stock_by_sku = latest_snapshot.groupby("resource_code")["stock_qty"].sum()
 
                 # 판매 데이터와 재고 데이터 병합
                 stock_analysis = pd.DataFrame({
