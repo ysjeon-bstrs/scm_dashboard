@@ -273,6 +273,13 @@ def get_latest_stock(snapshot_df: pd.DataFrame) -> pd.DataFrame:
     df = snapshot_df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
+    # ⚠️ 중요: NaT (잘못된 날짜) 제거
+    # NaT는 정렬 시 맨 뒤에 배치되어 .last()에서 선택될 수 있음
+    df = df[df["date"].notna()]
+
+    if df.empty:
+        return df
+
     # 각 SKU + 센터별로 가장 최신 날짜의 데이터만 선택
     if "resource_code" in df.columns and "center" in df.columns:
         # 날짜 기준으로 정렬 후, 각 그룹의 마지막(최신) 행만 선택
