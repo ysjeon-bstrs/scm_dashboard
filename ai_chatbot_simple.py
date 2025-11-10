@@ -1,5 +1,5 @@
 """
-AI 챗봇 Function Calling 버전: Gemini 2.0 Native Function Calling
+AI 챗봇 Function Calling 버전: OpenAI GPT-4o Function Calling
 - 텍스트 요약 제거 → 메타데이터만 전달 (90% 토큰 절약)
 - AI가 필요한 함수를 직접 선택 및 호출
 - 정확한 계산, 확장 가능한 아키텍처
@@ -8,7 +8,7 @@ AI 챗봇 Function Calling 버전: Gemini 2.0 Native Function Calling
 import streamlit as st
 import pandas as pd
 import numpy as np
-import google.generativeai as genai
+import openai  # OpenAI로 변경
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -707,7 +707,7 @@ def ask_ai_with_functions(
     max_iterations: int = 5
 ) -> str:
     """
-    Gemini 2.0 Function Calling으로 질문 답변
+    OpenAI GPT-4o Function Calling으로 질문 답변
 
     Args:
         question: 사용자 질문
@@ -721,13 +721,8 @@ def ask_ai_with_functions(
     try:
         today = datetime.now().strftime('%Y-%m-%d')
 
-        genai.configure(api_key=st.secrets["gemini"]["api_key"])
-
-        # Function declarations 등록
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash-exp",  # 2.0으로 복귀 (확실히 작동함)
-            tools=[{"function_declarations": GEMINI_FUNCTIONS}]
-        )
+        # OpenAI 클라이언트 초기화
+        client = openai.OpenAI(api_key=st.secrets["openai"]["api_key"])
 
         # 🆕 이전 대화 맥락 추가 (대화 연속성)
         context_section = ""
@@ -741,16 +736,13 @@ def ask_ai_with_functions(
 **중요:** 현재 질문에 "그럼", "그것도", "같은" 같은 상대적 표현이 있다면, 이전 대화의 맥락(SKU, 센터, 기간 등)을 참고하세요.
 """
 
-        # 초기 프롬프트
-        initial_prompt = f"""당신은 SCM 재고 관리 전문가입니다.
+        # 시스템 프롬프트
+        system_prompt = f"""당신은 SCM 재고 관리 전문가입니다.
 
 **현재 날짜: {today}**
 
 **이용 가능한 데이터:**
 {json.dumps(metadata, ensure_ascii=False, indent=2)}{context_section}
-
-**사용자 질문:**
-{question}
 
 **답변 규칙 (매우 중요!):**
 1. ⚠️ 재고량, 판매량, SKU 정보, 예측 등 데이터 조회가 필요한 질문은 **반드시 먼저 함수를 호출**하세요
@@ -761,106 +753,92 @@ def ask_ai_with_functions(
 6. 데이터에 없는 내용만 "데이터에서 확인할 수 없습니다"라고 답변하세요
 7. 한국어로 작성하세요
 
-**함수 호출 예시:**
-- "다음주 BA00022 몇개 팔릴까?" → forecast_sales(sku="BA00022", weeks=1) 즉시 호출
-- "다음 2주간 판매 예측" → forecast_sales(sku=..., weeks=2) 즉시 호출
-- "총 재고는?" → get_total_stock() 즉시 호출
-
 **중요:** 함수 호출 가능한 질문에는 반드시 함수를 먼저 호출하세요. 텍스트 설명만 하지 마세요."""
 
-        chat = model.start_chat()
+        # OpenAI 형식으로 함수 선언 변환
+        tools = []
+        for func in GEMINI_FUNCTIONS:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": func["name"],
+                    "description": func["description"],
+                    "parameters": func["parameters"]
+                }
+            })
 
-        # Rate limit 처리를 위한 재시도 로직
-        import time
-        from google.api_core.exceptions import ResourceExhausted
-
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = chat.send_message(initial_prompt)
-                break
-            except ResourceExhausted as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # 1초, 2초, 4초
-                    st.caption(f"⏳ Rate limit 도달. {wait_time}초 대기 중... ({attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                else:
-                    raise  # 마지막 시도에서도 실패하면 에러 발생
+        # 메시지 히스토리 초기화
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question}
+        ]
 
         # Function calling loop
         iteration = 0
         while iteration < max_iterations:
-            # 함수 호출이 있는지 확인 (IndexError 방지 - Phase 1 Quick Win)
-            if not response.candidates or not response.candidates[0].content.parts:
-                st.caption(f"🔍 DEBUG: 응답에 candidates나 parts가 없음 (iteration {iteration})")
-                break
+            # OpenAI API 호출
+            response = client.chat.completions.create(
+                model="gpt-4o",  # GPT-4o 모델
+                messages=messages,
+                tools=tools,
+                tool_choice="auto"
+            )
 
-            part = response.candidates[0].content.parts[0]
+            message = response.choices[0].message
 
             # DEBUG: 응답 타입 확인
-            has_text = hasattr(part, 'text')
-            has_function = hasattr(part, 'function_call')
             if iteration == 0:
-                st.caption(f"🔍 DEBUG: 첫 응답 - text={has_text}, function_call={has_function}")
+                has_tool_calls = message.tool_calls is not None
+                st.caption(f"🔍 DEBUG: 첫 응답 - tool_calls={has_tool_calls}")
 
-            # ⚠️ 중요: function_call을 먼저 체크! (Gemini는 둘 다 반환할 수 있음)
-            if hasattr(part, 'function_call'):
-                function_call = part.function_call
-                function_name = function_call.name
+            # 함수 호출이 있는 경우
+            if message.tool_calls:
+                messages.append(message)  # assistant 메시지 추가
 
-                # function_name이 비어있으면 루프 중단 (Gemini 버그)
-                if not function_name:
-                    st.warning("⚠️ Gemini가 빈 함수 이름을 반환했습니다. 루프를 중단합니다.")
-                    break
+                for tool_call in message.tool_calls:
+                    function_name = tool_call.function.name
+                    function_args = json.loads(tool_call.function.arguments)
 
-                # args가 None일 수 있으므로 안전하게 처리
-                function_args = dict(function_call.args) if function_call.args else {}
+                    st.caption(f"🔧 함수 호출: `{function_name}({json.dumps(function_args, ensure_ascii=False)})`")
 
-                st.caption(f"🔧 함수 호출: `{function_name}({json.dumps(function_args, ensure_ascii=False)})`")
-
-                # 함수 실행
-                result = execute_function(
-                    function_name,
-                    function_args,
-                    snapshot_df,
-                    moves_df,
-                    timeline_df
-                )
-
-                # 🔍 DEBUG: 함수 실행 결과 로깅
-                st.caption(f"🔍 DEBUG: 함수 실행 결과 - {json.dumps(result, ensure_ascii=False)[:200]}...")
-
-                # 결과를 Gemini에게 전달
-                response = chat.send_message(
-                    genai.protos.Content(
-                        parts=[genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name=function_name,
-                                response={"result": result}
-                            )
-                        )]
+                    # 함수 실행
+                    result = execute_function(
+                        function_name,
+                        function_args,
+                        snapshot_df,
+                        moves_df,
+                        timeline_df
                     )
-                )
+
+                    # 🔍 DEBUG: 함수 실행 결과 로깅
+                    st.caption(f"🔍 DEBUG: 함수 실행 결과 - {json.dumps(result, ensure_ascii=False)[:200]}...")
+
+                    # 함수 결과를 메시지에 추가
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": function_name,
+                        "content": json.dumps(result, ensure_ascii=False)
+                    })
 
                 iteration += 1
 
             # 텍스트 응답이면 종료
-            elif hasattr(part, 'text'):
-                text_response = part.text.strip()
-                if not text_response:
-                    # 빈 응답 처리
-                    st.warning("⚠️ AI가 빈 응답을 반환했습니다. 다시 시도해주세요.")
-                    return "죄송합니다. 답변을 생성할 수 없었습니다. 질문을 다시 입력해주세요."
-                return text_response
+            elif message.content:
+                return message.content.strip()
+
+            # finish_reason이 stop이면 종료
+            elif response.choices[0].finish_reason == "stop":
+                if message.content:
+                    return message.content.strip()
+                else:
+                    return "답변을 생성할 수 없습니다."
 
             else:
                 break
 
         # 최종 응답
-        if response.candidates and hasattr(response.candidates[0].content.parts[0], 'text'):
-            return response.candidates[0].content.parts[0].text
-        else:
-            return "답변을 생성할 수 없습니다."
+        return "답변을 생성할 수 없습니다."
 
     except Exception as e:
         import traceback
@@ -1280,7 +1258,7 @@ def detect_kpi_need(question: str) -> tuple[bool, str, dict]:
 
 def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, moves_df: pd.DataFrame = None) -> str:
     """
-    Gemini에게 질문하기 (Function calling 통합)
+    OpenAI에게 질문하기 (백업 함수, Function calling 없이 단순 텍스트)
 
     Args:
         question: 사용자 질문
@@ -1302,9 +1280,8 @@ def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, m
         if need_kpi and snapshot_df is not None:
             kpi_result = calculate_kpi(func_name, snapshot_df, moves_df, **kwargs)
 
-        genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        # Gemini 2.0 Flash 모델 사용
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        # OpenAI 클라이언트 초기화
+        client = openai.OpenAI(api_key=st.secrets["openai"]["api_key"])
 
         # 2. KPI 결과가 있으면 프롬프트에 추가
         kpi_section = ""
@@ -1340,8 +1317,14 @@ def ask_ai(question: str, data_context: str, snapshot_df: pd.DataFrame = None, m
 
 답변:"""
 
-        response = model.generate_content(prompt)
-        return response.text
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "당신은 SCM 재고 관리 전문가입니다."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         return f"⚠️ 오류 발생: {e}\n\n제공된 데이터:\n{data_context}"
@@ -1360,8 +1343,8 @@ def suggest_followup_questions(question: str, answer: str, data_context: str) ->
         후속 질문 3개
     """
     try:
-        genai.configure(api_key=st.secrets["gemini"]["api_key"])
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        # OpenAI 클라이언트 초기화
+        client = openai.OpenAI(api_key=st.secrets["openai"]["api_key"])
 
         # 데이터 컨텍스트 요약 (토큰 절약)
         context_summary = data_context[:500] + "..." if len(data_context) > 500 else data_context
@@ -1392,8 +1375,15 @@ BA00021의 판매 추세는?
 
 후속 질문:"""
 
-        response = model.generate_content(prompt)
-        questions = [q.strip() for q in response.text.strip().split('\n') if q.strip()]
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "당신은 SCM 재고 관리 전문가입니다."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        questions = [q.strip() for q in response.choices[0].message.content.strip().split('\n') if q.strip()]
         return questions[:3]  # 상위 3개만
 
     except Exception as e:
@@ -1688,7 +1678,7 @@ def render_simple_chatbot_tab(
         selected_centers: 선택된 센터
         selected_skus: 선택된 SKU
     """
-    st.subheader("🤖 AI 어시스턴트 (Gemini 2.0 Function Calling - 토큰 90% 절약)")
+    st.subheader("🤖 AI 어시스턴트 (GPT-4o Function Calling - 토큰 90% 절약)")
 
     # 필터링
     snap = snapshot_df.copy()
