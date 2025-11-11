@@ -1790,21 +1790,33 @@ def render_simple_chatbot_tab(
     if "last_entities" not in st.session_state:
         st.session_state.last_entities = {}  # 이전 질문의 SKU, 센터, 기간 저장
 
-    # 질문 입력
-    question = st.text_input(
-        "질문을 입력하세요",
-        placeholder="예: 총 재고는? / BA00021은 어느 센터에? / 재고가 가장 많은 센터는?",
-        key="simple_q",
-        value=st.session_state.get("pending_question", "")
-    )
-
-    # pending_question 처리: 자동으로 질문 실행
+    # pending_question이 있으면 자동 실행
     auto_ask = False
     if "pending_question" in st.session_state and st.session_state.pending_question:
         auto_ask = True
-        st.session_state.pop("pending_question")
 
-    if (st.button("💬 질문하기", type="primary", key="simple_ask") or auto_ask) and question:
+    # 질문 입력 폼 (Enter 키 지원)
+    with st.form(key="question_form", clear_on_submit=False):
+        # pending_question이 있으면 자동으로 입력
+        default_value = st.session_state.get("pending_question", "")
+
+        question = st.text_input(
+            "질문을 입력하세요",
+            placeholder="예: 총 재고는? / BA00021은 어느 센터에? / 재고가 가장 많은 센터는?",
+            key="simple_q",
+            value=default_value
+        )
+        submit_button = st.form_submit_button("💬 질문하기", type="primary")
+
+    # pending_question 정리 및 자동 실행 트리거
+    if auto_ask:
+        # pending_question을 question으로 복사
+        question = st.session_state.pending_question
+        st.session_state.pop("pending_question")
+        # 다음 rerun에서 form이 제출된 것처럼 처리
+        submit_button = True
+
+    if submit_button and question:
         with st.spinner("🤔 생각 중..."):
             # 질문에서 엔티티 추출 (SKU, 센터, 날짜)
             entities = extract_entities_from_question(question, snap, moves_df)
