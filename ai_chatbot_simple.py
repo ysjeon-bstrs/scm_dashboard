@@ -453,8 +453,13 @@ def execute_function(
             timeline = timeline.sort_values("date").tail(days)
 
             # 실제 vs 예측 분리
-            actual = timeline[timeline.get("is_forecast", False) == False]
-            forecast = timeline[timeline.get("is_forecast", False) == True]
+            if "is_forecast" in timeline.columns:
+                actual = timeline[timeline["is_forecast"] == False]
+                forecast = timeline[timeline["is_forecast"] == True]
+            else:
+                # is_forecast 컬럼이 없으면 모두 실제 데이터로 간주
+                actual = timeline.copy()
+                forecast = pd.DataFrame()
 
             result = {
                 "sku": sku,
