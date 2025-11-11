@@ -450,16 +450,41 @@ def execute_function(
                 return {"error": f"SKU '{sku}'의 추세 데이터가 없습니다"}
 
             timeline["date"] = pd.to_datetime(timeline["date"], errors="coerce")
-            timeline = timeline.sort_values("date").tail(days)
+            # NaT 제거
+            timeline = timeline[timeline["date"].notna()]
+
+            if timeline.empty:
+                return {"error": f"SKU '{sku}'의 유효한 날짜 데이터가 없습니다"}
+
+            # ⚠️ 중요: 현재 날짜 기준으로 과거/미래 구분
+            from datetime import datetime
+            today = pd.Timestamp(datetime.now().date())
+
+            # 과거 데이터만 선택 (미래 날짜는 예측 데이터)
+            past_timeline = timeline[timeline["date"] <= today].copy()
+            future_timeline = timeline[timeline["date"] > today].copy()
+
+            # 과거 N일 데이터 선택
+            if not past_timeline.empty:
+                cutoff_date = today - pd.Timedelta(days=days)
+                past_timeline = past_timeline[past_timeline["date"] >= cutoff_date]
+                past_timeline = past_timeline.sort_values("date")
 
             # 실제 vs 예측 분리
             if "is_forecast" in timeline.columns:
-                actual = timeline[timeline["is_forecast"] == False]
-                forecast = timeline[timeline["is_forecast"] == True]
+                # is_forecast 플래그가 있으면 사용
+                actual = past_timeline[past_timeline["is_forecast"] == False] if not past_timeline.empty else pd.DataFrame()
+
+                # 과거 예측 데이터 (is_forecast=True but date <= today)
+                past_forecast = past_timeline[past_timeline["is_forecast"] == True] if not past_timeline.empty else pd.DataFrame()
+
+                # 과거 예측 + 미래 데이터 합치기
+                forecast_parts = [df for df in [past_forecast, future_timeline] if not df.empty]
+                forecast = pd.concat(forecast_parts, ignore_index=True) if forecast_parts else pd.DataFrame()
             else:
-                # is_forecast 컬럼이 없으면 모두 실제 데이터로 간주
-                actual = timeline.copy()
-                forecast = pd.DataFrame()
+                # is_forecast 플래그가 없으면 날짜로만 구분
+                actual = past_timeline
+                forecast = future_timeline
 
             result = {
                 "sku": sku,
