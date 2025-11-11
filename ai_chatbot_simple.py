@@ -474,10 +474,13 @@ def execute_function(
             if "is_forecast" in timeline.columns:
                 # is_forecast 플래그가 있으면 사용
                 actual = past_timeline[past_timeline["is_forecast"] == False] if not past_timeline.empty else pd.DataFrame()
-                forecast = pd.concat([
-                    past_timeline[past_timeline["is_forecast"] == True] if not past_timeline.empty else pd.DataFrame(),
-                    future_timeline
-                ], ignore_index=True) if not future_timeline.empty else pd.DataFrame()
+
+                # 과거 예측 데이터 (is_forecast=True but date <= today)
+                past_forecast = past_timeline[past_timeline["is_forecast"] == True] if not past_timeline.empty else pd.DataFrame()
+
+                # 과거 예측 + 미래 데이터 합치기
+                forecast_parts = [df for df in [past_forecast, future_timeline] if not df.empty]
+                forecast = pd.concat(forecast_parts, ignore_index=True) if forecast_parts else pd.DataFrame()
             else:
                 # is_forecast 플래그가 없으면 날짜로만 구분
                 actual = past_timeline
