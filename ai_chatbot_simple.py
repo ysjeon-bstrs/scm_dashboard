@@ -1497,32 +1497,28 @@ def extract_entities_from_question(question: str, snapshot_df: pd.DataFrame, mov
     question_upper = question.upper()
     question_lower = question.lower()
 
-    # SKU 별칭 매핑 (제품명, 색상별 별명)
+    # SKU 별칭 매핑 (정확한 제품명 + 색상만)
+    # 일반 키워드 제거하여 다른 제품과 충돌 방지
     sku_aliases = {
         "바쿠치올세럼": "BA00021",
-        "바쿠치올": "BA00021",
         "보라색세럼": "BA00021",
         "비타민세럼": "BA00022",
-        "비타민": "BA00022",
         "노란색세럼": "BA00022",
         "나드세럼": "BA00047",
         "nad세럼": "BA00047",
-        "nad": "BA00047",
         "핑크색세럼": "BA00047",
         "스위밍풀토너": "BA00023",
-        "스위밍풀": "BA00023",
-        "토너": "BA00023",
         "알로에세럼": "BA00045",
-        "알로에": "BA00045",
         "초록색세럼": "BA00045",
         "히알토인세럼": "BA00046",
-        "히알토인": "BA00046",
         "하늘색세럼": "BA00046"
     }
 
-    # 별칭으로 SKU 찾기
+    # 별칭으로 SKU 찾기 (띄어쓰기 무시)
+    question_no_space = question_lower.replace(" ", "")
     for alias, sku_code in sku_aliases.items():
-        if alias in question_lower:
+        alias_no_space = alias.replace(" ", "")
+        if alias_no_space in question_no_space:
             entities["skus"].append(sku_code)
 
     # 정규식으로 SKU 찾기 (BA00021 형식)
