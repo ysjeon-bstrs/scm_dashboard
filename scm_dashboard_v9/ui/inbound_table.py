@@ -230,11 +230,11 @@ def build_inbound_table(
     out["sku_summary_html"] = out.apply(colorize_sku, axis=1)
 
     # ========================================
-    # 5단계: 정렬 (출발일 최신순)
+    # 5단계: 정렬 (출발일 오름차순 - 오래된 것부터)
     # ========================================
     # onboard_date를 날짜로 변환하여 정렬
     out["_onboard_sort"] = pd.to_datetime(out["onboard_date"], errors="coerce")
-    out = out.sort_values("_onboard_sort", ascending=False, na_position="last")
+    out = out.sort_values("_onboard_sort", ascending=True, na_position="last")
     out = out.drop(columns=["_onboard_sort"]).reset_index(drop=True)
 
     return out
