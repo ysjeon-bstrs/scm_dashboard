@@ -206,6 +206,9 @@ def build_inbound_table(
                 "_rep_sku": top.resource_code,  # 내부용
                 "_to_center": g["to_center"].iat[0],  # 내부용 (필터링 시 사용)
                 "_total_qty": g["qty_ea"].sum(),  # 내부용 (총 수량)
+                "_pred_inbound_date": (
+                    eta if pd.notna(eta) else None
+                ),  # 디버깅용 (원본 ETA 날짜)
             }
         )
 
