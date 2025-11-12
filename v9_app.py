@@ -941,7 +941,7 @@ def main() -> None:
                 )
                 if "invoice_no" in inbound_raw.columns:
                     st.write(
-                        f"**invoice_no 샘플값 (10개)**: {inbound_raw['invoice_no'].head(10).tolist()}"
+                        f"**invoice_no 샘플값 (10개)**: {list(inbound_raw['invoice_no'].head(10))}"
                     )
                     st.write(
                         f"**invoice_no 고유값 개수**: {inbound_raw['invoice_no'].nunique()}"
