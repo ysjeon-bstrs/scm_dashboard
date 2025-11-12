@@ -1493,17 +1493,50 @@ def extract_entities_from_question(question: str, snapshot_df: pd.DataFrame, mov
         "date_range": None
     }
 
-    # 1. SKU 추출 (BA00021 형식)
+    # 1. SKU 추출 (BA00021 형식 + 별칭)
+    question_upper = question.upper()
+    question_lower = question.lower()
+
+    # SKU 별칭 매핑 (제품명, 색상별 별명)
+    sku_aliases = {
+        "바쿠치올세럼": "BA00021",
+        "바쿠치올": "BA00021",
+        "보라색세럼": "BA00021",
+        "비타민세럼": "BA00022",
+        "비타민": "BA00022",
+        "노란색세럼": "BA00022",
+        "나드세럼": "BA00047",
+        "nad세럼": "BA00047",
+        "nad": "BA00047",
+        "핑크색세럼": "BA00047",
+        "스위밍풀토너": "BA00023",
+        "스위밍풀": "BA00023",
+        "토너": "BA00023",
+        "알로에세럼": "BA00045",
+        "알로에": "BA00045",
+        "초록색세럼": "BA00045",
+        "히알토인세럼": "BA00046",
+        "히알토인": "BA00046",
+        "하늘색세럼": "BA00046"
+    }
+
+    # 별칭으로 SKU 찾기
+    for alias, sku_code in sku_aliases.items():
+        if alias in question_lower:
+            entities["skus"].append(sku_code)
+
+    # 정규식으로 SKU 찾기 (BA00021 형식)
     sku_pattern = r'\b[A-Z]{2}\d{5}\b'
     found_skus = re.findall(sku_pattern, question)
     if found_skus and "resource_code" in snapshot_df.columns:
         # 실제 존재하는 SKU만
         valid_skus = snapshot_df["resource_code"].unique()
-        entities["skus"] = [sku for sku in found_skus if sku in valid_skus]
+        entities["skus"].extend([sku for sku in found_skus if sku in valid_skus])
+
+    # SKU 중복 제거
+    entities["skus"] = list(set(entities["skus"]))
 
     # 2. 센터 추출
-    question_upper = question.upper()
-    question_lower = question.lower()
 
     # 센터 별칭 매핑 (사용자가 자연어로 입력한 경우)
     center_aliases = {
