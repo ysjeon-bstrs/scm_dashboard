@@ -912,6 +912,38 @@ def main() -> None:
         ].copy()
 
         if not inbound_raw.empty:
+            # 🐛 디버깅: 원본 데이터 확인
+            with st.expander("🐛 디버깅: 원본 데이터 (inbound_raw)", expanded=True):
+                st.write(f"**총 행 수**: {len(inbound_raw)}")
+                st.write(f"**컬럼 목록**: {list(inbound_raw.columns)}")
+                st.write(
+                    f"**invoice_no 컬럼 존재**: {'invoice_no' in inbound_raw.columns}"
+                )
+                if "invoice_no" in inbound_raw.columns:
+                    st.write(
+                        f"**invoice_no 샘플값**: {inbound_raw['invoice_no'].head(5).tolist()}"
+                    )
+                st.dataframe(
+                    inbound_raw.head(20)[
+                        [
+                            c
+                            for c in [
+                                "invoice_no",
+                                "from_center",
+                                "to_center",
+                                "resource_code",
+                                "qty_ea",
+                                "carrier_mode",
+                                "onboard_date",
+                                "arrival_date",
+                                "lot",
+                            ]
+                            if c in inbound_raw.columns
+                        ]
+                    ],
+                    height=400,
+                )
+
             # SCM_통합 시트 컬럼명 매핑
             # - "인보이스 번호" → invoice_no
             # - "출발창고" → from_center (이미 normalize_moves에서 정규화됨)
@@ -921,6 +953,7 @@ def main() -> None:
             # 인보이스 번호 (normalize_moves에서 이미 정규화됨)
             # "인보이스 번호", "주문번호" → "invoice_no"
             if "invoice_no" not in inbound_raw.columns:
+                st.warning("⚠️ invoice_no 컬럼이 없습니다. 'N/A'로 설정됩니다.")
                 inbound_raw["invoice_no"] = "N/A"
             else:
                 inbound_raw["invoice_no"] = (
@@ -982,12 +1015,51 @@ def main() -> None:
                     & (inbound_filtered["onboard_date"] <= end_ts)
                 ]
 
+            # 🐛 디버깅: 필터링 후 데이터 확인
+            with st.expander("🐛 디버깅: 필터링 후 데이터", expanded=True):
+                st.write(f"**필터링 후 행 수**: {len(inbound_filtered)}")
+                st.write(
+                    f"**선택된 센터**: {selected_centers} → 정규화: {normalized_selected_centers}"
+                )
+                st.write(f"**선택된 SKU**: {selected_skus}")
+                st.write(f"**날짜 범위**: {start_ts} ~ {end_ts}")
+                if not inbound_filtered.empty:
+                    st.dataframe(
+                        inbound_filtered.head(20)[
+                            [
+                                c
+                                for c in [
+                                    "invoice_no",
+                                    "from_center",
+                                    "to_center",
+                                    "resource_code",
+                                    "qty_ea",
+                                    "onboard_date",
+                                    "arrival_date",
+                                    "pred_inbound_date",
+                                    "lot",
+                                ]
+                                if c in inbound_filtered.columns
+                            ]
+                        ],
+                        height=400,
+                    )
+
             # SKU 색상 매핑
             sku_color_map = _sku_color_map(selected_skus)
 
             # 새 테이블 빌드 및 렌더링
             if not inbound_filtered.empty:
                 inbound_table = build_inbound_table(inbound_filtered, sku_color_map)
+
+                # 🐛 디버깅: 빌드된 테이블 확인
+                with st.expander(
+                    "🐛 디버깅: 빌드된 테이블 (inbound_table)", expanded=True
+                ):
+                    st.write(f"**빌드된 테이블 행 수**: {len(inbound_table)}")
+                    st.write(f"**컬럼 목록**: {list(inbound_table.columns)}")
+                    st.dataframe(inbound_table, height=400)
+
                 render_inbound_table(
                     inbound_table,
                     title="",  # 제목은 이미 위에서 표시
