@@ -919,7 +919,7 @@ def main() -> None:
             # - "eta_date" → arrival_date (이미 normalize_moves에서 정규화됨)
 
             # 인보이스 번호 (normalize_moves에서 이미 정규화됨)
-            # "인보이스 번호", "주문번호", "lot" → "invoice_no"
+            # "인보이스 번호", "주문번호" → "invoice_no"
             if "invoice_no" not in inbound_raw.columns:
                 inbound_raw["invoice_no"] = "N/A"
             else:
