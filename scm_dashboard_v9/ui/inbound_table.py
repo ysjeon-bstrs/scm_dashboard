@@ -23,7 +23,9 @@ import pandas as pd
 import streamlit as st
 
 
-def build_inbound_table(inbound_raw: pd.DataFrame) -> pd.DataFrame:
+def build_inbound_table(
+    inbound_raw: pd.DataFrame, sku_color_map: Dict[str, str] = None
+) -> pd.DataFrame:
     """
     입고 예정 원본 데이터를 읽기 쉬운 테이블 형식으로 변환합니다.
 
@@ -41,7 +43,7 @@ def build_inbound_table(inbound_raw: pd.DataFrame) -> pd.DataFrame:
             - onboard_date: 출발일
             - pred_inbound_date: 예상 입고일
 
-        sku_color_map: SKU별 색상 매핑 딕셔너리 (예: {"BA00021": "#4E79A7"})
+        sku_color_map: (사용 안 함, 하위 호환성 유지용)
 
     Returns:
         변환된 테이블 데이터프레임
@@ -50,7 +52,6 @@ def build_inbound_table(inbound_raw: pd.DataFrame) -> pd.DataFrame:
             - route: 경로 (예: "KR → US")
             - carrier_mode: 운송모드
             - sku_summary: SKU 요약 (예: "BA00021: 30,132ea 외 2종")
-            - sku_summary_html: HTML 스타일 적용된 SKU 요약
             - onboard_date: 출발일 (YYYY-MM-DD)
             - eta_text: ETA 표시 텍스트 (YYYY-MM-DD 또는 "미확인")
             - eta_color: ETA 색상 코드 ("red"/"green"/"gray"/"orange")

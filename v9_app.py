@@ -1015,7 +1015,7 @@ def main() -> None:
 
             # 새 테이블 빌드 및 렌더링
             if not inbound_filtered.empty:
-                inbound_table = build_inbound_table(inbound_filtered)
+                inbound_table = build_inbound_table(inbound_filtered, sku_color_map)
 
                 render_inbound_table(
                     inbound_table,
