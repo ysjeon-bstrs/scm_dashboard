@@ -64,6 +64,12 @@ MOVE_COLUMN_ALIASES: dict[str, Sequence[str]] = {
         "도착창고",
         "목적지",
     ),
+    "invoice_no": (
+        "invoice_no",
+        "invoice no",
+        "인보이스 번호",
+        "주문번호",
+    ),
     "onboard_date": (
         "onboard_date",
         "onboard",
