@@ -1171,7 +1171,6 @@ def main() -> None:
     # 18단계: AI 어시스턴트 (1.5단계 하이브리드)
     # ========================================
     st.divider()
-    st.header("🤖 AI 어시스턴트")
 
     try:
         from ai_chatbot_simple import render_simple_chatbot_tab
