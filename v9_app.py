@@ -913,15 +913,15 @@ def main() -> None:
 
         if not inbound_raw.empty:
             # 🔧 수동 컬럼명 매핑 (normalize_moves가 놓친 것들)
-            # "인보이스 번호" → "invoice_no"
+            # "인바운드 번호" → "invoice_no" (확정건만 필터링)
             if (
-                "인보이스 번호" in inbound_raw.columns
+                "인바운드 번호" in inbound_raw.columns
                 and "invoice_no" not in inbound_raw.columns
             ):
                 inbound_raw = inbound_raw.rename(
-                    columns={"인보이스 번호": "invoice_no"}
+                    columns={"인바운드 번호": "invoice_no"}
                 )
-                st.success("✅ '인보이스 번호' 컬럼을 'invoice_no'로 변환했습니다.")
+                st.success("✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다.")
 
             # 🐛 디버깅: 원본 데이터 확인
             with st.expander("🐛 디버깅: 원본 데이터 (inbound_raw)", expanded=True):
@@ -949,7 +949,9 @@ def main() -> None:
                                 "qty_ea",
                                 "carrier_mode",
                                 "onboard_date",
-                                "arrival_date",
+                                "arrival_date",  # normalize_moves에서 eta_date → arrival_date로 변환
+                                "eta_date",  # 원본 컬럼 (있다면)
+                                "pred_inbound_date",  # arrival_date에서 복사된 예상 입고일
                                 "lot",
                             ]
                             if c in inbound_raw.columns
@@ -959,13 +961,12 @@ def main() -> None:
                 )
 
             # SCM_통합 시트 컬럼명 매핑
-            # - "인보이스 번호" → invoice_no
+            # - "인바운드 번호" → invoice_no (확정건만)
             # - "출발창고" → from_center (이미 normalize_moves에서 정규화됨)
             # - "도착창고" → to_center (이미 normalize_moves에서 정규화됨)
             # - "eta_date" → arrival_date (이미 normalize_moves에서 정규화됨)
 
-            # 인보이스 번호 (normalize_moves에서 이미 정규화됨)
-            # "인보이스 번호", "주문번호" → "invoice_no"
+            # invoice_no 정규화
             if "invoice_no" not in inbound_raw.columns:
                 st.warning("⚠️ invoice_no 컬럼이 없습니다. 'N/A'로 설정됩니다.")
                 inbound_raw["invoice_no"] = "N/A"
@@ -1072,7 +1073,22 @@ def main() -> None:
                 ):
                     st.write(f"**빌드된 테이블 행 수**: {len(inbound_table)}")
                     st.write(f"**컬럼 목록**: {list(inbound_table.columns)}")
-                    st.dataframe(inbound_table, height=400)
+                    # eta_text가 "미확인"인 건들의 원본 pred_inbound_date 확인
+                    debug_cols = [
+                        c
+                        for c in [
+                            "invoice_no",
+                            "route",
+                            "carrier_mode",
+                            "sku_summary",
+                            "onboard_date",
+                            "eta_text",
+                            "eta_color",
+                            "_pred_inbound_date",  # 원본 ETA 날짜 (디버깅용)
+                        ]
+                        if c in inbound_table.columns
+                    ]
+                    st.dataframe(inbound_table[debug_cols], height=400)
 
                 render_inbound_table(
                     inbound_table,
