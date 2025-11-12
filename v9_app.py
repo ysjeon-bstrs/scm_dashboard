@@ -912,22 +912,25 @@ def main() -> None:
         ].copy()
 
         if not inbound_raw.empty:
-            # 🔧 수동 컬럼명 매핑 (normalize_moves가 놓친 것들)
-            # "인바운드 번호" → "invoice_no" (우선, 확정건만)
-            # "인보이스 번호" → "invoice_no" (fallback, 전체 포함)
-            if "invoice_no" not in inbound_raw.columns:
-                if "인바운드 번호" in inbound_raw.columns:
+            # 🔧 수동 컬럼명 매핑 및 필터링
+            # "인바운드 번호"가 있는 행만 표시 (확정건만)
+            # "인보이스 번호"만 있는 것은 미확정건이므로 제외
+            if "인바운드 번호" in inbound_raw.columns:
+                # "인바운드 번호"가 있는 행만 필터링
+                inbound_raw = inbound_raw[inbound_raw["인바운드 번호"].notna()].copy()
+                if not inbound_raw.empty:
                     inbound_raw = inbound_raw.rename(
                         columns={"인바운드 번호": "invoice_no"}
                     )
-                    st.success("✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다.")
-                elif "인보이스 번호" in inbound_raw.columns:
-                    inbound_raw = inbound_raw.rename(
-                        columns={"인보이스 번호": "invoice_no"}
+                    st.success(
+                        f"✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다. (확정건 {len(inbound_raw)}건)"
                     )
-                    st.info(
-                        "ℹ️ '인보이스 번호' 컬럼을 'invoice_no'로 변환했습니다 (fallback)."
-                    )
+            else:
+                # "인바운드 번호" 컬럼이 없으면 빈 데이터로 처리
+                inbound_raw = pd.DataFrame()
+                st.warning(
+                    "⚠️ '인바운드 번호' 컬럼이 없어서 확정건을 표시할 수 없습니다."
+                )
 
             # 🐛 디버깅: 원본 데이터 확인
             with st.expander("🐛 디버깅: 원본 데이터 (inbound_raw)", expanded=True):
@@ -1000,12 +1003,17 @@ def main() -> None:
                 )
 
             # pred_inbound_date 매핑
-            # SCM_통합의 "eta_date"는 normalize_moves에서 "arrival_date"로 정규화됨
-            # 이를 pred_inbound_date로 복사
-            if "arrival_date" in inbound_raw.columns:
-                inbound_raw["pred_inbound_date"] = inbound_raw["arrival_date"]
+            # 우선순위: eta_date (원본) > arrival_date (정규화) > 계산
+            if "eta_date" in inbound_raw.columns:
+                inbound_raw["pred_inbound_date"] = pd.to_datetime(
+                    inbound_raw["eta_date"], errors="coerce"
+                )
+            elif "arrival_date" in inbound_raw.columns:
+                inbound_raw["pred_inbound_date"] = pd.to_datetime(
+                    inbound_raw["arrival_date"], errors="coerce"
+                )
             else:
-                # arrival_date가 없으면 기존 로직 사용
+                # eta_date, arrival_date 둘 다 없으면 계산
                 from scm_dashboard_v9.planning.schedule import (
                     calculate_predicted_inbound_date,
                 )
