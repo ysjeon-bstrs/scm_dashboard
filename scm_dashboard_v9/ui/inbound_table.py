@@ -363,14 +363,15 @@ def render_inbound_table(
         # 통계 정보
         total_invoices = len(df)
         total_qty = df.get("_total_qty", pd.Series([0])).sum()
+        delayed_count = (df["eta_color"] == "red").sum()
+        urgent_count = (df["eta_color"] == "green").sum()
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("총 송장 수", f"{total_invoices:,}건")
         with col2:
             st.metric("총 수량", f"{total_qty:,}ea")
         with col3:
-            urgent_count = (df["eta_color"] == "red").sum() + (
-                df["eta_color"] == "green"
-            ).sum()
-            st.metric("긴급 (5일 이내)", f"{urgent_count:,}건")
+            st.metric("🔴 지연", f"{delayed_count:,}건")
+        with col4:
+            st.metric("🟢 긴급 (5일 이내)", f"{urgent_count:,}건")
