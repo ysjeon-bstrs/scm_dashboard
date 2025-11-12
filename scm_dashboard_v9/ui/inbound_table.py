@@ -137,9 +137,7 @@ def build_inbound_table(
 
     for inv, g in df.groupby("invoice_no", sort=False):
         # 대표 SKU 선정: 수량 최다 → 동률 시 코드 사전순
-        g2 = g.sort_values(
-            ["qty_ea", "resource_code"], ascending=[False, True]
-        ).copy()
+        g2 = g.sort_values(["qty_ea", "resource_code"], ascending=[False, True]).copy()
         top = g2.iloc[0]
 
         # SKU 종류 수 계산
