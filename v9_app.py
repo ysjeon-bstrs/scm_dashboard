@@ -912,12 +912,32 @@ def main() -> None:
         ].copy()
 
         if not inbound_raw.empty:
-            # 필요한 컬럼 매핑 (lot을 invoice_no로 사용)
-            inbound_raw["invoice_no"] = (
-                inbound_raw.get("lot", "").fillna("N/A").astype(str)
+            # SCM_통합 시트 컬럼명 매핑
+            # - "인보이스 번호" → invoice_no
+            # - "출발창고" → from_center (이미 normalize_moves에서 정규화됨)
+            # - "도착창고" → to_center (이미 normalize_moves에서 정규화됨)
+            # - "eta_date" → arrival_date (이미 normalize_moves에서 정규화됨)
+
+            # 인보이스 번호 (normalize_moves에서 이미 정규화됨)
+            # "인보이스 번호", "주문번호", "lot" → "invoice_no"
+            if "invoice_no" not in inbound_raw.columns:
+                inbound_raw["invoice_no"] = "N/A"
+            else:
+                inbound_raw["invoice_no"] = (
+                    inbound_raw["invoice_no"].fillna("N/A").astype(str)
+                )
+
+            # 경로 표시용 (from_center, to_center는 이미 정규화되어 있음)
+            inbound_raw["from_country"] = (
+                inbound_raw.get("from_center", pd.Series("", index=inbound_raw.index))
+                .fillna("")
+                .astype(str)
             )
-            inbound_raw["from_country"] = inbound_raw.get("from_center", "").astype(str)
-            inbound_raw["to_country"] = inbound_raw.get("to_center", "").astype(str)
+            inbound_raw["to_country"] = (
+                inbound_raw.get("to_center", pd.Series("", index=inbound_raw.index))
+                .fillna("")
+                .astype(str)
+            )
 
             # resource_name 매핑 (snapshot에서 가져오기)
             if "resource_name" not in inbound_raw.columns:
@@ -925,14 +945,20 @@ def main() -> None:
                     inbound_raw["resource_code"].map(resource_name_map).fillna("")
                 )
 
-            # pred_inbound_date 계산 (기존 로직 재사용)
-            from scm_dashboard_v9.planning.schedule import (
-                calculate_predicted_inbound_date,
-            )
+            # pred_inbound_date 매핑
+            # SCM_통합의 "eta_date"는 normalize_moves에서 "arrival_date"로 정규화됨
+            # 이를 pred_inbound_date로 복사
+            if "arrival_date" in inbound_raw.columns:
+                inbound_raw["pred_inbound_date"] = inbound_raw["arrival_date"]
+            else:
+                # arrival_date가 없으면 기존 로직 사용
+                from scm_dashboard_v9.planning.schedule import (
+                    calculate_predicted_inbound_date,
+                )
 
-            inbound_raw = calculate_predicted_inbound_date(
-                inbound_raw, today=today_norm, lag_days=lag_days
-            )
+                inbound_raw = calculate_predicted_inbound_date(
+                    inbound_raw, today=today_norm, lag_days=lag_days
+                )
 
             # 센터/SKU/기간 필터링
             from center_alias import normalize_center_value
