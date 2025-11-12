@@ -56,6 +56,10 @@ from scm_dashboard_v9.ui import (
 )
 from scm_dashboard_v9.ui.adapters import handle_domain_errors
 from scm_dashboard_v9.ui.charts import _sku_color_map, _timeline_inventory_matrix
+from scm_dashboard_v9.ui.inbound_table import (
+    build_inbound_table,
+    render_inbound_table,
+)
 from scm_dashboard_v9.ui.tables import (
     build_resource_name_map,
     render_inbound_and_wip_tables,
@@ -199,7 +203,9 @@ def _render_sidebar_filters(
     # 사이드바 필터 렌더링
     with st.sidebar:
         # 데이터 새로고침 버튼
-        if st.button("🔄 시트 새로고침", key="sidebar_gsheet_refresh", use_container_width=True):
+        if st.button(
+            "🔄 시트 새로고침", key="sidebar_gsheet_refresh", use_container_width=True
+        ):
             st.session_state["_trigger_refresh"] = True
             st.rerun()
 
@@ -450,9 +456,10 @@ def _build_shopee_kpi_data(
 
             # 이 센터에 snap_time이 있고 유효한 값이 있으면 사용, 아니면 date 사용
             center_time_col = "snap_time"
-            if "snap_time" not in center_data.columns or not center_data[
-                "snap_time"
-            ].notna().any():
+            if (
+                "snap_time" not in center_data.columns
+                or not center_data["snap_time"].notna().any()
+            ):
                 center_time_col = "date"
 
             # 해당 센터의 모든 스냅샷 시간 가져오기
@@ -487,7 +494,6 @@ def _build_shopee_kpi_data(
                     debug_info.append(f"  → 데이터 없음!")
             else:
                 debug_info.append(f"  → 이전 스냅샷 시간 없음!")
-
 
         # 모든 센터의 이전 스냅샷 합치기
         if prev_snapshots:
@@ -888,23 +894,96 @@ def main() -> None:
                 snapshot=snapshot_df,
             )
         else:
-            st.info("선택한 조건에 해당하는 타임라인 데이터가 없습니다. 다른 센터/SKU/기간을 선택해주세요.")
+            st.info(
+                "선택한 조건에 해당하는 타임라인 데이터가 없습니다. 다른 센터/SKU/기간을 선택해주세요."
+            )
 
         st.divider()
 
         # ========================================
         # 재고 대시보드: 입고 예정 및 WIP 테이블
         # ========================================
-        render_inbound_and_wip_tables(
-            moves=data.moves,
-            snapshot=snapshot_df,
-            selected_centers=selected_centers,
-            selected_skus=selected_skus,
-            start=start_ts,
-            end=end_ts,
-            lag_days=lag_days,
-            today=today_norm,
-        )
+        st.markdown("#### ✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
+
+        # 1. 새 입고 예정 요약 테이블 (인보이스별 그룹핑)
+        # moves 데이터를 inbound_raw 형식으로 변환
+        inbound_raw = data.moves[
+            (data.moves["carrier_mode"] != "WIP") & (data.moves["inbound_date"].isna())
+        ].copy()
+
+        if not inbound_raw.empty:
+            # 필요한 컬럼 매핑 (lot을 invoice_no로 사용)
+            inbound_raw["invoice_no"] = (
+                inbound_raw.get("lot", "").fillna("N/A").astype(str)
+            )
+            inbound_raw["from_country"] = inbound_raw.get("from_center", "").astype(str)
+            inbound_raw["to_country"] = inbound_raw.get("to_center", "").astype(str)
+
+            # resource_name 매핑 (snapshot에서 가져오기)
+            if "resource_name" not in inbound_raw.columns:
+                inbound_raw["resource_name"] = (
+                    inbound_raw["resource_code"].map(resource_name_map).fillna("")
+                )
+
+            # pred_inbound_date 계산 (기존 로직 재사용)
+            from scm_dashboard_v9.planning.schedule import (
+                calculate_predicted_inbound_date,
+            )
+
+            inbound_raw = calculate_predicted_inbound_date(
+                inbound_raw, today=today_norm, lag_days=lag_days
+            )
+
+            # 센터/SKU/기간 필터링
+            from center_alias import normalize_center_value
+
+            normalized_selected_centers = {
+                norm
+                for center in selected_centers
+                for norm in [normalize_center_value(center)]
+                if norm
+            }
+
+            inbound_filtered = inbound_raw[
+                (inbound_raw["to_center"].isin(normalized_selected_centers))
+                & (inbound_raw["resource_code"].isin(selected_skus))
+            ]
+
+            # 날짜 필터링
+            if "onboard_date" in inbound_filtered.columns:
+                inbound_filtered = inbound_filtered[
+                    (inbound_filtered["onboard_date"] >= start_ts)
+                    & (inbound_filtered["onboard_date"] <= end_ts)
+                ]
+
+            # SKU 색상 매핑
+            sku_color_map = _sku_color_map(selected_skus)
+
+            # 새 테이블 빌드 및 렌더링
+            if not inbound_filtered.empty:
+                inbound_table = build_inbound_table(inbound_filtered, sku_color_map)
+                render_inbound_table(
+                    inbound_table,
+                    title="",  # 제목은 이미 위에서 표시
+                    height=400,
+                )
+            else:
+                st.info("선택한 조건에서 예정된 운송 입고가 없습니다.")
+        else:
+            st.info("입고 예정 데이터가 없습니다.")
+
+        # 2. 기존 상세 테이블 (토글로 숨김)
+        with st.expander("📋 상세 입고 예정 및 WIP 테이블 (전체 항목)", expanded=False):
+            render_inbound_and_wip_tables(
+                moves=data.moves,
+                snapshot=snapshot_df,
+                selected_centers=selected_centers,
+                selected_skus=selected_skus,
+                start=start_ts,
+                end=end_ts,
+                lag_days=lag_days,
+                today=today_norm,
+            )
 
         # ========================================
         # 재고 대시보드: 재고 현황 테이블
@@ -921,7 +1000,9 @@ def main() -> None:
         # ========================================
         # center_latest_dates 계산
         center_latest_series = (
-            filter_by_centers(snapshot_df, selected_centers).groupby("center")["date"].max()
+            filter_by_centers(snapshot_df, selected_centers)
+            .groupby("center")["date"]
+            .max()
         )
         center_latest_dates = {
             center: ts.normalize()
@@ -995,7 +1076,9 @@ def main() -> None:
         # 스냅샷에 SHOPEE 센터 데이터가 있는지 확인
         has_shopee_data = False
         if not snapshot_df.empty and "center" in snapshot_df.columns:
-            snapshot_centers = snapshot_df["center"].dropna().astype(str).str.strip().unique()
+            snapshot_centers = (
+                snapshot_df["center"].dropna().astype(str).str.strip().unique()
+            )
             has_shopee_data = any(c in shopee_centers for c in snapshot_centers)
 
         if has_shopee_data:
@@ -1005,7 +1088,9 @@ def main() -> None:
                 st.subheader("SHOPEE 대시보드")
 
                 # SHOPEE KPI 설정 토글
-                shopee_show_delta = st.toggle("전 스냅샷 대비 Δ", value=True, key="shopee_delta")
+                shopee_show_delta = st.toggle(
+                    "전 스냅샷 대비 Δ", value=True, key="shopee_delta"
+                )
 
                 # KPI 데이터 빌드 (현재 + 이전 스냅샷)
                 shopee_kpi_df, shopee_previous_df = _build_shopee_kpi_data(
@@ -1034,12 +1119,13 @@ def main() -> None:
 
     try:
         from ai_chatbot_simple import render_simple_chatbot_tab
+
         render_simple_chatbot_tab(
             snapshot_df=snapshot_df,
             moves_df=data.moves,
             timeline_df=timeline_for_chart,  # 🆕 30일치 시계열 + 예측!
             selected_centers=selected_centers,
-            selected_skus=selected_skus
+            selected_skus=selected_skus,
         )
     except ImportError as e:
         st.warning(f"AI 어시스턴트 모듈을 찾을 수 없습니다: {e}")
