@@ -1015,12 +1015,13 @@ def main() -> None:
 
             # 새 테이블 빌드 및 렌더링
             if not inbound_filtered.empty:
-                inbound_table = build_inbound_table(inbound_filtered, sku_color_map)
+                inbound_table = build_inbound_table(inbound_filtered)
 
                 render_inbound_table(
                     inbound_table,
                     title="",  # 제목은 이미 위에서 표시
-                    height=400,
+                    height=520,
+                    sku_color_map=sku_color_map,
                 )
             else:
                 st.info("선택한 조건에서 예정된 운송 입고가 없습니다.")

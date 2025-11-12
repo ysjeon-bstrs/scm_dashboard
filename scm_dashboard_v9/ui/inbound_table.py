@@ -23,9 +23,7 @@ import pandas as pd
 import streamlit as st
 
 
-def build_inbound_table(
-    inbound_raw: pd.DataFrame, sku_color_map: Dict[str, str]
-) -> pd.DataFrame:
+def build_inbound_table(inbound_raw: pd.DataFrame) -> pd.DataFrame:
     """
     입고 예정 원본 데이터를 읽기 쉬운 테이블 형식으로 변환합니다.
 
@@ -218,19 +216,7 @@ def build_inbound_table(
     out = pd.DataFrame(rows)
 
     # ========================================
-    # 4단계: SKU 색상 적용 (HTML)
-    # ========================================
-    def colorize_sku(row):
-        """대표 SKU에 색상을 적용하여 HTML로 반환"""
-        sku = row["_rep_sku"]
-        hexc = sku_color_map.get(sku, "#6b7280")  # 기본 회색
-        summary = row["sku_summary"]
-        return f'<span style="color:{hexc}; font-weight:600">{summary}</span>'
-
-    out["sku_summary_html"] = out.apply(colorize_sku, axis=1)
-
-    # ========================================
-    # 5단계: 정렬 (출발일 오름차순 - 오래된 것부터)
+    # 4단계: 정렬 (출발일 오름차순 - 오래된 것부터)
     # ========================================
     # onboard_date를 날짜로 변환하여 정렬
     out["_onboard_sort"] = pd.to_datetime(out["onboard_date"], errors="coerce")
@@ -243,27 +229,23 @@ def build_inbound_table(
 def render_inbound_table(
     df: pd.DataFrame,
     title: str = "📦 입고 예정 현황 (Inbound Schedule)",
-    height: int = 600,
+    height: int = 520,
+    sku_color_map: dict = None,
 ) -> None:
     """
-    입고 예정 테이블을 Streamlit으로 렌더링합니다.
+    입고 예정 테이블을 Streamlit dataframe으로 렌더링합니다 (개선된 UI).
 
     Args:
         df: build_inbound_table()의 출력 데이터프레임
         title: 테이블 제목 (기본: "📦 입고 예정 현황")
-        height: 테이블 높이 (픽셀, 기본: 600)
+        height: 테이블 높이 (픽셀, 기본: 520)
+        sku_color_map: SKU 색상 매핑 딕셔너리 (선택사항)
 
     Notes:
-        - ETA 색상 코드에 따라 텍스트 색상 자동 적용
-        - SKU 요약에 색상 팔레트 적용 (HTML 렌더링)
-        - invoice_no, route는 굵게 표시
-        - 상태 뱃지 없음 (색상만으로 신호)
-
-    Examples:
-        >>> import streamlit as st
-        >>> import pandas as pd
-        >>> table_df = build_inbound_table(raw_df, sku_map)
-        >>> render_inbound_table(table_df)
+        - 행 높이 44-48px, compact design
+        - 주문번호·경로만 볼드
+        - ETA 색상만 상태별 변경 (빨강/초록/주황/회색)
+        - SKU 요약의 대표 SKU만 팔레트 색으로 강조
     """
     # ========================================
     # 1단계: 데이터 유효성 검증
@@ -272,69 +254,86 @@ def render_inbound_table(
         st.info("📭 입고 예정 데이터가 없습니다.")
         return
 
-    st.markdown(f"### {title}")
+    if title:
+        st.markdown(f"### {title}")
+
+    if sku_color_map is None:
+        sku_color_map = {}
 
     # ========================================
-    # 2단계: 표시 컬럼 선택
+    # 2단계: ETA 색상 팔레트
     # ========================================
-    display_cols = [
-        "invoice_no",
-        "route",
-        "carrier_mode",
-        "sku_summary_html",
-        "onboard_date",
-        "eta_text",
-    ]
+    PALETTE = {
+        "red": "#ef4444",  # 빨강 (지연)
+        "green": "#22c55e",  # 초록 (곧 도착)
+        "gray": "#9ca3af",  # 회색 (6일 이후)
+        "orange": "#f59e0b",  # 주황 (미확인)
+    }
 
-    # 필요한 컬럼만 선택
-    view = df[[col for col in display_cols if col in df.columns]].copy()
+    def _eta_color(c):
+        return PALETTE.get(c, "#374151")
 
-    # 컬럼명 정리
+    # ========================================
+    # 3단계: SKU 요약 HTML 생성 (대표 SKU만 색상)
+    # ========================================
+    def sku_html(row):
+        """대표 SKU만 색 강조, 나머지 텍스트는 기본색"""
+        sku = row.get("_rep_sku", "")
+        hexc = sku_color_map.get(sku, "#0ea5e9")  # 기본 파랑톤
+        txt = str(row.get("sku_summary", ""))
+
+        # "BA00021: 30,132ea 외 2종" → 대표 SKU 부분만 색상
+        parts = txt.split(":", 1)
+        if len(parts) == 2:
+            sku_part = parts[0]
+            rest = ":" + parts[1]
+            return f'<span style="color:{hexc};font-weight:600">{sku_part}</span>{rest}'
+        return txt
+
+    # ========================================
+    # 4단계: 데이터 준비
+    # ========================================
+    view = df.copy()
+    view["SKU 요약"] = view.apply(sku_html, axis=1)
+
+    # 컬럼 선택 및 이름 변경
     view = view.rename(
         columns={
             "invoice_no": "주문번호",
             "route": "경로",
             "carrier_mode": "운송모드",
-            "sku_summary_html": "SKU 요약",
             "onboard_date": "발송일",
             "eta_text": "예상 도착일",
         }
     )
 
-    # ========================================
-    # 3단계: ETA 색상 매핑
-    # ========================================
-    # ETA 색상 팔레트
-    eta_palette = {
-        "red": "#ef4444",  # 빨강
-        "green": "#22c55e",  # 초록
-        "gray": "#9ca3af",  # 회색
-        "orange": "#f59e0b",  # 주황
-    }
+    display_cols = ["주문번호", "경로", "운송모드", "SKU 요약", "발송일", "예상 도착일"]
+    view = view[[col for col in display_cols if col in view.columns]]
+
+    # eta_color를 별도로 보관
+    eta_colors = df["eta_color"].tolist()
 
     # ========================================
-    # 4단계: 스타일 적용 (Pandas Styler)
+    # 5단계: Styler 적용
     # ========================================
-    # ETA 색상을 HTML로 직접 적용
-    def apply_eta_color(row):
-        """ETA 색상을 텍스트에 적용"""
-        if row.name >= len(df):
-            return [""] * len(row)
-
-        eta_color = df.iloc[row.name].get("eta_color", "gray")
-        color_hex = eta_palette.get(eta_color, "#374151")
-
+    def apply_styles(row):
+        """행별 스타일 적용"""
         styles = [""] * len(row)
+        idx = row.name
 
-        # 예상 도착일 컬럼에 색상 적용
+        if idx >= len(eta_colors):
+            return styles
+
+        # ETA 색상만 적용
         if "예상 도착일" in view.columns:
             eta_idx = view.columns.get_loc("예상 도착일")
+            color_hex = _eta_color(eta_colors[idx])
             styles[eta_idx] = f"color: {color_hex}; font-weight: 500"
 
-        # 주문번호, 경로 굵게
+        # 주문번호, 경로 볼드
         if "주문번호" in view.columns:
             inv_idx = view.columns.get_loc("주문번호")
-            styles[inv_idx] = "font-weight: 600; text-align: left"
+            styles[inv_idx] = "font-weight: 600"
 
         if "경로" in view.columns:
             route_idx = view.columns.get_loc("경로")
@@ -342,16 +341,35 @@ def render_inbound_table(
 
         return styles
 
-    # Styler 생성
-    styled = view.style.apply(apply_eta_color, axis=1)
-
-    # ========================================
-    # 5단계: Streamlit 렌더링
-    # ========================================
-    st.write(
-        styled.to_html(escape=False, index=False),
-        unsafe_allow_html=True,
+    styled = (
+        view.style.apply(apply_styles, axis=1)
+        .set_properties(
+            **{
+                "padding": "10px 14px",
+                "font-size": "13.5px",
+                "line-height": "1.3",
+                "text-align": "left",
+            }
+        )
+        .set_table_styles(
+            [
+                {
+                    "selector": "thead th",
+                    "props": [
+                        ("text-align", "left"),
+                        ("font-weight", "600"),
+                        ("color", "#374151"),
+                        ("padding", "10px 14px"),
+                    ],
+                }
+            ]
+        )
     )
 
-    # 캡션 추가
+    # ========================================
+    # 6단계: Streamlit 렌더링
+    # ========================================
+    st.write(styled.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+    # 캡션
     st.caption("※ 예상 도착일 —🟢 곧 도착 | 🔴 지연 | 🟠 미확인")
