@@ -916,8 +916,11 @@ def main() -> None:
             # "인바운드 번호"가 있는 행만 표시 (확정건만)
             # "인보이스 번호"만 있는 것은 미확정건이므로 제외
             if "인바운드 번호" in inbound_raw.columns:
-                # "인바운드 번호"가 있는 행만 필터링
-                inbound_raw = inbound_raw[inbound_raw["인바운드 번호"].notna()].copy()
+                # "인바운드 번호"가 있는 행만 필터링 (NaN, 빈 문자열, 공백 제외)
+                inbound_raw = inbound_raw[
+                    inbound_raw["인바운드 번호"].notna()
+                    & (inbound_raw["인바운드 번호"].astype(str).str.strip() != "")
+                ].copy()
                 if not inbound_raw.empty:
                     # 기존 invoice_no 컬럼이 있으면 먼저 제거 (중복 방지)
                     if "invoice_no" in inbound_raw.columns:
