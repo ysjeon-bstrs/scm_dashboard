@@ -1509,12 +1509,18 @@ def extract_entities_from_question(question: str, snapshot_df: pd.DataFrame, mov
     center_aliases = {
         "아마존": "AMZUS",
         "amazon": "AMZUS",
-        "미국": "AMZUS",
-        "us": "AMZUS",
+        # "미국", "us" 제거 - CJ서부US와 충돌 방지
         "한국": "태광KR",
         "korea": "태광KR",
         "kr": "태광KR",
-        "태광": "태광KR"
+        "태광": "태광KR",
+        # CJ서부US 별칭
+        "미국cj": "CJ서부US",
+        "cj미국": "CJ서부US",
+        "미국창고": "CJ서부US",
+        "미국센터": "CJ서부US",
+        "서부창고": "CJ서부US",
+        "미국서부": "CJ서부US"
     }
 
     # 별칭으로 센터 찾기
