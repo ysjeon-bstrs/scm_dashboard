@@ -912,6 +912,17 @@ def main() -> None:
         ].copy()
 
         if not inbound_raw.empty:
+            # 🔧 수동 컬럼명 매핑 (normalize_moves가 놓친 것들)
+            # "인보이스 번호" → "invoice_no"
+            if (
+                "인보이스 번호" in inbound_raw.columns
+                and "invoice_no" not in inbound_raw.columns
+            ):
+                inbound_raw = inbound_raw.rename(
+                    columns={"인보이스 번호": "invoice_no"}
+                )
+                st.success("✅ '인보이스 번호' 컬럼을 'invoice_no'로 변환했습니다.")
+
             # 🐛 디버깅: 원본 데이터 확인
             with st.expander("🐛 디버깅: 원본 데이터 (inbound_raw)", expanded=True):
                 st.write(f"**총 행 수**: {len(inbound_raw)}")
@@ -921,7 +932,10 @@ def main() -> None:
                 )
                 if "invoice_no" in inbound_raw.columns:
                     st.write(
-                        f"**invoice_no 샘플값**: {inbound_raw['invoice_no'].head(5).tolist()}"
+                        f"**invoice_no 샘플값 (10개)**: {inbound_raw['invoice_no'].head(10).tolist()}"
+                    )
+                    st.write(
+                        f"**invoice_no 고유값 개수**: {inbound_raw['invoice_no'].nunique()}"
                     )
                 st.dataframe(
                     inbound_raw.head(20)[
