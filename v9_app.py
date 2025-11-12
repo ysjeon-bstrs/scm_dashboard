@@ -919,6 +919,9 @@ def main() -> None:
                 # "인바운드 번호"가 있는 행만 필터링
                 inbound_raw = inbound_raw[inbound_raw["인바운드 번호"].notna()].copy()
                 if not inbound_raw.empty:
+                    # 기존 invoice_no 컬럼이 있으면 먼저 제거 (중복 방지)
+                    if "invoice_no" in inbound_raw.columns:
+                        inbound_raw = inbound_raw.drop(columns=["invoice_no"])
                     inbound_raw = inbound_raw.rename(
                         columns={"인바운드 번호": "invoice_no"}
                     )
