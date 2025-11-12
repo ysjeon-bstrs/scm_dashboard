@@ -1787,7 +1787,7 @@ def render_simple_chatbot_tab(
         selected_centers: 선택된 센터
         selected_skus: 선택된 SKU
     """
-    st.subheader("🤖 AI 어시스턴트 (GPT-4o Function Calling - 토큰 90% 절약)")
+    st.subheader("🤖 AI 어시스턴트")
 
     # 필터링
     snap = snapshot_df.copy()
