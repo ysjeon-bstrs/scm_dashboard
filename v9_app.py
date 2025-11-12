@@ -913,15 +913,21 @@ def main() -> None:
 
         if not inbound_raw.empty:
             # 🔧 수동 컬럼명 매핑 (normalize_moves가 놓친 것들)
-            # "인바운드 번호" → "invoice_no" (확정건만 필터링)
-            if (
-                "인바운드 번호" in inbound_raw.columns
-                and "invoice_no" not in inbound_raw.columns
-            ):
-                inbound_raw = inbound_raw.rename(
-                    columns={"인바운드 번호": "invoice_no"}
-                )
-                st.success("✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다.")
+            # "인바운드 번호" → "invoice_no" (우선, 확정건만)
+            # "인보이스 번호" → "invoice_no" (fallback, 전체 포함)
+            if "invoice_no" not in inbound_raw.columns:
+                if "인바운드 번호" in inbound_raw.columns:
+                    inbound_raw = inbound_raw.rename(
+                        columns={"인바운드 번호": "invoice_no"}
+                    )
+                    st.success("✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다.")
+                elif "인보이스 번호" in inbound_raw.columns:
+                    inbound_raw = inbound_raw.rename(
+                        columns={"인보이스 번호": "invoice_no"}
+                    )
+                    st.info(
+                        "ℹ️ '인보이스 번호' 컬럼을 'invoice_no'로 변환했습니다 (fallback)."
+                    )
 
             # 🐛 디버깅: 원본 데이터 확인
             with st.expander("🐛 디버깅: 원본 데이터 (inbound_raw)", expanded=True):
