@@ -928,9 +928,6 @@ def main() -> None:
                     inbound_raw = inbound_raw.rename(
                         columns={"인바운드 번호": "invoice_no"}
                     )
-                    st.success(
-                        f"✅ '인바운드 번호' 컬럼을 'invoice_no'로 변환했습니다. (확정건 {len(inbound_raw)}건)"
-                    )
             else:
                 # "인바운드 번호" 컬럼이 없으면 빈 데이터로 처리
                 inbound_raw = pd.DataFrame()
