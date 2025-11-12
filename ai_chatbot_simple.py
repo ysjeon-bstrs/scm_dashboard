@@ -1503,13 +1503,40 @@ def extract_entities_from_question(question: str, snapshot_df: pd.DataFrame, mov
 
     # 2. 센터 추출
     question_upper = question.upper()
+    question_lower = question.lower()
+
+    # 센터 별칭 매핑 (사용자가 자연어로 입력한 경우)
+    center_aliases = {
+        "아마존": "AMZUS",
+        "amazon": "AMZUS",
+        # "미국", "us" 제거 - CJ서부US와 충돌 방지
+        "한국": "태광KR",
+        "korea": "태광KR",
+        "kr": "태광KR",
+        "태광": "태광KR",
+        # CJ서부US 별칭
+        "미국cj": "CJ서부US",
+        "cj미국": "CJ서부US",
+        "미국창고": "CJ서부US",
+        "미국센터": "CJ서부US",
+        "서부창고": "CJ서부US",
+        "미국서부": "CJ서부US"
+    }
+
+    # 별칭으로 센터 찾기
+    for alias, center_code in center_aliases.items():
+        if alias in question_lower:
+            entities["centers"].append(center_code)
+
+    # 정확한 센터명으로도 찾기
     if "center" in snapshot_df.columns:
         all_centers = snapshot_df["center"].unique()
         for center in all_centers:
-            if center in question_upper or center.lower() in question.lower():
-                entities["centers"].append(center)
+            if center in question_upper or center.lower() in question_lower:
+                if center not in entities["centers"]:
+                    entities["centers"].append(center)
 
-    # AMZUS, KR01 등 흔한 패턴
+    # AMZUS, KR01 등 흔한 패턴 (정규식)
     center_patterns = [r'\bAMZUS\b', r'\bAMZKR\b', r'\bKR0[1-9]\b']
     for pattern in center_patterns:
         matches = re.findall(pattern, question_upper)
@@ -1909,18 +1936,19 @@ def render_simple_chatbot_tab(
         st.markdown("### 📊 답변")
         st.markdown(st.session_state.last_answer)
 
-        # 차트 자동 생성 (필터링된 데이터 사용)
-        chart_snap = st.session_state.get("last_filtered_snap", snap)
-        chart_timeline = st.session_state.get("last_filtered_timeline", timeline_df)
-
-        chart_fig = generate_chart(
-            st.session_state.last_question,
-            chart_snap,
-            moves_df,
-            chart_timeline
-        )
-        if chart_fig:
-            st.plotly_chart(chart_fig, use_container_width=True)
+        # 차트 자동 생성 (비활성화)
+        # 차트가 효과적이지 않아서 일단 비활성화
+        # chart_snap = st.session_state.get("last_filtered_snap", snap)
+        # chart_timeline = st.session_state.get("last_filtered_timeline", timeline_df)
+        #
+        # chart_fig = generate_chart(
+        #     st.session_state.last_question,
+        #     chart_snap,
+        #     moves_df,
+        #     chart_timeline
+        # )
+        # if chart_fig:
+        #     st.plotly_chart(chart_fig, use_container_width=True)
 
         # 후속 질문 제안
         with st.spinner("💡 후속 질문 제안 중..."):
