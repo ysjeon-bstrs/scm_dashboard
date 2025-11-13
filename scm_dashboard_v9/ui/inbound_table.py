@@ -41,7 +41,8 @@ def build_inbound_table(
             - qty_ea: 수량
             - carrier_mode: 운송모드
             - onboard_date: 출발일
-            - pred_inbound_date: 예상 입고일
+            - pred_inbound_date: 예상 입고일 (ETA)
+            - expected_inbound_date: 평균 리드타임 기반 예상 입고일
 
         sku_color_map: (사용 안 함, 하위 호환성 유지용)
 
@@ -55,6 +56,8 @@ def build_inbound_table(
             - onboard_date: 출발일 (YYYY-MM-DD)
             - eta_text: ETA 표시 텍스트 (YYYY-MM-DD 또는 "미확인")
             - eta_color: ETA 색상 코드 ("red"/"green"/"gray"/"orange")
+            - expected_inbound_date: 평균 리드타임 기반 예상 입고일 (YYYY-MM-DD)
+            - sku_summary_html: SKU 요약 HTML (대표 SKU 강조)
             - _rep_sku: 대표 SKU 코드 (내부용)
 
     Examples:
@@ -94,6 +97,9 @@ def build_inbound_table(
 
     df = inbound_raw.copy()
 
+    if sku_color_map is None:
+        sku_color_map = {}
+
     # 필수 컬럼 확인 (없으면 빈 컬럼 추가)
     required_cols = [
         "invoice_no",
@@ -115,6 +121,9 @@ def build_inbound_table(
             else:
                 df[col] = ""
 
+    if "expected_inbound_date" not in df.columns:
+        df["expected_inbound_date"] = pd.NaT
+
     # ========================================
     # 2단계: 날짜 및 수량 정규화
     # ========================================
@@ -125,103 +134,155 @@ def build_inbound_table(
     df["pred_inbound_date"] = df["pred_inbound_date"].replace("not_defined", pd.NaT)
     df["pred_inbound_date"] = pd.to_datetime(df["pred_inbound_date"], errors="coerce")
 
+    # expected_inbound_date: 리드타임 기반 예상 입고일
+    df["expected_inbound_date"] = pd.to_datetime(
+        df.get("expected_inbound_date"), errors="coerce"
+    )
+
     # qty_ea: 수량
     df["qty_ea"] = pd.to_numeric(df["qty_ea"], errors="coerce").fillna(0).astype(int)
 
     # ========================================
     # 3단계: 인보이스별 그룹핑 및 집계
     # ========================================
-    rows = []
-    today = pd.Timestamp.today().normalize()
-
-    for inv, g in df.groupby("invoice_no", sort=False):
-        # 대표 SKU 선정: 수량 최다 → 동률 시 코드 사전순
-        g2 = g.sort_values(["qty_ea", "resource_code"], ascending=[False, True]).copy()
-        top = g2.iloc[0]
-
-        # SKU 종류 수 계산
-        sku_count = g["resource_code"].nunique()
-        others = max(0, sku_count - 1)
-
-        # SKU 요약 문자열 생성
-        title = f"{top.resource_code}: {top.qty_ea:,}ea"
-        if others > 0:
-            title += f" 외 {others}종"
-
-        # ========================================
-        # ETA 색상 규칙 적용
-        # ========================================
-        # pred_inbound_date 중 가장 빠른 날짜 선택
-        eta = (
-            g["pred_inbound_date"].dropna().min()
-            if g["pred_inbound_date"].notna().any()
-            else pd.NaT
-        )
-
-        if pd.isna(eta):
-            # 미확인
-            eta_text, eta_color = "미확인", "orange"
-        else:
-            # 날짜 차이 계산
-            d = (eta.date() - today.date()).days
-            eta_text = eta.strftime("%Y-%m-%d")
-
-            if d < 0:
-                # 과거
-                eta_color = "red"
-            elif d <= 5:
-                # 5일 이내
-                eta_color = "green"
-            else:
-                # 6일 이후
-                eta_color = "gray"
-
-        # ========================================
-        # 경로 생성
-        # ========================================
-        route = f"{g['from_country'].iat[0]} → {g['to_country'].iat[0]}"
-
-        # ========================================
-        # 출발일 포맷팅
-        # ========================================
-        onboard_str = ""
-        if g["onboard_date"].notna().any():
-            onboard_min = g["onboard_date"].min()
-            if pd.notna(onboard_min):
-                onboard_str = onboard_min.strftime("%Y-%m-%d")
-
-        # ========================================
-        # 행 데이터 추가
-        # ========================================
-        rows.append(
-            {
-                "invoice_no": inv,
-                "route": route,
-                "carrier_mode": g["carrier_mode"].iat[0],
-                "sku_summary": title,
-                "onboard_date": onboard_str,
-                "eta_text": eta_text,
-                "eta_color": eta_color,
-                "_rep_sku": top.resource_code,  # 내부용
-                "_to_center": g["to_center"].iat[0],  # 내부용 (필터링 시 사용)
-                "_total_qty": g["qty_ea"].sum(),  # 내부용 (총 수량)
-                "_pred_inbound_date": (
-                    eta if pd.notna(eta) else None
-                ),  # 디버깅용 (원본 ETA 날짜)
-            }
-        )
-
-    if not rows:
+    if df.empty:
         return pd.DataFrame()
 
-    out = pd.DataFrame(rows)
+    today = pd.Timestamp.today().normalize()
+    grouped = df.groupby("invoice_no", sort=False)
+
+    agg_base = grouped.agg(
+        from_country=("from_country", "first"),
+        to_country=("to_country", "first"),
+        carrier_mode=("carrier_mode", "first"),
+        to_center=("to_center", "first"),
+        onboard_min=("onboard_date", "min"),
+        pred_min=("pred_inbound_date", "min"),
+        expected_min=("expected_inbound_date", "min"),
+    )
+
+    totals = grouped["qty_ea"].sum().rename("_total_qty")
+    sku_counts = grouped["resource_code"].nunique().rename("_sku_count")
+
+    df_sorted = df.sort_values(
+        ["invoice_no", "qty_ea", "resource_code"],
+        ascending=[True, False, True],
+    )
+    top_rows = (
+        df_sorted.drop_duplicates("invoice_no", keep="first")
+        .set_index("invoice_no")
+        .reindex(agg_base.index)
+    )
+
+    agg_base = (
+        agg_base.join(totals)
+        .join(sku_counts)
+        .join(
+            top_rows[["resource_code", "qty_ea"]].rename(
+                columns={"resource_code": "_rep_sku", "qty_ea": "_top_qty"}
+            )
+        )
+    )
+
+    agg_base["from_country"] = agg_base["from_country"].fillna("").astype(str)
+    agg_base["to_country"] = agg_base["to_country"].fillna("").astype(str)
+    agg_base["carrier_mode"] = agg_base["carrier_mode"].fillna("").astype(str)
+    agg_base["to_center"] = agg_base["to_center"].fillna("").astype(str)
+    agg_base["_rep_sku"] = agg_base["_rep_sku"].fillna("").astype(str)
+    agg_base["_top_qty"] = agg_base["_top_qty"].fillna(0).astype(int)
+    agg_base["_total_qty"] = agg_base["_total_qty"].fillna(0).astype(int)
+    agg_base["_others"] = (agg_base["_sku_count"].fillna(0).astype(int) - 1).clip(
+        lower=0
+    )
+
+    qty_text = agg_base["_top_qty"].apply(lambda x: f"{x:,}ea")
+    agg_base["sku_summary"] = agg_base["_rep_sku"] + ": " + qty_text
+    mask_others = agg_base["_others"] > 0
+    agg_base.loc[mask_others, "sku_summary"] += (
+        " 외 " + agg_base.loc[mask_others, "_others"].astype(int).astype(str) + "종"
+    )
+
+    agg_base["route"] = agg_base["from_country"] + " → " + agg_base["to_country"]
+
+    onboard_str = agg_base["onboard_min"].apply(
+        lambda ts: ts.strftime("%Y-%m-%d") if pd.notna(ts) else ""
+    )
+    expected_str = agg_base["expected_min"].apply(
+        lambda ts: ts.strftime("%Y-%m-%d") if pd.notna(ts) else ""
+    )
+
+    eta_dates = agg_base["pred_min"]
+    eta_text = eta_dates.dt.strftime("%Y-%m-%d")
+    eta_text = eta_text.where(eta_dates.notna(), "미확인")
+
+    diff_days = (eta_dates.dt.normalize() - today).dt.days
+    eta_color = pd.Series("gray", index=agg_base.index)
+    eta_color.loc[eta_dates.isna()] = "orange"
+    eta_color.loc[(eta_dates.notna()) & (diff_days < 0)] = "red"
+    eta_color.loc[(eta_dates.notna()) & (diff_days.between(0, 5))] = "green"
+
+    out = pd.DataFrame(
+        {
+            "invoice_no": agg_base.index.astype(str),
+            "route": agg_base["route"],
+            "carrier_mode": agg_base["carrier_mode"],
+            "sku_summary": agg_base["sku_summary"],
+            "onboard_date": onboard_str,
+            "eta_text": eta_text,
+            "eta_color": eta_color,
+            "expected_inbound_date": expected_str,
+            "_rep_sku": agg_base["_rep_sku"],
+            "_to_center": agg_base["to_center"],
+            "_total_qty": agg_base["_total_qty"],
+            "_pred_inbound_date": agg_base["pred_min"],
+            "_expected_inbound_date": agg_base["expected_min"],
+        }
+    )
+
+    summary = out.get("sku_summary", pd.Series(index=out.index, dtype=object)).fillna(
+        ""
+    )
+    split_parts = summary.str.split(":", n=1, expand=True)
+    left = split_parts[0].fillna("")
+    if 1 in split_parts.columns:
+        right = split_parts[1].fillna("")
+    else:
+        right = pd.Series("", index=out.index, dtype=object)
+
+    colors = out.get("_rep_sku", pd.Series(index=out.index, dtype=object)).map(
+        sku_color_map
+    )
+    colors = colors.fillna("#6b7280").astype(str)
+
+    base_html = (
+        '<span style="color:'
+        + colors
+        + ';font-weight:600">'
+        + left.astype(str)
+        + "</span>"
+    )
+
+    right = right.astype(str)
+    right_mask = right != ""
+    colon_right = right.copy()
+    colon_right.loc[right_mask] = ":" + colon_right.loc[right_mask]
+    colon_right.loc[~right_mask] = ""
+
+    hidden = summary.astype(str)
+    hidden_mask = hidden != ""
+    hidden.loc[hidden_mask] = (
+        '<span style="display:none">' + hidden.loc[hidden_mask] + "</span>"
+    )
+    hidden.loc[~hidden_mask] = ""
+
+    out["sku_summary_html"] = base_html + colon_right + hidden
 
     # ========================================
-    # 4단계: 정렬 (출발일 오름차순 - 오래된 것부터)
+    # 4단계: 정렬 (출발일 내림차순 - 최신 우선)
     # ========================================
     # onboard_date를 날짜로 변환하여 정렬
     out["_onboard_sort"] = pd.to_datetime(out["onboard_date"], errors="coerce")
-    out = out.sort_values("_onboard_sort", ascending=True, na_position="last")
+    out = out.sort_values("_onboard_sort", ascending=False, na_position="last")
     out = out.drop(columns=["_onboard_sort"]).reset_index(drop=True)
 
     return out
@@ -305,10 +366,19 @@ def render_inbound_table(
             "carrier_mode": "운송모드",
             "onboard_date": "발송일",
             "eta_text": "예상 도착일",
+            "expected_inbound_date": "예상 입고일",
         }
     )
 
-    display_cols = ["주문번호", "경로", "운송모드", "SKU 요약", "발송일", "예상 도착일"]
+    display_cols = [
+        "주문번호",
+        "경로",
+        "운송모드",
+        "SKU 요약",
+        "발송일",
+        "예상 도착일",
+        "예상 입고일",
+    ]
     view = view[[col for col in display_cols if col in view.columns]]
 
     # eta_color를 별도로 보관
@@ -374,3 +444,4 @@ def render_inbound_table(
 
     # 캡션
     st.caption("※ 예상 도착일 —🟢 곧 도착 | 🔴 지연 | 🟠 미확인")
+    st.caption("※ 예상 입고일은 해당 경로 출발→입고 평균 리드타임 기준입니다.")

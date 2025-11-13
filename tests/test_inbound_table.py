@@ -124,6 +124,36 @@ class TestBuildInboundTable:
         inv002_row = result[result["invoice_no"] == "INV002"].iloc[0]
         assert inv002_row["sku_summary"] == "BA00024: 200ea"
 
+    def test_expected_inbound_date_aggregation(self, sample_sku_color_map):
+        """예상 입고일(리드타임 기반) 최소값 집계 테스트"""
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV111", "INV111", "INV222"],
+                "from_country": ["KR", "KR", "US"],
+                "to_country": ["US", "US", "KR"],
+                "to_center": ["AMZUS", "AMZUS", "태광KR"],
+                "resource_code": ["BA00030", "BA00031", "BA00040"],
+                "resource_name": ["제품X", "제품Y", "제품Z"],
+                "qty_ea": [100, 50, 20],
+                "carrier_mode": ["특송", "특송", "항공"],
+                "onboard_date": ["2025-01-01", "2025-01-02", "2025-02-01"],
+                "pred_inbound_date": ["2025-01-10", "2025-01-10", "2025-02-05"],
+                "expected_inbound_date": [
+                    pd.Timestamp("2025-01-12"),
+                    pd.Timestamp("2025-01-15"),
+                    pd.NaT,
+                ],
+            }
+        )
+
+        result = build_inbound_table(data, sample_sku_color_map)
+
+        inv111_row = result[result["invoice_no"] == "INV111"].iloc[0]
+        assert inv111_row["expected_inbound_date"] == "2025-01-12"
+
+        inv222_row = result[result["invoice_no"] == "INV222"].iloc[0]
+        assert inv222_row["expected_inbound_date"] == ""
+
     def test_eta_color_red_past(self, sample_raw_data, sample_sku_color_map):
         """ETA 색상 규칙 - 과거 (빨강) 테스트"""
         result = build_inbound_table(sample_raw_data, sample_sku_color_map)
@@ -199,6 +229,10 @@ class TestBuildInboundTable:
                 except ValueError:
                     valid = False
                 assert valid, f"Invalid date format: {onboard}"
+
+            expected_inbound = row["expected_inbound_date"]
+            if expected_inbound:
+                datetime.strptime(expected_inbound, "%Y-%m-%d")
 
     def test_sku_color_html(self, sample_raw_data, sample_sku_color_map):
         """SKU 색상 HTML 적용 테스트"""
@@ -310,6 +344,8 @@ class TestBuildInboundTable:
         assert "_rep_sku" in result.columns
         assert "_to_center" in result.columns
         assert "_total_qty" in result.columns
+        assert "_expected_inbound_date" in result.columns
+        assert "expected_inbound_date" in result.columns
 
     def test_total_qty_calculation(self, sample_raw_data, sample_sku_color_map):
         """총 수량 계산 테스트"""

@@ -21,6 +21,7 @@ def load_from_gsheet_api() -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
     pd.DataFrame,
+    pd.DataFrame,
 ]:
     """Google Sheets API를 통해 데이터를 로드합니다.
 
@@ -30,6 +31,7 @@ def load_from_gsheet_api() -> Tuple[
             정제 스냅샷 DataFrame,
             입고예정내역 DataFrame,
             태광KR 가상창고 배분 DataFrame,
+            leadtime_cal DataFrame,
         )
     """
     scopes = [
@@ -43,7 +45,13 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "Google Sheets API 인증 실패: secrets에 [google_sheets] 섹션이 없습니다."
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+        )
 
     creds_obj = gs.get("credentials", None)
     creds_json = gs.get("credentials_json", None)
@@ -59,7 +67,13 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "Google Sheets API 인증 실패: credentials(or credentials_json) 가 없습니다."
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+        )
 
     if "private_key" in credentials_info:
         credentials_info["private_key"] = (
@@ -77,7 +91,13 @@ def load_from_gsheet_api() -> Tuple[
         st.error(
             "secrets 형식: [google_sheets.credentials] (권장) 또는 [google_sheets] credentials_json"
         )
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.DataFrame(),
+        )
 
     def _read(name: str) -> pd.DataFrame:
         try:
@@ -90,6 +110,7 @@ def load_from_gsheet_api() -> Tuple[
     df_ref = _read("snap_정제")
     df_incoming = _read("입고예정내역")
     df_taekwang = _read("tk_stock_distrib")
+    df_leadtime = _read("leadtime_cal")
 
     try:
         df_snap_raw = _read("snapshot_raw")
@@ -109,7 +130,7 @@ def load_from_gsheet_api() -> Tuple[
     except Exception:
         st.session_state["_snapshot_raw_cache"] = None
 
-    return df_move, df_ref, df_incoming, df_taekwang
+    return df_move, df_ref, df_incoming, df_taekwang, df_leadtime
 
 
 @st.cache_data(ttl=300)
