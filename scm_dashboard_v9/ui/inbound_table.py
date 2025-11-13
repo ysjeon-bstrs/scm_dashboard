@@ -125,6 +125,14 @@ def build_inbound_table(
     df["pred_inbound_date"] = df["pred_inbound_date"].replace("not_defined", pd.NaT)
     df["pred_inbound_date"] = pd.to_datetime(df["pred_inbound_date"], errors="coerce")
 
+    # expected_inbound_date: 리드타임 기반 예상 입고일
+    if "expected_inbound_date" in df.columns:
+        df["expected_inbound_date"] = pd.to_datetime(
+            df["expected_inbound_date"], errors="coerce"
+        )
+    else:
+        df["expected_inbound_date"] = pd.NaT
+
     # qty_ea: 수량
     df["qty_ea"] = pd.to_numeric(df["qty_ea"], errors="coerce").fillna(0).astype(int)
 
@@ -195,6 +203,17 @@ def build_inbound_table(
                 onboard_str = onboard_min.strftime("%Y-%m-%d")
 
         # ========================================
+        # expected_inbound_date 포맷팅 (리드타임 기반)
+        # ========================================
+        expected_str = ""
+        expected_date = None
+        if g["expected_inbound_date"].notna().any():
+            expected_min = g["expected_inbound_date"].min()
+            if pd.notna(expected_min):
+                expected_str = expected_min.strftime("%Y-%m-%d")
+                expected_date = expected_min
+
+        # ========================================
         # 행 데이터 추가
         # ========================================
         rows.append(
@@ -206,12 +225,14 @@ def build_inbound_table(
                 "onboard_date": onboard_str,
                 "eta_text": eta_text,
                 "eta_color": eta_color,
+                "expected_inbound_date": expected_str,
                 "_rep_sku": top.resource_code,  # 내부용
                 "_to_center": g["to_center"].iat[0],  # 내부용 (필터링 시 사용)
                 "_total_qty": g["qty_ea"].sum(),  # 내부용 (총 수량)
                 "_pred_inbound_date": (
                     eta if pd.notna(eta) else None
                 ),  # 디버깅용 (원본 ETA 날짜)
+                "_expected_inbound_date": expected_date,  # 디버깅용 (원본 expected_inbound_date)
             }
         )
 

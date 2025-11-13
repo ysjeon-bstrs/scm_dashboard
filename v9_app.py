@@ -40,6 +40,10 @@ from scm_dashboard_v9.domain import (
     safe_to_datetime,
     validate_timeline_inputs,
 )
+from scm_dashboard_v9.domain.inbound import (
+    assign_expected_inbound_dates,
+    build_lt_inbound_map,
+)
 from scm_dashboard_v9.forecast import (
     apply_consumption_with_events,
     build_amazon_forecast_context,
@@ -967,6 +971,10 @@ def main() -> None:
                 inbound_raw["resource_name"] = (
                     inbound_raw["resource_code"].map(resource_name_map).fillna("")
                 )
+
+            leadtime_df = getattr(data, "leadtime_cal", None)
+            leadtime_map = build_lt_inbound_map(leadtime_df)
+            inbound_raw = assign_expected_inbound_dates(inbound_raw, leadtime_map)
 
             # pred_inbound_date 매핑
             # 우선순위: eta_date (원본) > arrival_date (정규화) > 계산

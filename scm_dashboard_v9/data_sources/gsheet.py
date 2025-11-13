@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import gspread
+import pandas as pd
 import streamlit as st
 
 from scm_dashboard_v9.common.performance import measure_time_context
@@ -30,6 +32,44 @@ from scm_dashboard_v9.domain.normalization import (
 )
 
 from .excel import LoadedData
+
+
+@st.cache_data(ttl=3600)
+def load_leadtime_cal(
+    sh: Optional[gspread.Spreadsheet] = None,
+    *,
+    raw_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """leadtime_cal 시트를 DataFrame으로 로드하고 스키마를 정리합니다."""
+
+    if raw_df is None:
+        if sh is None:
+            return pd.DataFrame()
+        try:
+            ws = sh.worksheet("leadtime_cal")
+            raw_df = pd.DataFrame(ws.get_all_records())
+        except Exception:
+            return pd.DataFrame()
+
+    df = pd.DataFrame(raw_df)
+    if df.empty:
+        return df
+
+    df = df.rename(
+        columns={
+            "출발창고": "from_center",
+            "도착창고": "to_center",
+            "운송수단": "carrier_mode",
+            "출발_입고_평균": "avg_lt_depart_to_inbound",
+        }
+    )
+
+    if "avg_lt_depart_to_inbound" in df.columns:
+        df["avg_lt_depart_to_inbound"] = pd.to_numeric(
+            df["avg_lt_depart_to_inbound"], errors="coerce"
+        )
+
+    return df
 
 
 def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
@@ -61,10 +101,20 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
     try:
         with st.spinner(show_spinner_message):
             with measure_time_context("Google Sheets API fetch"):
-                df_move, df_ref, df_incoming, df_tk_stock = load_from_gsheet_api()
+                (
+                    df_move,
+                    df_ref,
+                    df_incoming,
+                    df_tk_stock,
+                    df_leadtime,
+                ) = load_from_gsheet_api()
                 logger.debug(
-                    f"Raw data loaded: {len(df_move)} moves, {len(df_ref)} snapshots, "
-                    f"{len(df_incoming)} incoming, {len(df_tk_stock)} tk_stock"
+                    "Raw data loaded: %s moves, %s snapshots, %s incoming, %s tk_stock, %s leadtime",
+                    len(df_move),
+                    len(df_ref),
+                    len(df_incoming),
+                    len(df_tk_stock),
+                    len(df_leadtime),
                 )
 
     except Exception as exc:  # pragma: no cover - streamlit feedback
@@ -111,9 +161,11 @@ def load_from_gsheet(*, show_spinner_message: str) -> Optional[LoadedData]:
 
     # 태광KR 가상창고 배분 시트를 정규화하여 대시보드에서 사용할 수 있도록 저장
     tk_stock_distrib = normalize_tk_stock_distrib(df_tk_stock)
+    leadtime_cal = load_leadtime_cal(raw_df=df_leadtime)
 
     return LoadedData(
         moves=moves,
         snapshot=snapshot,
         tk_stock_distrib=tk_stock_distrib,
+        leadtime_cal=leadtime_cal,
     )

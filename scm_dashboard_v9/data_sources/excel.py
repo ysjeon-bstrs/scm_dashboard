@@ -36,11 +36,13 @@ class LoadedData:
         moves: 정규화된 이동 원장 데이터프레임 (WIP 포함)
         snapshot: 정규화된 스냅샷 데이터프레임
         tk_stock_distrib: 태광KR 가상창고 배분 현황 DataFrame
+        leadtime_cal: 운송 구간별 리드타임 요약 DataFrame
     """
 
     moves: pd.DataFrame
     snapshot: pd.DataFrame
     tk_stock_distrib: Optional[pd.DataFrame] = None
+    leadtime_cal: Optional[pd.DataFrame] = None
 
 
 def load_from_excel_uploader() -> Optional[LoadedData]:
@@ -109,4 +111,5 @@ def load_from_excel_uploader() -> Optional[LoadedData]:
         moves=moves,
         snapshot=snapshot,
         tk_stock_distrib=tk_stock_distrib,
+        leadtime_cal=None,
     )
