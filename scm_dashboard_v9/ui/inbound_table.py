@@ -191,22 +191,18 @@ def build_inbound_table(
     agg_base["_rep_sku"] = agg_base["_rep_sku"].fillna("").astype(str)
     agg_base["_top_qty"] = agg_base["_top_qty"].fillna(0).astype(int)
     agg_base["_total_qty"] = agg_base["_total_qty"].fillna(0).astype(int)
-    agg_base["_others"] = (
-        agg_base["_sku_count"].fillna(0).astype(int) - 1
-    ).clip(lower=0)
+    agg_base["_others"] = (agg_base["_sku_count"].fillna(0).astype(int) - 1).clip(
+        lower=0
+    )
 
     qty_text = agg_base["_top_qty"].apply(lambda x: f"{x:,}ea")
     agg_base["sku_summary"] = agg_base["_rep_sku"] + ": " + qty_text
     mask_others = agg_base["_others"] > 0
     agg_base.loc[mask_others, "sku_summary"] += (
-        " 외 "
-        + agg_base.loc[mask_others, "_others"].astype(int).astype(str)
-        + "종"
+        " 외 " + agg_base.loc[mask_others, "_others"].astype(int).astype(str) + "종"
     )
 
-    agg_base["route"] = (
-        agg_base["from_country"] + " → " + agg_base["to_country"]
-    )
+    agg_base["route"] = agg_base["from_country"] + " → " + agg_base["to_country"]
 
     onboard_str = agg_base["onboard_min"].apply(
         lambda ts: ts.strftime("%Y-%m-%d") if pd.notna(ts) else ""
@@ -243,7 +239,9 @@ def build_inbound_table(
         }
     )
 
-    summary = out.get("sku_summary", pd.Series(index=out.index, dtype=object)).fillna("")
+    summary = out.get("sku_summary", pd.Series(index=out.index, dtype=object)).fillna(
+        ""
+    )
     split_parts = summary.str.split(":", n=1, expand=True)
     left = split_parts[0].fillna("")
     if 1 in split_parts.columns:
@@ -251,7 +249,9 @@ def build_inbound_table(
     else:
         right = pd.Series("", index=out.index, dtype=object)
 
-    colors = out.get("_rep_sku", pd.Series(index=out.index, dtype=object)).map(sku_color_map)
+    colors = out.get("_rep_sku", pd.Series(index=out.index, dtype=object)).map(
+        sku_color_map
+    )
     colors = colors.fillna("#6b7280").astype(str)
 
     base_html = (
