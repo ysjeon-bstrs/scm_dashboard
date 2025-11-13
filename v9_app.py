@@ -903,7 +903,7 @@ def main() -> None:
         # ========================================
         # 재고 대시보드: 입고 예정 및 WIP 테이블
         # ========================================
-        st.markdown("#### ✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
+        st.subheader("✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
 
         # 1. 새 입고 예정 요약 테이블 (인보이스별 그룹핑)
         # moves 데이터를 inbound_raw 형식으로 변환
@@ -1029,7 +1029,7 @@ def main() -> None:
             st.info("입고 예정 데이터가 없습니다.")
 
         # 2. 기존 상세 테이블 (토글로 숨김)
-        with st.expander("📋 상세 입고 예정 및 WIP 테이블 (전체 항목)", expanded=False):
+        with st.expander("📋 입고 예정 상세 (Inbound WIP Raw)", expanded=False):
             render_inbound_and_wip_tables(
                 moves=data.moves,
                 snapshot=snapshot_df,

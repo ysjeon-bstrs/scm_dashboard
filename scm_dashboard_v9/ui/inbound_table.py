@@ -143,8 +143,12 @@ def build_inbound_table(
         sku_count = g["resource_code"].nunique()
         others = max(0, sku_count - 1)
 
-        # SKU 요약 문자열 생성
-        title = f"{top.resource_code}: {top.qty_ea:,}ea"
+        # SKU 요약 문자열 생성 (한글명(코드) 병기)
+        resource_name = str(top.resource_name) if pd.notna(top.resource_name) else ""
+        if resource_name:
+            title = f"{resource_name} ({top.resource_code}): {top.qty_ea:,}ea"
+        else:
+            title = f"{top.resource_code}: {top.qty_ea:,}ea"
         if others > 0:
             title += f" 외 {others}종"
 
