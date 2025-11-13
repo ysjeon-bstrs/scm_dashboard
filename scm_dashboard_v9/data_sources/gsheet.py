@@ -24,7 +24,9 @@ from scm_dashboard_v9.data_sources.loaders import (
     merge_wip_as_moves,
     normalize_tk_stock_distrib,
 )
-from scm_dashboard_v9.domain.normalization import normalize_moves
+from scm_dashboard_v9.domain.normalization import (
+    normalize_moves,
+)
 from scm_dashboard_v9.domain.normalization import (
     normalize_snapshot as normalize_refined_snapshot,
 )
