@@ -284,9 +284,19 @@ def render_inbound_and_wip_tables(
         )
 
     # ========================================
-    # 7단계: 생산 진행 현황 (WIP) 테이블 렌더링
+    # 7단계: 생산 진행 현황 (WIP) - 요약 테이블
     # ========================================
-    st.markdown("#### 🛠 생산 진행 현황 (Manufacturing WIP Status)")
+    # 10일 내 생산 완료 예정인 품목만 표시하는 요약 테이블
+    if not arr_wip.empty:
+        summary_df = build_production_summary_table(arr_wip, today, resource_name_map)
+        if not summary_df.empty:
+            render_production_summary_table(summary_df)
+            st.divider()
+
+    # ========================================
+    # 8단계: 생산 진행 현황 (WIP) - 상세 테이블
+    # ========================================
+    st.markdown("#### 🛠️ 생산 진행 현황 (상세 · 전체 WIP)")
 
     if not arr_wip.empty:
         if resource_name_map:
@@ -747,3 +757,277 @@ def render_lot_details(
             use_container_width=True,
             height=CONFIG.ui.table_height_lot,
         )
+
+
+def build_production_summary_table(
+    wip_df: pd.DataFrame, today: pd.Timestamp, resource_name_map: dict = None
+) -> pd.DataFrame:
+    """
+    10일 내 생산 완료 예정인 WIP만 추려서 요약 테이블을 생성합니다.
+
+    Args:
+        wip_df: WIP 원본 데이터프레임
+            필수 컬럼:
+            - resource_code: SKU 코드
+            - resource_name: SKU 한글명 (옵션)
+            - qty_ea: 수량
+            - pred_inbound_date: 생산 완료 후 입고 예정일
+            - global_b2c: B2C 배정 수량
+            - global_b2b: B2B 배정 수량
+        today: 오늘 날짜 (normalized)
+        resource_name_map: SKU → 품명 매핑 딕셔너리 (옵션)
+
+    Returns:
+        요약 테이블 데이터프레임
+            컬럼:
+            - product_name: 제품명(SKU) - "{한글명} ({코드})" 형태
+            - qty_ea: 수량
+            - completion_date: 예상 완료일 (YYYY-MM-DD)
+            - completion_color: 색상 코드 (green/gray)
+            - b2c: B2C 배정 수량
+            - b2b: B2B 배정 수량
+
+    Notes:
+        - 10일 내 생산완료건만 필터링 (pred_inbound_date 기준)
+        - pred_inbound_date가 NaT인 건은 제외
+        - 색상 규칙: 5일 이내 green, 그 외 gray
+    """
+    # ========================================
+    # 1단계: 데이터 복사 및 기본 검증
+    # ========================================
+    if wip_df.empty:
+        return pd.DataFrame()
+
+    df = wip_df.copy()
+
+    if resource_name_map is None:
+        resource_name_map = {}
+
+    # 필수 컬럼 확인
+    required_cols = ["resource_code", "qty_ea", "pred_inbound_date"]
+    for col in required_cols:
+        if col not in df.columns:
+            if col == "qty_ea":
+                df[col] = 0
+            else:
+                df[col] = ""
+
+    # ========================================
+    # 2단계: 날짜 정규화 및 10일 필터링
+    # ========================================
+    df["pred_inbound_date"] = pd.to_datetime(df["pred_inbound_date"], errors="coerce")
+
+    # 10일 이내 완료 예정인 건만 필터링
+    ten_days_later = today + pd.Timedelta(days=10)
+    mask = (
+        df["pred_inbound_date"].notna()
+        & (df["pred_inbound_date"] >= today)
+        & (df["pred_inbound_date"] <= ten_days_later)
+    )
+    df = df[mask]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    # ========================================
+    # 3단계: 제품명(SKU) 생성
+    # ========================================
+    def make_product_name(row):
+        """한글명(코드) 형태로 제품명 생성"""
+        code = str(row["resource_code"]) if pd.notna(row["resource_code"]) else ""
+
+        # resource_name 컬럼이 있으면 우선 사용, 없으면 매핑에서 가져오기
+        if (
+            "resource_name" in row.index
+            and pd.notna(row["resource_name"])
+            and str(row["resource_name"]).strip()
+        ):
+            name = str(row["resource_name"]).strip()
+        else:
+            name = resource_name_map.get(code, "")
+
+        if name:
+            return f"{name} ({code})"
+        else:
+            return code
+
+    df["product_name"] = df.apply(make_product_name, axis=1)
+
+    # ========================================
+    # 4단계: 날짜 포맷팅 및 색상 계산
+    # ========================================
+    df["completion_date"] = df["pred_inbound_date"].dt.strftime("%Y-%m-%d")
+
+    # 색상 규칙: 5일 이내 green, 그 외 gray
+    diff_days = (df["pred_inbound_date"].dt.normalize() - today).dt.days
+    df["completion_color"] = "gray"
+    df.loc[diff_days <= 5, "completion_color"] = "green"
+
+    # ========================================
+    # 5단계: B2C/B2B 컬럼 처리
+    # ========================================
+    if "global_b2c" not in df.columns:
+        df["global_b2c"] = 0
+    if "global_b2b" not in df.columns:
+        df["global_b2b"] = 0
+
+    df["global_b2c"] = (
+        pd.to_numeric(df["global_b2c"], errors="coerce").fillna(0).astype(int)
+    )
+    df["global_b2b"] = (
+        pd.to_numeric(df["global_b2b"], errors="coerce").fillna(0).astype(int)
+    )
+
+    # ========================================
+    # 6단계: 수량 정규화
+    # ========================================
+    df["qty_ea"] = pd.to_numeric(df["qty_ea"], errors="coerce").fillna(0).astype(int)
+
+    # ========================================
+    # 7단계: 출력 컬럼 선택 및 정렬
+    # ========================================
+    out = df[
+        [
+            "product_name",
+            "qty_ea",
+            "completion_date",
+            "completion_color",
+            "global_b2c",
+            "global_b2b",
+            "pred_inbound_date",  # 정렬용
+        ]
+    ].copy()
+
+    out = out.rename(
+        columns={
+            "global_b2c": "b2c",
+            "global_b2b": "b2b",
+        }
+    )
+
+    # 예상 완료일 오름차순 정렬 (임박한 건이 위로)
+    out = out.sort_values("pred_inbound_date", ascending=True).reset_index(drop=True)
+    out = out.drop(columns=["pred_inbound_date"])
+
+    return out
+
+
+def render_production_summary_table(
+    df: pd.DataFrame, title: str = "🛠️ 생산 진행 현황 (요약)"
+) -> None:
+    """
+    생산 WIP 요약 테이블을 Streamlit으로 렌더링합니다.
+
+    Args:
+        df: build_production_summary_table()의 출력 데이터프레임
+        title: 테이블 제목
+
+    Notes:
+        - 인바운드 요약 테이블과 동일한 스타일 적용
+        - 예상완료일 컬럼에 색상 적용 (green/gray)
+        - 제품명 볼드 처리
+    """
+    # ========================================
+    # 1단계: 데이터 유효성 검증
+    # ========================================
+    if df.empty:
+        st.info("📭 10일 내 생산 완료 예정인 품목이 없습니다.")
+        return
+
+    if title:
+        st.subheader(title)
+
+    # ========================================
+    # 2단계: 색상 팔레트
+    # ========================================
+    PALETTE = {
+        "green": "#22c55e",  # 초록 (5일 이내)
+        "gray": "#9ca3af",  # 회색 (6~10일)
+    }
+
+    def _completion_color(c):
+        return PALETTE.get(c, "#9ca3af")
+
+    # ========================================
+    # 3단계: 데이터 준비
+    # ========================================
+    view = df.copy()
+
+    # 컬럼명 한글화
+    view = view.rename(
+        columns={
+            "product_name": "제품명(SKU)",
+            "qty_ea": "수량",
+            "completion_date": "예상 완료일",
+            "b2c": "B2C",
+            "b2b": "B2B",
+        }
+    )
+
+    # 수량 포맷팅
+    view["수량"] = view["수량"].apply(lambda x: f"{x:,}ea")
+
+    display_cols = ["제품명(SKU)", "수량", "예상 완료일", "B2C", "B2B"]
+    view_display = view[display_cols]
+
+    # completion_color를 별도로 보관
+    completion_colors = df["completion_color"].tolist()
+
+    # ========================================
+    # 4단계: Styler 적용
+    # ========================================
+    def apply_styles(row):
+        """행별 스타일 적용"""
+        styles = [""] * len(row)
+        idx = row.name
+
+        if idx >= len(completion_colors):
+            return styles
+
+        # 예상 완료일 색상만 적용
+        if "예상 완료일" in view_display.columns:
+            completion_idx = view_display.columns.get_loc("예상 완료일")
+            color_hex = _completion_color(completion_colors[idx])
+            styles[completion_idx] = f"color: {color_hex}; font-weight: 500"
+
+        # 제품명 볼드
+        if "제품명(SKU)" in view_display.columns:
+            name_idx = view_display.columns.get_loc("제품명(SKU)")
+            styles[name_idx] = "font-weight: 600"
+
+        return styles
+
+    styled = (
+        view_display.style.apply(apply_styles, axis=1)
+        .set_properties(
+            **{
+                "padding": "10px 14px",
+                "font-size": "13.5px",
+                "line-height": "1.3",
+                "text-align": "left",
+            }
+        )
+        .set_table_styles(
+            [
+                {
+                    "selector": "thead th",
+                    "props": [
+                        ("text-align", "left"),
+                        ("font-weight", "600"),
+                        ("color", "#374151"),
+                        ("padding", "10px 14px"),
+                    ],
+                }
+            ]
+        )
+    )
+
+    # ========================================
+    # 5단계: Streamlit 렌더링
+    # ========================================
+    st.write(styled.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+    # 캡션
+    st.caption(
+        "※ 10일 내 생산 완료 예정인 품목만 표시됩니다. 이후 내역은 아래 WIP 테이블을 참고하세요."
+    )
