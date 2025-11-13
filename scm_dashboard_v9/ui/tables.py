@@ -96,7 +96,7 @@ def render_inbound_and_wip_tables(
     입고 예정 테이블과 WIP 테이블을 렌더링합니다.
 
     렌더링되는 테이블:
-    1. ✅ 입고 예정 현황 (Confirmed / In-transit Inbound): 운송 중인 재고
+    1. 인바운드 상세 (Confirmed + Pending Inbound): 운송 중인 재고
     2. 🛠 생산 진행 현황 (Manufacturing WIP Status)
 
     Args:
@@ -212,7 +212,7 @@ def render_inbound_and_wip_tables(
     # ========================================
     # 6단계: 입고 예정 현황 테이블 렌더링
     # ========================================
-    st.markdown("#### ✅ 입고 예정 현황 (Confirmed / In-transit Inbound)")
+    st.markdown("#### 인바운드 상세 (Confirmed + Pending Inbound)")
 
     if confirmed_inbound.empty:
         st.caption(
