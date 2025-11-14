@@ -190,7 +190,9 @@ def build_inbound_table(
                 eta_color = "gray"
 
         # 평균 리드타임 계산 (leadtime_map에서 조회)
-        from_center = str(row.get("from_center", "")) if pd.notna(row.get("from_center")) else ""
+        from_center = (
+            str(row.get("from_center", "")) if pd.notna(row.get("from_center")) else ""
+        )
         # from_center가 없으면 from_country 사용
         if not from_center and pd.notna(row.get("from_country")):
             from_center = str(row["from_country"])
