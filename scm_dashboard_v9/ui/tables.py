@@ -1147,7 +1147,35 @@ def render_production_summary_table(
         # 나머지 건수 더보기 expander
         remaining = total_rows - TOP_N
         with st.expander(f"나머지 {remaining}건 더보기"):
-            st.dataframe(view_display, use_container_width=True, hide_index=True)
+            # 전체 테이블에 동일한 스타일 적용
+            styled_all = (
+                view_display.style.apply(apply_styles, axis=1)
+                .set_properties(
+                    **{
+                        "padding": "10px 14px",
+                        "font-size": "13.5px",
+                        "line-height": "1.3",
+                        "text-align": "left",
+                    }
+                )
+                .set_table_styles(
+                    [
+                        {
+                            "selector": "thead th",
+                            "props": [
+                                ("text-align", "left"),
+                                ("font-weight", "600"),
+                                ("color", "#374151"),
+                                ("padding", "10px 14px"),
+                            ],
+                        }
+                    ]
+                )
+            )
+            st.write(
+                styled_all.to_html(escape=False, index=False),
+                unsafe_allow_html=True,
+            )
 
     # 캡션
     st.caption(
