@@ -128,11 +128,19 @@ def render_production_summary_section(
     # 4단계: 품명 매핑 추가
     resource_name_map = build_resource_name_map(snapshot)
 
-    # 5단계: 생산 진행 현황 요약 테이블 렌더링
+    # 5단계: 생산 진행 현황 요약 테이블 렌더링 (항상 제목 표시)
+    st.subheader("🛠️ 생산 진행 현황 (요약)")
+
     if not arr_wip.empty:
         summary_df = build_production_summary_table(arr_wip, today, resource_name_map)
         if not summary_df.empty:
-            render_production_summary_table(summary_df, sku_color_map=sku_color_map)
+            render_production_summary_table(
+                summary_df, title="", sku_color_map=sku_color_map
+            )
+        else:
+            st.info("📭 10일 내 생산 완료 예정인 품목이 없습니다.")
+    else:
+        st.info("📭 생산 중(WIP) 데이터가 없습니다.")
 
 
 def render_inbound_and_wip_tables(

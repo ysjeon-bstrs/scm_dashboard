@@ -916,6 +916,9 @@ def main() -> None:
             (data.moves["carrier_mode"] != "WIP") & (data.moves["inbound_date"].isna())
         ].copy()
 
+        # SKU 색상 매핑 (생산 요약에서도 사용하므로 미리 초기화)
+        sku_color_map = _sku_color_map(selected_skus)
+
         if not inbound_raw.empty:
             # 🔧 수동 컬럼명 매핑 및 필터링
             # "인바운드 번호"가 있는 행만 표시 (확정건만)
@@ -967,11 +970,11 @@ def main() -> None:
                 .astype(str)
             )
 
-            # resource_name 매핑 (snapshot에서 가져오기)
-            if "resource_name" not in inbound_raw.columns:
-                inbound_raw["resource_name"] = (
-                    inbound_raw["resource_code"].map(resource_name_map).fillna("")
-                )
+            # resource_name 매핑 (snapshot에서 한글명 가져오기)
+            # 기존 resource_name이 영문일 수 있으므로 항상 덮어쓰기
+            inbound_raw["resource_name"] = (
+                inbound_raw["resource_code"].map(resource_name_map).fillna("")
+            )
 
             leadtime_df = getattr(data, "leadtime_cal", None)
             leadtime_map = build_lt_inbound_map(leadtime_df)
@@ -1018,9 +1021,6 @@ def main() -> None:
                     (inbound_filtered["onboard_date"] >= start_ts)
                     & (inbound_filtered["onboard_date"] <= end_ts)
                 ]
-
-            # SKU 색상 매핑
-            sku_color_map = _sku_color_map(selected_skus)
 
             # 새 테이블 빌드 및 렌더링
             if not inbound_filtered.empty:
