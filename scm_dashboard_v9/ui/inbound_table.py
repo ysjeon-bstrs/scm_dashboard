@@ -336,6 +336,9 @@ def render_inbound_table(
     display_cols = ["주문번호", "경로", "운송모드", "SKU 요약", "발송일", "예상 도착일"]
     view = view[[col for col in display_cols if col in view.columns]]
 
+    # 인덱스 리셋 (숫자 인덱스 제거)
+    view = view.reset_index(drop=True)
+
     # eta_color를 별도로 보관
     eta_colors = df["eta_color"].tolist()
 

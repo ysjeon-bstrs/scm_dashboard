@@ -1054,6 +1054,9 @@ def render_production_summary_table(
     display_cols = ["제품명(SKU)", "수량", "예상 완료일", "B2C", "B2B"]
     view_display = view[display_cols]
 
+    # 인덱스 리셋 (숫자 인덱스 제거)
+    view_display = view_display.reset_index(drop=True)
+
     # completion_color를 별도로 보관
     completion_colors = df["completion_color"].tolist()
 
