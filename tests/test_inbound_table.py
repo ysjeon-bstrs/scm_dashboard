@@ -94,6 +94,7 @@ class TestBuildInboundTable:
             "운송모드",
             "출발일",
             "예상 도착일",
+            "예상 입고일",
             "eta_color",
         ]
         for col in expected_cols:
