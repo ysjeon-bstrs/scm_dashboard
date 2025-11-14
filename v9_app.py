@@ -863,9 +863,60 @@ def main() -> None:
 
     with tab1:
         # ========================================
-        # 재고 대시보드: 요약 KPI
+        # 한 줄 요약 KPI (필터 기준)
         # ========================================
-        with st.expander("📊 요약 KPI", expanded=True):
+        # 필터링된 스냅샷 (센터/SKU 기준)
+        filtered_snapshot = snapshot_df[
+            (snapshot_df["center"].isin(selected_centers))
+            & (snapshot_df["resource_code"].isin(selected_skus))
+        ]
+
+        # 재고 합계
+        total_stock = int(filtered_snapshot.get("stock_qty", pd.Series(0)).sum())
+
+        # 생산중 합계 (WIP, 30일 내 완료 기준)
+        wip_moves = data.moves[
+            (data.moves["carrier_mode"] == "WIP")
+            & (data.moves["resource_code"].isin(selected_skus))
+        ]
+        # 30일 내 완료 기준
+        if "eta_date" in wip_moves.columns:
+            wip_moves = wip_moves[
+                pd.to_datetime(wip_moves["eta_date"], errors="coerce")
+                <= (today_norm + pd.Timedelta(days=30))
+            ]
+        total_prod = int(wip_moves.get("qty_ea", pd.Series(0)).sum())
+
+        # 이동중 합계 (Confirmed/Inbound)
+        inbound_moves = data.moves[
+            (data.moves["carrier_mode"] != "WIP")
+            & (data.moves["inbound_date"].isna())
+            & (data.moves["to_center"].isin(selected_centers))
+            & (data.moves["resource_code"].isin(selected_skus))
+        ]
+        # "인바운드 번호"가 있는 행만 (확정건)
+        if "인바운드 번호" in inbound_moves.columns:
+            inbound_moves = inbound_moves[
+                inbound_moves["인바운드 번호"].notna()
+                & (inbound_moves["인바운드 번호"].astype(str).str.strip() != "")
+            ]
+        total_in_transit = int(inbound_moves.get("qty_ea", pd.Series(0)).sum())
+
+        # 요약 텍스트 렌더링
+        summary_text = (
+            f"📌 요약 (필터 기준): "
+            f"재고 **{total_stock:,}** ea · "
+            f"생산중 **{total_prod:,}** ea · "
+            f"이동중 **{total_in_transit:,}** ea"
+        )
+
+        st.markdown(summary_text)
+        st.markdown("---")
+
+        # ========================================
+        # 재고 대시보드: SKU/센터별 KPI (상세)
+        # ========================================
+        with st.expander("📊 SKU/센터별 KPI", expanded=False):
             render_sku_summary_cards(
                 snapshot_df,
                 data.moves,
