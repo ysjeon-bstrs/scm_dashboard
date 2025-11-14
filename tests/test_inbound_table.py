@@ -7,6 +7,8 @@
 - ETA 색상 규칙 적용
 - 경로 생성
 - 수량 포맷팅
+- 경과일수 계산 (오늘 - 출발일)
+- 평균 리드타임 조회 (leadtime_map 기반)
 - 출발일 기준 정렬 (오래된 것부터)
 """
 
@@ -30,6 +32,7 @@ class TestBuildInboundTable:
             {
                 "invoice_no": ["INV001", "INV001", "INV001", "INV002", "INV003"],
                 "from_country": ["KR", "KR", "KR", "US", "CN"],
+                "from_center": ["태광KR", "태광KR", "태광KR", "AMZUS", "CN_WH"],
                 "to_country": ["US", "US", "US", "KR", "KR"],
                 "to_center": ["AMZUS", "AMZUS", "AMZUS", "태광KR", "태광KR"],
                 "resource_code": ["BA00021", "BA00022", "BA00023", "BA00024", "BA00025"],
@@ -94,7 +97,8 @@ class TestBuildInboundTable:
             "운송모드",
             "출발일",
             "예상 도착일",
-            "예상 입고일",
+            "경과일수",
+            "평균 리드타임(일)",
             "eta_color",
         ]
         for col in expected_cols:
@@ -289,6 +293,131 @@ class TestBuildInboundTable:
         # 기본 빨강 (#b91c1c) 적용되어야 함
         product_html = result.iloc[0]["제품(SKU)"]
         assert "#b91c1c" in product_html.lower()
+
+    def test_elapsed_days_calculation(self, sample_sku_color_map):
+        """경과일수 계산 테스트"""
+        today = pd.Timestamp.today().normalize()
+
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV001", "INV002", "INV003"],
+                "from_country": ["KR", "KR", "KR"],
+                "to_country": ["US", "US", "US"],
+                "to_center": ["AMZUS", "AMZUS", "AMZUS"],
+                "resource_code": ["BA00001", "BA00002", "BA00003"],
+                "resource_name": ["제품A", "제품B", "제품C"],
+                "qty_ea": [100, 200, 300],
+                "carrier_mode": ["특송", "특송", "특송"],
+                "onboard_date": [
+                    today - timedelta(days=10),  # 10일 전
+                    today - timedelta(days=5),  # 5일 전
+                    today,  # 오늘
+                ],
+                "pred_inbound_date": [
+                    today + timedelta(days=5),
+                    today + timedelta(days=5),
+                    today + timedelta(days=5),
+                ],
+            }
+        )
+
+        result = build_inbound_table(data, sample_sku_color_map)
+
+        # 경과일수 확인
+        assert result.iloc[0]["경과일수"] == 10
+        assert result.iloc[1]["경과일수"] == 5
+        assert result.iloc[2]["경과일수"] == 0
+
+    def test_elapsed_days_with_null_onboard(self, sample_sku_color_map):
+        """출발일이 없을 때 경과일수 테스트"""
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV001"],
+                "from_country": ["KR"],
+                "to_country": ["US"],
+                "to_center": ["AMZUS"],
+                "resource_code": ["BA00001"],
+                "resource_name": ["제품A"],
+                "qty_ea": [100],
+                "carrier_mode": ["특송"],
+                "onboard_date": [None],  # 결측
+                "pred_inbound_date": ["2025-01-20"],
+            }
+        )
+
+        result = build_inbound_table(data, sample_sku_color_map)
+        assert result.iloc[0]["경과일수"] == "-"
+
+    def test_average_leadtime_with_map(self, sample_sku_color_map):
+        """leadtime_map이 제공되었을 때 평균 리드타임 조회 테스트"""
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV001"],
+                "from_country": ["KR"],
+                "from_center": ["태광KR"],
+                "to_country": ["US"],
+                "to_center": ["AMZUS"],
+                "resource_code": ["BA00001"],
+                "resource_name": ["제품A"],
+                "qty_ea": [1000],
+                "carrier_mode": ["특송"],
+                "onboard_date": ["2025-01-15"],
+                "pred_inbound_date": ["2025-01-20"],
+            }
+        )
+
+        leadtime_map = {
+            ("태광KR", "AMZUS", "특송"): 7.2,
+        }
+
+        result = build_inbound_table(data, sample_sku_color_map, leadtime_map)
+        assert result.iloc[0]["평균 리드타임(일)"] == "7.2"
+
+    def test_average_leadtime_without_map(self, sample_sku_color_map):
+        """leadtime_map이 없을 때 평균 리드타임 테스트"""
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV001"],
+                "from_country": ["KR"],
+                "to_country": ["US"],
+                "to_center": ["AMZUS"],
+                "resource_code": ["BA00001"],
+                "resource_name": ["제품A"],
+                "qty_ea": [1000],
+                "carrier_mode": ["특송"],
+                "onboard_date": ["2025-01-15"],
+                "pred_inbound_date": ["2025-01-20"],
+            }
+        )
+
+        result = build_inbound_table(data, sample_sku_color_map, None)
+        assert result.iloc[0]["평균 리드타임(일)"] == "-"
+
+    def test_average_leadtime_no_match(self, sample_sku_color_map):
+        """leadtime_map에 매칭되는 경로가 없을 때 테스트"""
+        data = pd.DataFrame(
+            {
+                "invoice_no": ["INV001"],
+                "from_country": ["KR"],
+                "from_center": ["태광KR"],
+                "to_country": ["US"],
+                "to_center": ["AMZUS"],
+                "resource_code": ["BA00001"],
+                "resource_name": ["제품A"],
+                "qty_ea": [1000],
+                "carrier_mode": ["특송"],
+                "onboard_date": ["2025-01-15"],
+                "pred_inbound_date": ["2025-01-20"],
+            }
+        )
+
+        # 다른 경로만 있는 leadtime_map
+        leadtime_map = {
+            ("CN", "AMZUS", "해운"): 25.5,
+        }
+
+        result = build_inbound_table(data, sample_sku_color_map, leadtime_map)
+        assert result.iloc[0]["평균 리드타임(일)"] == "-"
 
     def test_performance_10k_rows(self, sample_sku_color_map):
         """성능 테스트: 1만 행 ≤ 500ms (groupby 제거로 더 빠를 것으로 예상)"""
