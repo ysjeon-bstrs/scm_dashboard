@@ -336,6 +336,7 @@ def render_inbound_and_wip_tables(
             "qty_ea",
             "carrier_mode",
             "onboard_date",
+            "expected_inbound_date",
             "pred_inbound_date",
             "days_to_inbound",
             "lot",
@@ -349,7 +350,7 @@ def render_inbound_and_wip_tables(
             hide_index=True,
         )
         st.caption(
-            "※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수"
+            "※ expected_inbound_date: 리드타임 맵 기반 예상 입고일, pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수"
         )
 
     # ========================================
