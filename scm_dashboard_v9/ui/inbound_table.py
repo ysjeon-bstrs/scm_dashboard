@@ -371,7 +371,8 @@ def render_inbound_table(
         return styles
 
     styled = (
-        view.style.apply(apply_styles, axis=1)
+        view.style.hide(axis="index")
+        .apply(apply_styles, axis=1)
         .set_properties(
             **{
                 "padding": "10px 14px",
