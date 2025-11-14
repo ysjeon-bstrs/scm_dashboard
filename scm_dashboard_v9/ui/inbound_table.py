@@ -55,6 +55,7 @@ def build_inbound_table(
             - 운송모드: 운송모드
             - 출발일: 출발일 (YYYY-MM-DD)
             - 예상 도착일: ETA 표시 텍스트 (YYYY-MM-DD 또는 "미확인")
+            - 예상 입고일: 리드타임 맵 기반 예상 입고일 (YYYY-MM-DD)
             - eta_color: ETA 색상 코드 (내부용, "red"/"green"/"gray"/"orange")
 
     Notes:
@@ -172,6 +173,12 @@ def build_inbound_table(
             else:
                 eta_color = "gray"
 
+        # 예상 입고일 (리드타임 맵 기반)
+        expected_inbound = row["expected_inbound_date"]
+        expected_inbound_str = (
+            expected_inbound.strftime("%Y-%m-%d") if pd.notna(expected_inbound) else ""
+        )
+
         # 행 추가
         rows.append(
             {
@@ -182,6 +189,7 @@ def build_inbound_table(
                 "운송모드": mode,
                 "출발일": onboard_str,
                 "예상 도착일": eta_text,
+                "예상 입고일": expected_inbound_str,
                 "eta_color": eta_color,  # 내부용
             }
         )
@@ -267,6 +275,7 @@ def render_inbound_table(
         "운송모드",
         "출발일",
         "예상 도착일",
+        "예상 입고일",
     ]
     view = view[[col for col in display_cols if col in view.columns]]
 
@@ -337,3 +346,6 @@ def render_inbound_table(
 
     # 캡션
     st.caption("※ 예상 도착일 —🟢 곧 도착 | 🔴 지연 | 🟠 미확인")
+    st.caption(
+        "※ 예상 도착일은 입력값을 사용하며, 예상 입고일은 해당 경로의 출발→입고 평균 소요 기간을 반영해 계산한 추정치입니다."
+    )
