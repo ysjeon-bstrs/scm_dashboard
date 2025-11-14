@@ -1082,7 +1082,8 @@ def render_production_summary_table(
         return styles
 
     styled = (
-        view_display.style.apply(apply_styles, axis=1)
+        view_display.style.hide(axis="index")
+        .apply(apply_styles, axis=1)
         .set_properties(
             **{
                 "padding": "10px 14px",
@@ -1119,7 +1120,8 @@ def render_production_summary_table(
         # 8건 초과면 상위 8건만 표시
         styled_top = (
             view_display.head(TOP_N)
-            .style.apply(apply_styles, axis=1)
+            .style.hide(axis="index")
+            .apply(apply_styles, axis=1)
             .set_properties(
                 **{
                     "padding": "10px 14px",
@@ -1149,7 +1151,8 @@ def render_production_summary_table(
         with st.expander(f"나머지 {remaining}건 더보기"):
             # 전체 테이블에 동일한 스타일 적용
             styled_all = (
-                view_display.style.apply(apply_styles, axis=1)
+                view_display.style.hide(axis="index")
+                .apply(apply_styles, axis=1)
                 .set_properties(
                     **{
                         "padding": "10px 14px",
