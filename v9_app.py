@@ -970,11 +970,11 @@ def main() -> None:
                 .astype(str)
             )
 
-            # resource_name 매핑 (snapshot에서 가져오기)
-            if "resource_name" not in inbound_raw.columns:
-                inbound_raw["resource_name"] = (
-                    inbound_raw["resource_code"].map(resource_name_map).fillna("")
-                )
+            # resource_name 매핑 (snapshot에서 한글명 가져오기)
+            # 기존 resource_name이 영문일 수 있으므로 항상 덮어쓰기
+            inbound_raw["resource_name"] = (
+                inbound_raw["resource_code"].map(resource_name_map).fillna("")
+            )
 
             leadtime_df = getattr(data, "leadtime_cal", None)
             leadtime_map = build_lt_inbound_map(leadtime_df)
