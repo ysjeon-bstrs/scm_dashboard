@@ -17,14 +17,16 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
 
 def build_inbound_table(
-    inbound_raw: pd.DataFrame, sku_color_map: Dict[str, str] = None
+    inbound_raw: pd.DataFrame,
+    sku_color_map: Dict[str, str] = None,
+    leadtime_map: Dict[Tuple[str, str, str], float] = None,
 ) -> pd.DataFrame:
     """
     입고 예정 원본 데이터를 SKU별 행으로 변환합니다.
@@ -36,14 +38,16 @@ def build_inbound_table(
             - from_country: 출발 국가
             - to_country: 도착 국가
             - to_center: 도착 센터
+            - from_center: 출발 센터
             - resource_code: SKU 코드
             - resource_name: 품명
             - qty_ea: 수량
             - carrier_mode: 운송모드
             - onboard_date: 출발일
-            - pred_inbound_date: 예상 입고일
+            - pred_inbound_date: 예상 도착일
 
         sku_color_map: SKU → 색상 매핑 딕셔너리 (선택사항)
+        leadtime_map: (from_center, to_center, carrier_mode) → 평균 리드타임 매핑 (선택사항)
 
     Returns:
         변환된 테이블 데이터프레임
@@ -55,7 +59,8 @@ def build_inbound_table(
             - 운송모드: 운송모드
             - 출발일: 출발일 (YYYY-MM-DD)
             - 예상 도착일: ETA 표시 텍스트 (YYYY-MM-DD 또는 "미확인")
-            - 예상 입고일: 리드타임 맵 기반 예상 입고일 (YYYY-MM-DD)
+            - 경과일수: 출발 후 경과일 (정수)
+            - 평균 리드타임(일): 해당 경로의 평균 소요 기간 (소수점 1자리)
             - eta_color: ETA 색상 코드 (내부용, "red"/"green"/"gray"/"orange")
 
     Notes:
@@ -121,6 +126,10 @@ def build_inbound_table(
     if sku_color_map is None:
         sku_color_map = {}
 
+    # leadtime_map 기본값 처리
+    if leadtime_map is None:
+        leadtime_map = {}
+
     # ========================================
     # 3단계: 각 행을 요약 테이블 행으로 변환 (groupby 제거)
     # ========================================
@@ -159,6 +168,12 @@ def build_inbound_table(
         onboard = row["onboard_date"]
         onboard_str = onboard.strftime("%Y-%m-%d") if pd.notna(onboard) else ""
 
+        # 경과일수 계산 (오늘 - 출발일)
+        if pd.notna(onboard):
+            elapsed_days = (today.date() - onboard.date()).days
+        else:
+            elapsed_days = None
+
         # ETA 및 색상
         eta = row["pred_inbound_date"]
         if pd.isna(eta):
@@ -174,11 +189,17 @@ def build_inbound_table(
             else:
                 eta_color = "gray"
 
-        # 예상 입고일 (리드타임 맵 기반)
-        expected_inbound = row["expected_inbound_date"]
-        expected_inbound_str = (
-            expected_inbound.strftime("%Y-%m-%d") if pd.notna(expected_inbound) else ""
+        # 평균 리드타임 계산 (leadtime_map에서 조회)
+        from_center = (
+            str(row.get("from_center", "")) if pd.notna(row.get("from_center")) else ""
         )
+        # from_center가 없으면 from_country 사용
+        if not from_center and pd.notna(row.get("from_country")):
+            from_center = str(row["from_country"])
+
+        lt_key = (from_center, center, mode)
+        avg_leadtime = leadtime_map.get(lt_key)
+        avg_leadtime_str = f"{avg_leadtime:.1f}" if avg_leadtime is not None else "-"
 
         # 행 추가
         rows.append(
@@ -190,7 +211,8 @@ def build_inbound_table(
                 "운송모드": mode,
                 "출발일": onboard_str,
                 "예상 도착일": eta_text,
-                "예상 입고일": expected_inbound_str,
+                "경과일수": elapsed_days if elapsed_days is not None else "-",
+                "평균 리드타임(일)": avg_leadtime_str,
                 "eta_color": eta_color,  # 내부용
             }
         )
@@ -276,7 +298,8 @@ def render_inbound_table(
         "운송모드",
         "출발일",
         "예상 도착일",
-        "예상 입고일",
+        "경과일수",
+        "평균 리드타임(일)",
     ]
     view = view[[col for col in display_cols if col in view.columns]]
 
@@ -348,5 +371,5 @@ def render_inbound_table(
     # 캡션
     st.caption("※ 예상 도착일 —🟢 곧 도착 | 🔴 지연 | 🟠 미확인")
     st.caption(
-        "※ 예상 도착일은 입력값을 사용하며, 예상 입고일은 해당 경로의 출발→입고 평균 소요 기간을 반영해 계산한 추정치입니다."
+        "※ 예상 도착일은 담당자 입력값을 사용하며, 평균 리드타임은 과거 해당 경로의 출발→도착→입고 평균 소요 기간입니다."
     )
