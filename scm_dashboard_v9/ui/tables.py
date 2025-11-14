@@ -321,9 +321,9 @@ def render_inbound_and_wip_tables(
         )
         confirmed_inbound["pred_inbound_date"] = pred_display
 
-        # 정렬
+        # 정렬 (출발일 오래된 순)
         confirmed_inbound = confirmed_inbound.sort_values(
-            ["display_date", "to_center", "resource_code", "qty_ea"],
+            ["onboard_date", "to_center", "resource_code", "qty_ea"],
             ascending=[True, True, True, False],
         )
 
