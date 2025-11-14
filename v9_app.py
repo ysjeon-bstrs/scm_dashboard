@@ -400,23 +400,34 @@ def _build_amazon_kpi_data(
     )
     previous_df = None
     if show_delta and kpi_df is not None and not kpi_df.empty:
-        latest_snap_ts = pd.to_datetime(kpi_df["snap_time"].max())
-        if not pd.isna(latest_snap_ts):
-            # snap_time이 모두 null이면 date 컬럼 사용
-            time_col = "snap_time" if snap_amz["snap_time"].notna().any() else "date"
+        # date 컬럼 기준으로 최신 날짜 찾기 (snap_time이 아닌 date 기준)
+        if "date" in snap_amz.columns:
+            snap_amz_dates = pd.to_datetime(snap_amz["date"], errors="coerce")
+            latest_date = snap_amz_dates.max()
 
-            # 성능 최적화: 필터링을 직접 수행하여 불필요한 copy 제거
-            snap_prev_ts = pd.to_datetime(snap_amz[time_col], errors="coerce")
-            snap_prev_mask = (snap_prev_ts.notna()) & (snap_prev_ts < latest_snap_ts)
-            snap_prev = snap_amz[snap_prev_mask]
-            if not snap_prev.empty:
-                previous_df = build_amazon_snapshot_kpis(
-                    snap_prev,
-                    skus=selected_skus,
-                    center=amazon_centers,
-                    cover_base="available",
-                    use_ma7=True,
+            if not pd.isna(latest_date):
+                # 최신 날짜보다 이전 날짜의 스냅샷 찾기
+                snap_prev_mask = (snap_amz_dates.notna()) & (
+                    snap_amz_dates.dt.normalize() < latest_date.normalize()
                 )
+                snap_prev = snap_amz[snap_prev_mask]
+
+                if not snap_prev.empty:
+                    # 이전 날짜 중 가장 최신 날짜의 데이터만 사용
+                    prev_dates = pd.to_datetime(snap_prev["date"], errors="coerce")
+                    prev_latest_date = prev_dates.max()
+                    snap_prev_final = snap_prev[
+                        prev_dates.dt.normalize() == prev_latest_date.normalize()
+                    ]
+
+                    if not snap_prev_final.empty:
+                        previous_df = build_amazon_snapshot_kpis(
+                            snap_prev_final,
+                            skus=selected_skus,
+                            center=amazon_centers,
+                            cover_base="available",
+                            use_ma7=True,
+                        )
     return kpi_df, previous_df
 
 
