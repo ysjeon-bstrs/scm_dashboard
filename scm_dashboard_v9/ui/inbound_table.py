@@ -138,12 +138,18 @@ def build_inbound_table(
         # 경로 생성
         from_country = str(row["from_country"]) if pd.notna(row["from_country"]) else ""
         to_country = str(row["to_country"]) if pd.notna(row["to_country"]) else ""
-        route = f"{from_country} → {to_country} ({center})" if center else f"{from_country} → {to_country}"
+        route = (
+            f"{from_country} → {to_country} ({center})"
+            if center
+            else f"{from_country} → {to_country}"
+        )
 
         # 제품(SKU) HTML 생성: 제품명 검정, SKU 코드만 색상
         sku_color = sku_color_map.get(sku_code, "#b91c1c")  # 기본 빨강
         if sku_name:
-            product_html = f"{sku_name} (<span style='color:{sku_color}'>{sku_code}</span>)"
+            product_html = (
+                f"{sku_name} (<span style='color:{sku_color}'>{sku_code}</span>)"
+            )
         else:
             product_html = f"<span style='color:{sku_color}'>{sku_code}</span>"
 
@@ -253,7 +259,15 @@ def render_inbound_table(
     # 수량 포맷팅 (숫자만, ea 제거)
     view["수량"] = view["수량"].apply(lambda x: f"{x:,}")
 
-    display_cols = ["주문번호", "경로", "제품(SKU)", "수량", "운송모드", "출발일", "예상 도착일"]
+    display_cols = [
+        "주문번호",
+        "경로",
+        "제품(SKU)",
+        "수량",
+        "운송모드",
+        "출발일",
+        "예상 도착일",
+    ]
     view = view[[col for col in display_cols if col in view.columns]]
 
     # 인덱스 리셋 (숫자 인덱스 제거)
