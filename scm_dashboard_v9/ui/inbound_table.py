@@ -139,11 +139,12 @@ def build_inbound_table(
         # 경로 생성
         from_country = str(row["from_country"]) if pd.notna(row["from_country"]) else ""
         to_country = str(row["to_country"]) if pd.notna(row["to_country"]) else ""
-        route = (
-            f"{from_country} → {to_country} ({center})"
-            if center
-            else f"{from_country} → {to_country}"
-        )
+
+        # to_country와 center가 같으면 중복 표시 방지
+        if center and center != to_country:
+            route = f"{from_country} → {to_country} ({center})"
+        else:
+            route = f"{from_country} → {to_country}"
 
         # 제품(SKU) HTML 생성: 제품명 검정, SKU 코드만 색상
         sku_color = sku_color_map.get(sku_code, "#b91c1c")  # 기본 빨강
