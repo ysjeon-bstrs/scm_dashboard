@@ -327,9 +327,8 @@ def render_inbound_and_wip_tables(
             ascending=[True, True, True, False],
         )
 
-        # 표시할 컬럼 선택
+        # 표시할 컬럼 선택 (display_date 제외)
         inbound_cols = [
-            "display_date",
             "days_to_arrival",
             "to_center",
             "resource_code",
@@ -347,6 +346,7 @@ def render_inbound_and_wip_tables(
             confirmed_inbound[inbound_cols].head(CONFIG.ui.max_table_rows),
             use_container_width=True,
             height=CONFIG.ui.table_height_inbound,
+            hide_index=True,
         )
         st.caption(
             "※ pred_inbound_date: 예상 입고일 (도착일 + 리드타임), days_to_inbound: 예상 입고까지 남은 일수"
@@ -373,9 +373,8 @@ def render_inbound_and_wip_tables(
             arr_wip["display_date"].dt.normalize() - today
         ).dt.days
 
-        # 표시할 컬럼 선택
+        # 표시할 컬럼 선택 (display_date 제외)
         wip_cols = [
-            "display_date",
             "days_to_completion",
             "resource_code",
             "resource_name",
@@ -391,6 +390,7 @@ def render_inbound_and_wip_tables(
             arr_wip[wip_cols].head(CONFIG.ui.max_table_rows),
             use_container_width=True,
             height=CONFIG.ui.table_height_wip,
+            hide_index=True,
         )
     else:
         st.caption("생산중(WIP) 데이터가 없습니다.")
