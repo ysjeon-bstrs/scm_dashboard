@@ -69,6 +69,7 @@ from scm_dashboard_v9.ui.tables import (
     render_inbound_and_wip_tables,
     render_inventory_table,
     render_lot_details,
+    render_production_summary_section,
 )
 
 
@@ -1036,7 +1037,18 @@ def main() -> None:
         else:
             st.info("입고 예정 데이터가 없습니다.")
 
-        # 2. 기존 상세 테이블 (토글로 숨김)
+        # 2. 생산 진행 현황 요약 (10일 내 완료 예정)
+        render_production_summary_section(
+            moves=data.moves,
+            snapshot=snapshot_df,
+            selected_skus=selected_skus,
+            start=start_ts,
+            end=end_ts,
+            today=today_norm,
+            sku_color_map=sku_color_map,
+        )
+
+        # 3. 기존 상세 테이블 (토글로 숨김)
         with st.expander("📋 입고 예정 상세 (Inbound WIP Raw)", expanded=False):
             render_inbound_and_wip_tables(
                 moves=data.moves,
