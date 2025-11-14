@@ -21,6 +21,7 @@ from scm_dashboard_v9.domain.filters import (
     is_empty_or_none,
     safe_to_datetime,
 )
+from scm_dashboard_v9.domain.normalization import normalize_moves
 from scm_dashboard_v9.planning.schedule import calculate_predicted_inbound_date
 
 
