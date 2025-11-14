@@ -140,11 +140,11 @@ def render_production_summary_section(
     st.subheader("🛠️ 생산 진행 현황 (요약)")
 
     if not arr_wip.empty:
-        summary_df = build_production_summary_table(arr_wip, today, resource_name_map)
+        summary_df = build_production_summary_table(
+            arr_wip, today, resource_name_map, sku_color_map
+        )
         if not summary_df.empty:
-            render_production_summary_table(
-                summary_df, title="", sku_color_map=sku_color_map
-            )
+            render_production_summary_table(summary_df, title="")
         else:
             st.info("📭 10일 내 생산 완료 예정인 품목이 없습니다.")
     else:
@@ -819,7 +819,10 @@ def render_lot_details(
 
 
 def build_production_summary_table(
-    wip_df: pd.DataFrame, today: pd.Timestamp, resource_name_map: dict = None
+    wip_df: pd.DataFrame,
+    today: pd.Timestamp,
+    resource_name_map: dict = None,
+    sku_color_map: dict = None,
 ) -> pd.DataFrame:
     """
     10일 내 생산 완료 예정인 WIP만 추려서 요약 테이블을 생성합니다.
@@ -835,11 +838,12 @@ def build_production_summary_table(
             - global_b2b: B2B 배정 수량
         today: 오늘 날짜 (normalized)
         resource_name_map: SKU → 품명 매핑 딕셔너리 (옵션)
+        sku_color_map: SKU → 색상 매핑 딕셔너리 (옵션)
 
     Returns:
         요약 테이블 데이터프레임
             컬럼:
-            - product_name: 제품명(SKU) - "{한글명} ({코드})" 형태
+            - product_name: 제품명(SKU) - HTML 포함 (제품명 검정, SKU 코드만 색상)
             - qty_ea: 수량
             - completion_date: 예상 완료일 (YYYY-MM-DD)
             - completion_color: 색상 코드 (green/gray)
@@ -861,6 +865,8 @@ def build_production_summary_table(
 
     if resource_name_map is None:
         resource_name_map = {}
+    if sku_color_map is None:
+        sku_color_map = {}
 
     # 필수 컬럼 확인
     required_cols = ["resource_code", "qty_ea", "pred_inbound_date"]
@@ -889,10 +895,10 @@ def build_production_summary_table(
         return pd.DataFrame()
 
     # ========================================
-    # 3단계: 제품명(SKU) 생성
+    # 3단계: 제품명(SKU) 생성 (HTML: 제품명 검정, SKU 코드만 색상)
     # ========================================
     def make_product_name(row):
-        """한글명(코드) 형태로 제품명 생성"""
+        """제품명은 검정, SKU 코드만 색상 적용한 HTML 생성"""
         code = str(row["resource_code"]) if pd.notna(row["resource_code"]) else ""
 
         # resource_name 컬럼이 있으면 우선 사용, 없으면 매핑에서 가져오기
@@ -905,10 +911,15 @@ def build_production_summary_table(
         else:
             name = resource_name_map.get(code, "")
 
+        # SKU 색상 가져오기 (기본: 빨강)
+        color = sku_color_map.get(code, "#b91c1c")
+
         if name:
-            return f"{name} ({code})"
+            # 제품명은 검정, 코드만 색상
+            return f"{name} (<span style='color:{color}'>{code}</span>)"
         else:
-            return code
+            # 제품명 없으면 코드만 색상
+            return f"<span style='color:{color}'>{code}</span>"
 
     df["product_name"] = df.apply(make_product_name, axis=1)
 
@@ -974,20 +985,19 @@ def build_production_summary_table(
 def render_production_summary_table(
     df: pd.DataFrame,
     title: str = "🛠️ 생산 진행 현황 (요약)",
-    sku_color_map: dict = None,
 ) -> None:
     """
     생산 WIP 요약 테이블을 Streamlit으로 렌더링합니다.
 
     Args:
         df: build_production_summary_table()의 출력 데이터프레임
+            (product_name에 이미 HTML 색상이 적용되어 있어야 함)
         title: 테이블 제목
-        sku_color_map: SKU 색상 매핑 딕셔너리 (선택사항)
 
     Notes:
         - 인바운드 요약 테이블과 동일한 스타일 적용
         - 예상완료일 컬럼에 색상 적용 (green/gray)
-        - 제품명 볼드 처리 + SKU 코드 색상 적용
+        - 제품(SKU)은 build 단계에서 이미 HTML 색상이 적용됨
     """
     # ========================================
     # 1단계: 데이터 유효성 검증
@@ -998,9 +1008,6 @@ def render_production_summary_table(
 
     if title:
         st.subheader(title)
-
-    if sku_color_map is None:
-        sku_color_map = {}
 
     # ========================================
     # 2단계: 색상 팔레트
@@ -1014,33 +1021,14 @@ def render_production_summary_table(
         return PALETTE.get(c, "#9ca3af")
 
     # ========================================
-    # 3단계: 제품명 HTML 생성 (SKU 코드 색상)
-    # ========================================
-    def product_name_html(row):
-        """SKU 코드 부분만 색 강조"""
-        txt = str(row.get("product_name", ""))
-
-        # "비타민일루미네이팅세럼[30ml/-] (BA00022)" → 괄호 안 코드만 색상
-        import re
-
-        match = re.match(r"^(.+?)\s*\(([A-Z0-9]+)\)$", txt)
-        if match:
-            name_part = match.group(1)
-            code_part = match.group(2)
-            hexc = sku_color_map.get(code_part, "#0ea5e9")  # 기본 파랑톤
-            return f'{name_part} (<span style="color:{hexc};font-weight:600">{code_part}</span>)'
-        return txt
-
-    # ========================================
-    # 4단계: 데이터 준비
+    # 3단계: 데이터 준비
     # ========================================
     view = df.copy()
-    view["제품명(SKU)_html"] = view.apply(product_name_html, axis=1)
 
     # 컬럼명 한글화
     view = view.rename(
         columns={
-            "제품명(SKU)_html": "제품명(SKU)",
+            "product_name": "제품(SKU)",
             "qty_ea": "수량",
             "completion_date": "예상 완료일",
             "b2c": "B2C",
@@ -1048,10 +1036,10 @@ def render_production_summary_table(
         }
     )
 
-    # 수량 포맷팅
-    view["수량"] = view["수량"].apply(lambda x: f"{x:,}ea")
+    # 수량 포맷팅 (숫자만, ea 제거)
+    view["수량"] = view["수량"].apply(lambda x: f"{x:,}")
 
-    display_cols = ["제품명(SKU)", "수량", "예상 완료일", "B2C", "B2B"]
+    display_cols = ["제품(SKU)", "수량", "예상 완료일", "B2C", "B2B"]
     view_display = view[display_cols]
 
     # 인덱스 리셋 (숫자 인덱스 제거)
