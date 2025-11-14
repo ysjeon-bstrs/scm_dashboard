@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
