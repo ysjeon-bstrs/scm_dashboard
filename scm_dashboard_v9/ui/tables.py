@@ -1149,10 +1149,31 @@ def render_production_summary_table(
         # 나머지 건수 더보기 expander
         remaining = total_rows - TOP_N
         with st.expander(f"나머지 {remaining}건 더보기"):
-            # 전체 테이블에 동일한 스타일 적용
-            styled_all = (
-                view_display.style.hide(axis="index")
-                .apply(apply_styles, axis=1)
+            # 나머지 데이터만 추출 (상위 8건 제외)
+            view_remaining = view_display.iloc[TOP_N:].reset_index(drop=True)
+            completion_colors_remaining = completion_colors[TOP_N:]
+
+            # 나머지 데이터 스타일 적용 함수
+            def apply_styles_remaining(row):
+                """나머지 행별 스타일 적용"""
+                styles = [""] * len(row)
+                idx = row.name  # reset_index 후이므로 0부터 시작
+
+                if idx >= len(completion_colors_remaining):
+                    return styles
+
+                # 예상 완료일 색상만 적용
+                if "예상 완료일" in view_remaining.columns:
+                    completion_idx = view_remaining.columns.get_loc("예상 완료일")
+                    color_hex = _completion_color(completion_colors_remaining[idx])
+                    styles[completion_idx] = f"color: {color_hex}; font-weight: 500"
+
+                return styles
+
+            # 나머지 테이블에 스타일 적용
+            styled_remaining = (
+                view_remaining.style.hide(axis="index")
+                .apply(apply_styles_remaining, axis=1)
                 .set_properties(
                     **{
                         "padding": "10px 14px",
@@ -1176,7 +1197,7 @@ def render_production_summary_table(
                 )
             )
             st.write(
-                styled_all.to_html(escape=False, index=False),
+                styled_remaining.to_html(escape=False, index=False),
                 unsafe_allow_html=True,
             )
 
