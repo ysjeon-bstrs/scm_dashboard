@@ -82,6 +82,58 @@ def build_resource_name_map(snapshot: pd.DataFrame) -> dict[str, str]:
     return resource_name_map
 
 
+def render_production_summary_section(
+    moves: pd.DataFrame,
+    snapshot: pd.DataFrame,
+    selected_skus: list[str],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    today: pd.Timestamp,
+    sku_color_map: dict = None,
+) -> None:
+    """
+    생산 진행 현황 요약 테이블만 렌더링합니다 (10일 내 생산 완료 예정).
+
+    Args:
+        moves: 이동 원장 데이터프레임
+        snapshot: 스냅샷 데이터프레임 (품명 매핑용)
+        selected_skus: 선택된 SKU 목록
+        start: 조회 시작일
+        end: 조회 종료일
+        today: 오늘 날짜 (normalized)
+        sku_color_map: SKU 색상 매핑 딕셔너리 (선택사항)
+    """
+    # 1단계: moves 정규화
+    moves_view = normalize_moves(moves)
+
+    # 2단계: 시간 윈도우 설정
+    window_start = start
+    window_end = end
+
+    # 3단계: WIP 필터링 (생산 중)
+    to_center_normalized = moves_view["to_center"].map(normalize_center_value)
+    wip_mask = (
+        (moves_view["carrier_mode"] == "WIP")
+        & (to_center_normalized == "태광KR")
+        & (moves_view["resource_code"].isin(selected_skus))
+        & (moves_view["event_date"].notna())
+        & (moves_view["event_date"] >= window_start)
+        & (moves_view["event_date"] <= window_end)
+    )
+    arr_wip = moves_view[wip_mask].copy()
+    if not arr_wip.empty:
+        arr_wip["display_date"] = arr_wip["event_date"]
+
+    # 4단계: 품명 매핑 추가
+    resource_name_map = build_resource_name_map(snapshot)
+
+    # 5단계: 생산 진행 현황 요약 테이블 렌더링
+    if not arr_wip.empty:
+        summary_df = build_production_summary_table(arr_wip, today, resource_name_map)
+        if not summary_df.empty:
+            render_production_summary_table(summary_df, sku_color_map=sku_color_map)
+
+
 def render_inbound_and_wip_tables(
     moves: pd.DataFrame,
     snapshot: pd.DataFrame,
@@ -284,17 +336,7 @@ def render_inbound_and_wip_tables(
         )
 
     # ========================================
-    # 7단계: 생산 진행 현황 (WIP) - 요약 테이블
-    # ========================================
-    # 10일 내 생산 완료 예정인 품목만 표시하는 요약 테이블
-    if not arr_wip.empty:
-        summary_df = build_production_summary_table(arr_wip, today, resource_name_map)
-        if not summary_df.empty:
-            render_production_summary_table(summary_df)
-            st.divider()
-
-    # ========================================
-    # 8단계: 생산 진행 현황 (WIP) - 상세 테이블
+    # 7단계: 생산 진행 현황 (WIP) - 상세 테이블
     # ========================================
     st.markdown("#### 🛠️ 생산 진행 현황 (상세 · 전체 WIP)")
 
@@ -913,7 +955,9 @@ def build_production_summary_table(
 
 
 def render_production_summary_table(
-    df: pd.DataFrame, title: str = "🛠️ 생산 진행 현황 (요약)"
+    df: pd.DataFrame,
+    title: str = "🛠️ 생산 진행 현황 (요약)",
+    sku_color_map: dict = None,
 ) -> None:
     """
     생산 WIP 요약 테이블을 Streamlit으로 렌더링합니다.
@@ -921,11 +965,12 @@ def render_production_summary_table(
     Args:
         df: build_production_summary_table()의 출력 데이터프레임
         title: 테이블 제목
+        sku_color_map: SKU 색상 매핑 딕셔너리 (선택사항)
 
     Notes:
         - 인바운드 요약 테이블과 동일한 스타일 적용
         - 예상완료일 컬럼에 색상 적용 (green/gray)
-        - 제품명 볼드 처리
+        - 제품명 볼드 처리 + SKU 코드 색상 적용
     """
     # ========================================
     # 1단계: 데이터 유효성 검증
@@ -936,6 +981,9 @@ def render_production_summary_table(
 
     if title:
         st.subheader(title)
+
+    if sku_color_map is None:
+        sku_color_map = {}
 
     # ========================================
     # 2단계: 색상 팔레트
@@ -949,14 +997,33 @@ def render_production_summary_table(
         return PALETTE.get(c, "#9ca3af")
 
     # ========================================
-    # 3단계: 데이터 준비
+    # 3단계: 제품명 HTML 생성 (SKU 코드 색상)
+    # ========================================
+    def product_name_html(row):
+        """SKU 코드 부분만 색 강조"""
+        txt = str(row.get("product_name", ""))
+
+        # "비타민일루미네이팅세럼[30ml/-] (BA00022)" → 괄호 안 코드만 색상
+        import re
+
+        match = re.match(r"^(.+?)\s*\(([A-Z0-9]+)\)$", txt)
+        if match:
+            name_part = match.group(1)
+            code_part = match.group(2)
+            hexc = sku_color_map.get(code_part, "#0ea5e9")  # 기본 파랑톤
+            return f'{name_part} (<span style="color:{hexc};font-weight:600">{code_part}</span>)'
+        return txt
+
+    # ========================================
+    # 4단계: 데이터 준비
     # ========================================
     view = df.copy()
+    view["제품명(SKU)_html"] = view.apply(product_name_html, axis=1)
 
     # 컬럼명 한글화
     view = view.rename(
         columns={
-            "product_name": "제품명(SKU)",
+            "제품명(SKU)_html": "제품명(SKU)",
             "qty_ea": "수량",
             "completion_date": "예상 완료일",
             "b2c": "B2C",
@@ -990,10 +1057,7 @@ def render_production_summary_table(
             color_hex = _completion_color(completion_colors[idx])
             styles[completion_idx] = f"color: {color_hex}; font-weight: 500"
 
-        # 제품명 볼드
-        if "제품명(SKU)" in view_display.columns:
-            name_idx = view_display.columns.get_loc("제품명(SKU)")
-            styles[name_idx] = "font-weight: 600"
+        # 제품명은 HTML에서 이미 색상/볼드 처리됨
 
         return styles
 
@@ -1023,9 +1087,46 @@ def render_production_summary_table(
     )
 
     # ========================================
-    # 5단계: Streamlit 렌더링
+    # 5단계: Streamlit 렌더링 (Top 8 + 더보기)
     # ========================================
-    st.write(styled.to_html(escape=False, index=False), unsafe_allow_html=True)
+    TOP_N = 8
+    total_rows = len(view_display)
+
+    if total_rows <= TOP_N:
+        # 8건 이하면 전체 표시
+        st.write(styled.to_html(escape=False, index=False), unsafe_allow_html=True)
+    else:
+        # 8건 초과면 상위 8건만 표시
+        styled_top = (
+            view_display.head(TOP_N).style.apply(apply_styles, axis=1)
+            .set_properties(
+                **{
+                    "padding": "10px 14px",
+                    "font-size": "13.5px",
+                    "line-height": "1.3",
+                    "text-align": "left",
+                }
+            )
+            .set_table_styles(
+                [
+                    {
+                        "selector": "thead th",
+                        "props": [
+                            ("text-align", "left"),
+                            ("font-weight", "600"),
+                            ("color", "#374151"),
+                            ("padding", "10px 14px"),
+                        ],
+                    }
+                ]
+            )
+        )
+        st.write(styled_top.to_html(escape=False, index=False), unsafe_allow_html=True)
+
+        # 나머지 건수 더보기 expander
+        remaining = total_rows - TOP_N
+        with st.expander(f"나머지 {remaining}건 더보기"):
+            st.dataframe(view_display, use_container_width=True, hide_index=True)
 
     # 캡션
     st.caption(
