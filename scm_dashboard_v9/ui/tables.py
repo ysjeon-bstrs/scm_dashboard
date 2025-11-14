@@ -124,9 +124,17 @@ def render_production_summary_section(
     arr_wip = moves_view[wip_mask].copy()
     if not arr_wip.empty:
         arr_wip["display_date"] = arr_wip["event_date"]
+        # build_production_summary_table은 pred_inbound_date를 사용하므로 복사
+        arr_wip["pred_inbound_date"] = arr_wip["event_date"]
 
     # 4단계: 품명 매핑 추가
     resource_name_map = build_resource_name_map(snapshot)
+
+    # WIP 데이터에 한글명 추가 (기존 영문명 덮어쓰기)
+    if not arr_wip.empty:
+        arr_wip["resource_name"] = (
+            arr_wip["resource_code"].map(resource_name_map).fillna("")
+        )
 
     # 5단계: 생산 진행 현황 요약 테이블 렌더링 (항상 제목 표시)
     st.subheader("🛠️ 생산 진행 현황 (요약)")
