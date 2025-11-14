@@ -846,6 +846,7 @@ def build_production_summary_table(
             컬럼:
             - product_name: 제품명(SKU) - HTML 포함 (제품명 검정, SKU 코드만 색상)
             - qty_ea: 수량
+            - days_remaining: 잔여일수 (오늘 기준 완료까지 남은 일수)
             - completion_date: 예상 완료일 (YYYY-MM-DD)
             - completion_color: 색상 코드 (green/gray)
             - b2c: B2C 배정 수량
@@ -925,12 +926,15 @@ def build_production_summary_table(
     df["product_name"] = df.apply(make_product_name, axis=1)
 
     # ========================================
-    # 4단계: 날짜 포맷팅 및 색상 계산
+    # 4단계: 잔여일수 계산 및 날짜 포맷팅
     # ========================================
+    # 잔여일수 = 오늘 기준 완료까지 남은 일수
+    diff_days = (df["pred_inbound_date"].dt.normalize() - today).dt.days
+    df["days_remaining"] = diff_days
+
     df["completion_date"] = df["pred_inbound_date"].dt.strftime("%Y-%m-%d")
 
     # 색상 규칙: 5일 이내 green, 그 외 gray
-    diff_days = (df["pred_inbound_date"].dt.normalize() - today).dt.days
     df["completion_color"] = "gray"
     df.loc[diff_days <= 5, "completion_color"] = "green"
 
@@ -961,6 +965,7 @@ def build_production_summary_table(
         [
             "product_name",
             "qty_ea",
+            "days_remaining",
             "completion_date",
             "completion_color",
             "global_b2c",
@@ -1031,6 +1036,7 @@ def render_production_summary_table(
         columns={
             "product_name": "제품(SKU)",
             "qty_ea": "수량",
+            "days_remaining": "잔여일수",
             "completion_date": "예상 완료일",
             "b2c": "B2C",
             "b2b": "B2B",
@@ -1040,7 +1046,12 @@ def render_production_summary_table(
     # 수량 포맷팅 (숫자만, ea 제거)
     view["수량"] = view["수량"].apply(lambda x: f"{x:,}")
 
-    display_cols = ["제품(SKU)", "수량", "예상 완료일", "B2C", "B2B"]
+    # 잔여일수 포맷팅 (결측치는 "-"로 표시)
+    view["잔여일수"] = view["잔여일수"].apply(
+        lambda x: str(int(x)) if pd.notna(x) else "-"
+    )
+
+    display_cols = ["제품(SKU)", "수량", "잔여일수", "예상 완료일", "B2C", "B2B"]
     view_display = view[display_cols]
 
     # 인덱스 리셋 (숫자 인덱스 제거)
