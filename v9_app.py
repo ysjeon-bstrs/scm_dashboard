@@ -932,13 +932,14 @@ def main() -> None:
             total_prod = int(sum(wip_pipeline_totals.values())) if wip_pipeline_totals else 0
 
         # 미니 KPI 카드 3개로 표시
+        st.markdown("#### 📌 선택 필터 기준 요약")
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("재고 (선택 센터)", f"{total_stock:,}")
+            st.metric("📦 재고 (Stock)", f"{total_stock:,}")
         with col2:
-            st.metric("생산중 (전체)", f"{total_prod:,}")
+            st.metric("🏭 생산중 (WIP)", f"{total_prod:,}")
         with col3:
-            st.metric("이동중 (전체)", f"{total_in_transit:,}")
+            st.metric("🚚 이동중 (In-Transit)", f"{total_in_transit:,}")
 
         st.markdown("---")
 
