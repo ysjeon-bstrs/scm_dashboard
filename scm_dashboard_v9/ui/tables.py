@@ -1099,7 +1099,8 @@ def render_production_summary_table(
     else:
         # 8건 초과면 상위 8건만 표시
         styled_top = (
-            view_display.head(TOP_N).style.apply(apply_styles, axis=1)
+            view_display.head(TOP_N)
+            .style.apply(apply_styles, axis=1)
             .set_properties(
                 **{
                     "padding": "10px 14px",
